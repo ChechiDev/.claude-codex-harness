@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Harness invariants. Invoked by `make check` (after `make verify`) and by the
+# agent at session startup. Does NOT reimplement the toolchain (that is `make verify`).
+set -uo pipefail
+
+HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+cd "$PROJECT_DIR" || exit 1
+
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'; NC='\033[0m'
+ok()   { printf "${GREEN}[OK]${NC}    %s\n" "$1"; }
+fail() { printf "${RED}[FAIL]${NC}  %s\n" "$1"; }
+warn() { printf "${YELLOW}[WARN]${NC}  %s\n" "$1"; }
+
+EXIT=0
+
+echo "── 1. Environment (uv) ─────────────────────────────────"
+if ! command -v uv >/dev/null 2>&1; then
+  fail "uv is not installed"; exit 1
+fi
+ok "uv -> $(uv --version 2>/dev/null)"
+
+echo ""
+echo "── 2. Harness base files ───────────────────────────────"
+for f in AGENTS.md CLAUDE.md Makefile feature_list.json CHECKPOINTS.md \
+         docs/architecture.md docs/conventions.md docs/verification.md \
+         progress/current.md progress/history.md; do
+  if [ -f "$f" ]; then ok "Exists $f"; else fail "Missing $f"; EXIT=1; fi
+done
+for d in .claude/agents .claude/codex harness; do
+  if [ -e "$d" ]; then ok "Exists $d"; else fail "Missing $d (did you run install.sh?)"; EXIT=1; fi
+done
+
+echo ""
+echo "── 3. feature_list.json ────────────────────────────────"
+if ! python3 "$HARNESS_DIR/_harness.py" validate; then EXIT=1; fi
+
+echo ""
+echo "── 4. Gate consistency ─────────────────────────────────"
+if ! bash "$HARNESS_DIR/gate.sh"; then EXIT=1; fi
+
+echo ""
+echo "── 5. Summary ──────────────────────────────────────────"
+if [ $EXIT -eq 0 ]; then
+  ok "Harness invariants OK."
+else
+  fail "The harness is NOT healthy. Resolve the above before proceeding."
+fi
+exit $EXIT

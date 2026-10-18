@@ -1,0 +1,29 @@
+{
+  "project": "‹project-name›",
+  "description": "‹what this service solves›",
+  "rules": {
+    "one_feature_at_a_time": true,
+    "require_plan_approval": true,
+    "require_code_approval": true,
+    "require_make_check_to_close": true,
+    "valid_status": ["pending", "in_progress", "done", "blocked"]
+  },
+  "features": [
+    {
+      "id": 1,
+      "name": "‹feature_slug›",
+      "title": "‹readable title›",
+      "description": "‹what it does, in one sentence›",
+      "layer": "domain",
+      "acceptance": [
+        {"id": "AC1", "criterion": "‹observable criterion (input/output, exit code, API contract)›", "test": "tests/acceptance/test_1.py::test_ac1_‹slug›"},
+        {"id": "AC2", "criterion": "‹observable criterion›", "test": "tests/acceptance/test_1.py::test_ac2_‹slug›"}
+      ],
+      "subtasks": [
+        {"id": "1.1", "title": "‹subtask: port/entity/adapter…›", "layer": "domain", "status": "pending"},
+        {"id": "1.2", "title": "‹subtask›", "layer": "infrastructure", "status": "pending"}
+      ],
+      "status": "pending"
+    }
+  ]
+}

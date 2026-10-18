@@ -1,0 +1,58 @@
+{
+  "$schema_comment": "Harness hooks. Run by the harness, not the agent: they cannot be bypassed. Paths use harness/ (symlink to the toolkit's lib/).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/harness/guard_write.sh\"",
+            "description": "Blocks writes to tests/acceptance/ (Codex oracle) and to src/ without PLAN_APPROVED."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/harness/guard_bash.sh\"",
+            "description": "Blocks commits/PRs with agent attribution."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/harness/post_write.sh\"",
+            "description": "Fast feedback: lint + tests after each write (does not block)."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/harness/stop_gate.sh\"",
+            "description": "Before closing: make check (verify + invariants + gate consistency)."
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(uv run:*)",
+      "Bash(./harness/review_with_codex.sh:*)",
+      "Bash(./harness/check.sh)"
+    ]
+  }
+}
