@@ -1,18 +1,19 @@
 # CHECKPOINTS — Final-state evaluation
 
-> Objective criteria that Codex (reviewer) walks through marking `[x]`/`[ ]`.
-> It rejects the close if any box in C1–C6 is left empty.
+> Objective criteria that Codex walks through marking `[x]`/`[ ]` before closing
+> a subtask `N.M.K`. It rejects the close if any box in C1–C6 is left empty.
 
 ## C1 — The harness is complete
-- [ ] Base files: `AGENTS.md`, `CLAUDE.md`, `Makefile`, `feature_list.json`, `CHECKPOINTS.md`.
+- [ ] Base files: `AGENTS.md`, `CLAUDE.md`, `Makefile`, `CHECKPOINTS.md`, `docs/plan/PLAN.md`.
 - [ ] Docs: `docs/architecture.md`, `docs/conventions.md`, `docs/verification.md`.
-- [ ] Symlinks installed: `.claude/agents`, `.claude/codex`, `harness/`.
-- [ ] `make check` finishes with exit 0.
+- [ ] Symlinks installed: `.claude/agents`, `.claude/codex`, `harness/`; dirs `docs/plan`, `docs/reference`.
+- [ ] `make check` finishes with exit 0 (includes plan↔feature_list sync).
 
 ## C2 — The state is consistent
-- [ ] At most one `in_progress` feature in `feature_list.json`.
-- [ ] The worked feature has `plan_review_<id>.md` = `PLAN_APPROVED`.
-- [ ] Every `done` feature has `review_<id>.md` = `APPROVED`.
+- [ ] At most one leaf `in_progress` in the plan.
+- [ ] `feature_list.json` is in sync with `docs/plan/` (`make plan` not pending).
+- [ ] The worked subtask has `plan_review_<N.M.K>.md` = `PLAN_APPROVED`.
+- [ ] Every `done` leaf has `review_<N.M.K>.md` = `APPROVED`.
 - [ ] `progress/current.md` describes the active session (no leftover junk).
 
 ## C3 — The hexagonal architecture is respected
@@ -28,14 +29,13 @@
 - [ ] No concatenated SQL, no secrets in code, no logging of PII/tokens.
 
 ## C5 — Verification is real
-- [ ] `tests/acceptance/test_<id>.py` exists, derives from `acceptance`, and passes.
-- [ ] **1:1 traceability**: each criterion `ACn` has its `test_ac<n>_<slug>` and the
-      `test` field in `feature_list.json` points to it. No orphan criterion.
+- [ ] `tests/acceptance/test_<N.M.K>.py` exists, derives from the subtask's acceptance, and passes.
+- [ ] **1:1 traceability**: each criterion `ACn` has its `test_ac<n>_<slug>`. No orphan criterion.
 - [ ] There are `tests/unit/` covering the design; they are not trivial.
 - [ ] Tests use `tmp_path`/`TemporaryDirectory`, not fs mocks.
 
-## C6 — The session was closed properly
-- [ ] No suspicious temp files or `__pycache__` outside `.gitignore`.
-- [ ] `progress/history.md` has an entry for the last feature.
-- [ ] Documentation updated (`progress/doc_<id>.md`).
-- [ ] No agent attribution in commits/PRs.
+## C6 — The close is correct
+- [ ] `docs/reference/<N.M.K>-<name>.md` written (the why + contracts).
+- [ ] `status: done` set in `docs/plan/`; `feature_list.json` regenerated.
+- [ ] `progress/history.md` has an entry for the subtask.
+- [ ] Single commit: `<type>(<scope>): <what> [N.M.K]` + `Plan:` footer, **no agent attribution**.

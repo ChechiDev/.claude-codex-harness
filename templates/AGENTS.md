@@ -7,43 +7,57 @@
 
 1. Run `make check`. If it fails, **stop** and fix the harness before touching anything.
 2. Read `progress/current.md` (where the last session left off).
-3. Read `feature_list.json` and pick **one** `pending` feature. One at a time.
+3. Read `docs/plan/` and pick **one** `pending` subtask `N.M.K`. One at a time.
 
-## 2. Repository map
+## 2. Model in one line
+
+The plan lives in `docs/plan/` (source of truth); `feature_list.json` is a
+**generated index** (`make plan`). The unit of work is the **subtask `N.M.K`**.
+Claude plans and implements; Codex reviews, documents, and closes (single commit).
+
+## 3. Repository map
 
 | File / folder                | What it contains                                   | When to read it |
 |------------------------------|----------------------------------------------------|-----------------|
-| `feature_list.json`          | Backlog with status and `layer`                    | Always, at start |
+| `docs/plan/PLAN.md`          | Plan format + id scheme (NN / N.M / N.M.K)         | Before planning |
+| `docs/plan/phase-NN-*.md`    | The backlog: tasks `N.M`, subtasks `N.M.K`, status | Always, at start |
+| `feature_list.json`          | Generated index of the plan (do not hand-edit)     | Read-only |
 | `progress/current.md`        | Current session + gate status                      | Always, at start |
-| `progress/history.md`        | Append-only log                                    | If you need historical context |
+| `progress/history.md`        | Append-only log                                    | Historical context |
 | `docs/architecture.md`       | What "good work" means: hexagonal layers           | Before planning/implementing |
 | `docs/conventions.md`        | Style, naming, errors, DI                          | Before writing code |
 | `docs/verification.md`       | How to prove it works                              | Before declaring `done` |
-| `CHECKPOINTS.md`             | Objective criteria for "correct final state"       | For self-evaluation / review |
+| `docs/reference/<id>-<name>.md` | Per-subtask output docs (Codex authors)         | Reference |
+| `CHECKPOINTS.md`             | Objective criteria for "correct final state"       | For review |
 | `.claude/agents/`            | Claude roles (leader, implementer)                 | If you orchestrate |
-| `.claude/codex/`             | Codex roles (reviewer, documenter)                 | If you review/document |
-| `harness/`                   | Harness scripts (check, gate, review_with_codex)   | Operation |
+| `.claude/codex/`             | Codex roles (reviewer, documenter & close)         | If you review/close |
+| `harness/`                   | Harness scripts (check, gate, sync_plan, review_with_codex) | Operation |
 | `src/`                       | Code (hexagonal layers)                            | To implement |
 | `tests/unit/`                | Unit tests (Claude, inner TDD)                     | To implement |
 | `tests/acceptance/`          | Acceptance tests (Codex, **read-only for Claude**) | Target to satisfy |
 
-## 3. Hard rules (non-negotiable)
+## 4. Hard rules (non-negotiable)
 
-- **One feature at a time.** At most one `in_progress` in `feature_list.json`.
+- **One subtask `N.M.K` at a time.** At most one leaf `in_progress`.
+- **Plan lives in `docs/plan/`.** Never hand-edit `feature_list.json`; run `make plan`.
 - **Codex gates:** no implementing without `PLAN_APPROVED`; no closing without `APPROVED`.
 - **`tests/acceptance/` belongs to Codex.** Claude never edits it.
+- **Close + commit belong to Codex.** Claude does not set `done` or commit.
 - **`done` only with `make check` green.**
-- **Document in real time** in `progress/current.md`, not at the end.
 
-## 4. Flow (summary)
+## 5. Flow (summary)
 
 ```
-pending → [leader plans] → [Codex: plan + acceptance tests] → PLAN_APPROVED
-        → [implementer: TDD] → make verify → [Codex: code review] → APPROVED
-        → [Codex: documents] → done
+docs/plan: pending N.M.K
+   → [leader: in_progress + make plan]
+   → [Codex plan: review + write tests/acceptance/test_N.M.K.py] → PLAN_APPROVED
+   → [implementer: inner TDD] → make verify
+   → [Codex code: review] → APPROVED
+   → [Codex close: docs/reference + status done + make plan + progress + ONE commit]
+   → next N.M.K
 ```
 
-## 5. If you get stuck
+## 6. If you get stuck
 
 Re-read the relevant section of `docs/`. If a tool does not do what you expect,
 **do not invent a workaround**: document the blocker in `progress/current.md`

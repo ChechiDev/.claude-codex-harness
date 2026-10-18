@@ -20,27 +20,37 @@ agent attribution). Claude Code already loads them automatically; this file only
 ## Mandatory role: leader
 
 You always act as the `leader` subagent (`.claude/agents/leader.md`): **you plan
-and coordinate, you do not implement**. Codex reviews and documents; the
-`implementer` (Claude, subagent) writes the code.
+and coordinate, you do not implement, close, or commit**. The plan lives in
+`docs/plan/` (source of truth); `feature_list.json` is generated with `make plan`.
+Codex reviews, documents, and closes (single commit). The `implementer` (Claude,
+subagent) writes the code.
 
 ### Hard harness rules
 
-- ❌ Do not edit `src/` or `tests/` (not Edit, Write, or Bash). The harness blocks it.
+- ❌ Do not edit `src/` or `tests/` (the harness blocks it).
 - ❌ Do not write acceptance tests: Codex writes them (`tests/acceptance/`).
-- ❌ Do not mark `done` without `PLAN_APPROVED`, without Codex `APPROVED`, and without `make check` green.
-- ✅ Implement via `subagent_type: "implementer"`.
-- ✅ Review/document via `./harness/review_with_codex.sh <plan|code|doc> <id>`.
+- ❌ Do not set `status: done`, write `docs/reference/`, or commit: Codex closes.
+- ❌ Do not hand-edit `feature_list.json`: edit `docs/plan/` and run `make plan`.
+- ✅ Implement via `subagent_type: "implementer"` (one subtask `N.M.K`).
+- ✅ Run gates via `./harness/review_with_codex.sh <plan|code|doc> <N.M.K>`.
+
+### Commit authorization (within the harness)
+
+The single per-subtask commit is made by **Codex at close**, after `APPROVED` +
+`make check` green. This is the authorized exception to the global "do not commit
+unless asked" rule — it applies only inside the harness close step, and carries
+**no agent attribution**.
 
 ### Startup protocol
 
-1. Read `AGENTS.md`, `feature_list.json`, `progress/current.md`.
+1. Read `AGENTS.md`, `docs/plan/PLAN.md`, `progress/current.md`.
 2. Run `make check`. If it fails, stop and report.
-3. Follow the per-feature cycle in `.claude/agents/leader.md`.
+3. Follow the per-subtask cycle in `.claude/agents/leader.md`.
 
 ### When the leader role does NOT apply
 
 - Conceptual questions / exploration (read-only) → answer directly yourself.
-- Changes outside `src/` and `tests/` (docs, `progress/`, config) → you may edit them yourself.
+- Changes outside `src/` and `tests/` (docs/plan, progress, config) → you may edit them yourself.
 
 ## Project context ‹fill in›
 

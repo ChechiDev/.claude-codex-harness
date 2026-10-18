@@ -22,25 +22,34 @@ ok "uv -> $(uv --version 2>/dev/null)"
 
 echo ""
 echo "── 2. Harness base files ───────────────────────────────"
-for f in AGENTS.md CLAUDE.md Makefile feature_list.json CHECKPOINTS.md \
+for f in AGENTS.md CLAUDE.md Makefile CHECKPOINTS.md \
          docs/architecture.md docs/conventions.md docs/verification.md \
+         docs/plan/PLAN.md \
          progress/current.md progress/history.md; do
   if [ -f "$f" ]; then ok "Exists $f"; else fail "Missing $f"; EXIT=1; fi
 done
-for d in .claude/agents .claude/codex harness; do
+for d in .claude/agents .claude/codex harness docs/plan docs/reference; do
   if [ -e "$d" ]; then ok "Exists $d"; else fail "Missing $d (did you run install.sh?)"; EXIT=1; fi
 done
 
 echo ""
-echo "── 3. feature_list.json ────────────────────────────────"
-if ! python3 "$HARNESS_DIR/_harness.py" validate; then EXIT=1; fi
+echo "── 3. Plan sync (docs/plan → feature_list.json) ────────"
+if ! python3 "$HARNESS_DIR/sync_plan.py" --check; then EXIT=1; fi
 
 echo ""
-echo "── 4. Gate consistency ─────────────────────────────────"
+echo "── 4. feature_list.json ────────────────────────────────"
+if [ -f feature_list.json ]; then
+  if ! python3 "$HARNESS_DIR/_harness.py" validate; then EXIT=1; fi
+else
+  fail "Missing feature_list.json (run: make plan)"; EXIT=1
+fi
+
+echo ""
+echo "── 5. Gate consistency ─────────────────────────────────"
 if ! bash "$HARNESS_DIR/gate.sh"; then EXIT=1; fi
 
 echo ""
-echo "── 5. Summary ──────────────────────────────────────────"
+echo "── 6. Summary ──────────────────────────────────────────"
 if [ $EXIT -eq 0 ]; then
   ok "Harness invariants OK."
 else

@@ -1,17 +1,17 @@
 # Historical log (append-only)
 
-> When each session closes, the leader appends its summary here.
+> When each subtask closes, Codex appends its summary here as part of the close.
 > Do not edit previous entries. Only append at the end.
 
 <!--
-Entry template (copy and fill in when closing a feature):
+Entry template (filled in at close):
 
-## YYYY-MM-DD — Feature <id>: <name>
+## YYYY-MM-DD — Subtask <N.M.K>: <name>
 - **Layer:** domain | application | infrastructure | interfaces
-- **Plan:** <summary> (plan_review: PLAN_APPROVED)
+- **Plan:** docs/plan/phase-NN-<name>.md#NMK (plan_review: PLAN_APPROVED)
 - **Changes:** <src/ and tests/unit files touched>
-- **Acceptance:** tests/acceptance/test_<id>.py — N cases, green
-- **Verification:** make check green. Codex review: APPROVED (review_<id>.md)
-- **Documentation:** doc_<id>.md
-- **Close:** feature <id> marked `done`. Next: <id+1>.
+- **Acceptance:** tests/acceptance/test_<N.M.K>.py — N cases, green
+- **Verification:** make check green. Codex review: APPROVED (review_<N.M.K>.md)
+- **Documentation:** docs/reference/<N.M.K>-<name>.md
+- **Commit:** <hash> — <type>(<scope>): <what> [N.M.K]
 -->
