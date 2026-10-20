@@ -14,11 +14,16 @@ warn() { printf "${YELLOW}[WARN]${NC}  %s\n" "$1"; }
 
 EXIT=0
 
-echo "── 1. Environment (uv) ─────────────────────────────────"
-if ! command -v uv >/dev/null 2>&1; then
-  fail "uv is not installed"; exit 1
+echo "── 1. Environment ──────────────────────────────────────"
+# Language-agnostic: delegate the toolchain check to the Makefile's env-check
+# target. Fall back to the uv check for older Makefiles without that target.
+if make -n env-check >/dev/null 2>&1; then
+  if ! make env-check; then EXIT=1; fi
+elif command -v uv >/dev/null 2>&1; then
+  ok "uv -> $(uv --version 2>/dev/null)"
+else
+  fail "no 'env-check' target in Makefile and uv is not installed"; EXIT=1
 fi
-ok "uv -> $(uv --version 2>/dev/null)"
 
 echo ""
 echo "── 2. Harness base files ───────────────────────────────"

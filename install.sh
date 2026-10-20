@@ -24,22 +24,28 @@ TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DEST="${1:-}"; shift || true
 FORCE=0
-PYPKG=""
+LANG="python"       # which template set to copy (python | c)
+PYPKG=""            # --python <pkg>: scaffold a Python layer (implies lang=python)
+CNAME=""            # --c <name>:     scaffold a C layer       (implies lang=c)
 while [ $# -gt 0 ]; do
   case "$1" in
-    --force) FORCE=1 ;;
-    --python) shift; PYPKG="${1:-}" ;;
+    --force)  FORCE=1 ;;
+    --lang)   shift; LANG="${1:-}" ;;
+    --python) shift; PYPKG="${1:-}"; LANG="python" ;;
+    --c)      shift; CNAME="${1:-}"; LANG="c" ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift || true
 done
 if [ -z "$DEST" ]; then
-  echo "usage: install.sh <project-path> [--force] [--python <package-name>]" >&2; exit 2
+  echo "usage: install.sh <project-path> [--force] [--lang python|c] [--python <pkg> | --c <name>]" >&2; exit 2
 fi
-if [ -n "$PYPKG" ]; then
-  # Reject a misplaced flag given as the package value.
-  case "$PYPKG" in --*) echo "error: --python needs a package name" >&2; exit 2 ;; esac
-fi
+case "$LANG" in python|c) ;; *) echo "error: --lang must be python or c" >&2; exit 2 ;; esac
+for v in "$PYPKG" "$CNAME"; do
+  case "$v" in --*) echo "error: --python/--c needs a name argument" >&2; exit 2 ;; esac
+done
+# Template set: Python uses templates/, C uses templates-c/.
+TPLSUB="templates"; [ "$LANG" = "c" ] && TPLSUB="templates-c"
 mkdir -p "$DEST"
 DEST="$(cd "$DEST" && pwd)"
 
@@ -60,8 +66,8 @@ link() {  # link <target-in-toolkit> <path-in-dest>
   linked "$2" "$target"
 }
 
-copy() {  # copy <path-in-templates> <path-in-dest>
-  local src="$TOOLKIT/templates/$1" dest="$DEST/$2"
+copy() {  # copy <path-in-template-set> <path-in-dest>
+  local src="$TOOLKIT/$TPLSUB/$1" dest="$DEST/$2"
   mkdir -p "$(dirname "$dest")"
   if [ -e "$dest" ] && [ "$FORCE" -ne 1 ]; then skipped "$2"; return; fi
   cp -R "$src" "$dest"
@@ -70,6 +76,7 @@ copy() {  # copy <path-in-templates> <path-in-dest>
 
 echo "Installing harness into: $DEST"
 echo "From toolkit:            $TOOLKIT"
+echo "Language / templates:    $LANG ($TPLSUB/)"
 echo ""
 
 # --- Symlinks (generic) ---
@@ -88,14 +95,15 @@ copy CHECKPOINTS.md     CHECKPOINTS.md
 copy docs               docs
 copy progress           progress
 
+# --- Language layer (delegated; keeps install.sh harness-only) ---
+SCAFFOLD_ARGS=(); [ "$FORCE" -eq 1 ] && SCAFFOLD_ARGS=(--force)
 if [ -n "$PYPKG" ]; then
   echo ""
-  # --- Python layer (delegated; keeps install.sh harness-only) ---
-  if [ "$FORCE" -eq 1 ]; then
-    bash "$TOOLKIT/lib/scaffold_python.sh" "$DEST" "$PYPKG" --force
-  else
-    bash "$TOOLKIT/lib/scaffold_python.sh" "$DEST" "$PYPKG"
-  fi
+  bash "$TOOLKIT/lib/scaffold_python.sh" "$DEST" "$PYPKG" "${SCAFFOLD_ARGS[@]}"
+fi
+if [ -n "$CNAME" ]; then
+  echo ""
+  bash "$TOOLKIT/lib/scaffold_c.sh" "$DEST" "$CNAME" "${SCAFFOLD_ARGS[@]}"
 fi
 
 echo ""

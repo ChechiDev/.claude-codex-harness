@@ -25,9 +25,13 @@ set `status: done` and you do **not** commit — Codex does both at close.
 
 ## Standards (always active)
 
-Apply the shared standards: `py-pytest`, `py-style`, `py-pydantic`, `py-typing`.
-Respect the hexagonal layers: the domain does not import FastAPI/Django/SQLAlchemy;
-DI through the constructor; the ORM model is not the entity.
+Apply the project's standards in `docs/conventions.md` and `docs/architecture.md`
+(authoritative). **For Python projects** also apply the shared skills `py-pytest`,
+`py-style`, `py-pydantic`, `py-typing`; **for C projects** follow the C
+conventions (C11, warning-clean compile, explicit error/ownership). Respect the
+architecture layers: inner layers do not depend on adapters/frameworks; inject
+dependencies (constructor in Python, context struct + function pointers in C); the
+persistence model is not the domain entity.
 
 ## Protocol
 

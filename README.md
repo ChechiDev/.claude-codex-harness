@@ -151,6 +151,28 @@ It is **idempotent**: it does not overwrite existing files unless you pass
 `--force`. Because the generic parts are symlinked, running `git pull` in
 `~/.claude-codex-harness` updates every installed project at once.
 
+#### Language variants (Python / C)
+
+The orchestration core (agents, Codex gates, hooks, plan model, `sync_plan`,
+`gate`, `doc_gate`) is **language-agnostic**. Only the toolchain and the template
+set differ. Pick with `--lang`:
+
+| Language | Install | Scaffold flag | Toolchain behind `make verify` |
+|----------|---------|---------------|--------------------------------|
+| **Python** (default) | `install.sh <proj> --python <pkg>` | `scaffold_python.sh` | ruff + strict mypy + pytest |
+| **C** | `install.sh <proj> --lang c --c <name>` | `scaffold_c.sh` | `gcc/clang -Wall -Wextra -Werror -pedantic` + `assert.h` test runner; `clang-format`/`cppcheck`/`clang-tidy` when installed |
+
+```bash
+# C project, one command (scaffold_c also runs `git init`):
+~/.claude-codex-harness/install.sh /path/to/cproj --lang c --c myproj
+make -C /path/to/cproj check   # green
+```
+
+C templates live in `templates-c/` and use `include/<name>/` (public headers) +
+`src/` (core/adapters/interfaces). The "type" gate is a strict warning-clean
+compile; clean-code/SOLID is enforced by `clang-tidy` when present and always by
+the Codex review. Acceptance tests are `tests/acceptance/test_<N.M.K>.c`.
+
 ### 3. Prepare the project
 
 ```bash
