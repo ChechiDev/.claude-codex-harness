@@ -1,0 +1,4 @@
+# Machine-local caches and settings written into ~/.claude/skills by the tooling.
+# They are not skills and must not be shared with the team.
+.atl/
+.claude/

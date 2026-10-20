@@ -1,0 +1,37 @@
+name: Feature / idea
+description: New data domain, improvement or idea
+title: "feat(<scope>): <short description>"
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem-motivation
+    attributes:
+      label: Problem / motivation
+      description: What is missing and why it matters
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should be done, FBRef pages or tables involved
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Alternatives, risks, dependencies
+    validations:
+      required: false
+
+  - type: input
+    id: plan-reference
+    attributes:
+      label: Plan reference
+      description: "Fill in once added to docs/plan/, e.g. 2.4"
+      placeholder: "e.g. 2.4"
+    validations:
+      required: false

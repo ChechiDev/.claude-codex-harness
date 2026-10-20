@@ -1,0 +1,54 @@
+# Integration job with service containers — Postgres + Redis
+# Drop into .github/workflows/ci.yml replacing the plain integration job
+# when tests require a real database or cache.
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [ruff, flake8, mypy]
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5432/test_db
+      REDIS_URL: redis://localhost:6379
+      ENVIRONMENT: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - run: uv sync --group test
+
+      - name: Run integration tests
+        run: uv run pytest tests/integration/ -v

@@ -1,0 +1,15 @@
+# Canonical setup steps — paste into any job in .github/workflows/ci.yml
+# Replace <group> with: lint | test | lint --group test (for both)
+
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
+
+  - name: Setup uv + Python 3.12
+    uses: astral-sh/setup-uv@v4
+    with:
+      enable-cache: true
+      python-version: "3.12"
+
+  - name: Install dependencies
+    run: uv sync --group <group>

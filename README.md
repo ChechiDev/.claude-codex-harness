@@ -17,9 +17,27 @@ origin on GitHub. `install.sh` installs the harness onto a target project in a
 
 | Mechanism | What | Why |
 |-----------|------|-----|
-| **Symlink** | `agents/`, `codex/`, `settings.json`, `lib/` → `harness/` | improving the harness (`git pull`) propagates to every project |
+| **Symlink** | `agents/`, `codex/`, `skills/`, `settings.json`, `lib/` → `harness/` | improving the harness (`git pull`) propagates to every project |
 | **Copy**    | `CLAUDE.md`, `AGENTS.md`, `Makefile`, `CHECKPOINTS.md`, `docs/`, `progress/` | each project customizes them |
 | **Generated** | `feature_list.json` | derived from `docs/plan/` (`make plan`), never copied or hand-edited |
+
+### Machine-level config (`link-global.sh`)
+
+Skills and the global `CLAUDE.md` are **team-wide** (identical on every machine),
+so the toolkit holds the real content and each machine symlinks `~/.claude` into it:
+
+| Toolkit (real, versioned) | `~/.claude` (symlink) |
+|---------------------------|-----------------------|
+| `skills/`                 | `~/.claude/skills`    |
+| `global/CLAUDE.md`        | `~/.claude/CLAUDE.md` |
+
+`install.sh` runs this linking automatically at the end (it is idempotent, so it
+is safe on every install). You can also run `./link-global.sh` on its own — once
+per machine after `git clone` — to set up the global links without installing
+into a project. It backs up any existing real files and preserves machine-local
+extras (`.atl/`, `.claude/` inside `skills/`, kept out of git via `.gitignore`).
+Editing a skill or the global `CLAUDE.md` then edits the toolkit → `commit`/`push`
+shares it with the team.
 
 ## Planning model (A2)
 
@@ -85,7 +103,7 @@ Requirements: `uv`, Python 3.9+, and the Codex CLI authenticated
 ~/.claude-codex-harness/install.sh /path/to/project
 ```
 
-This creates the symlinks (`.claude/agents`, `.claude/codex`,
+This creates the symlinks (`.claude/agents`, `.claude/codex`, `.claude/skills`,
 `.claude/settings.json`, `harness/`), copies the customizable templates
 (`CLAUDE.md`, `AGENTS.md`, `Makefile`, `CHECKPOINTS.md`, `docs/`, `progress/`),
 and generates `feature_list.json` from `docs/plan/`. It is **idempotent**: it

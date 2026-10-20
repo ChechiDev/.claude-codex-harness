@@ -1,0 +1,68 @@
+# ── Python bytecode ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# ── Build and packaging ───────────────────────────────────────────────────────
+*.egg
+*.egg-info/
+*.egg-link
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ── Virtual environment (uv) ──────────────────────────────────────────────────
+# uv.lock MUST be committed — never add it here
+.venv/
+
+# ── Linters and type checkers ─────────────────────────────────────────────────
+.mypy_cache/
+*.pyi.tmp
+.ruff_cache/
+.pyright/
+# pyrightconfig.json is a config file — commit it for editor support (agents use mypy, not pyright)
+
+# ── Tests and coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+test-results/
+
+# ── Environment variables ─────────────────────────────────────────────────────
+# Never commit secrets. Use .env.example as a committed template.
+.env
+.env.*
+!.env.example
+
+# ── IDEs and editors ──────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS files ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/

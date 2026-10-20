@@ -6,6 +6,7 @@
 # SYMLINK (generic, updated via `git pull` in the toolkit):
 #   <target>/.claude/agents        -> <toolkit>/agents
 #   <target>/.claude/codex         -> <toolkit>/codex
+#   <target>/.claude/skills        -> <toolkit>/skills
 #   <target>/.claude/settings.json -> <toolkit>/settings.json
 #   <target>/harness               -> <toolkit>/lib
 #
@@ -58,6 +59,7 @@ echo ""
 # --- Symlinks (generic) ---
 link agents        .claude/agents
 link codex         .claude/codex
+link skills        .claude/skills
 link settings.json .claude/settings.json
 link lib           harness
 
@@ -73,6 +75,10 @@ copy progress           progress
 echo ""
 # --- Generated (derived from docs/plan/) ---
 ( cd "$DEST" && python3 "$TOOLKIT/lib/sync_plan.py" >/dev/null ) && genned "feature_list.json (from docs/plan/)"
+
+echo ""
+# --- Machine-level config (idempotent; links ~/.claude into the toolkit) ---
+bash "$TOOLKIT/link-global.sh"
 
 echo ""
 echo "Done. Next steps:"

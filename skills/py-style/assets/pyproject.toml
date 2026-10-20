@@ -1,0 +1,112 @@
+# ── Project — production metadata and runtime dependencies ───────────────────
+
+[project]
+name = "your-project"
+version = "0.1.0"
+description = "Short project description"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+]
+
+# ── Dependency groups (PEP 735) — dev tooling, never published ───────────────
+#
+# uv add --group lint ruff       → adds to [dependency-groups.lint]
+# uv add --group test pytest     → adds to [dependency-groups.test]
+# uv sync --no-dev               → production only (CI/deploy)
+# uv sync --all-groups           → full local dev install
+
+[dependency-groups]
+lint = [
+    "ruff",
+    "flake8",
+    "mypy",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-asyncio",
+]
+dev = [
+    { include-group = "lint" },
+    { include-group = "test" },
+]
+
+# ── uv ────────────────────────────────────────────────────────────────────────
+
+[tool.uv]
+default-groups = ["dev"]
+
+# ── Ruff — formatter + fast linter ───────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py312"
+line-length = 79
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "N",    # pep8-naming
+    "ANN",  # flake8-annotations
+    "S",    # flake8-bandit (security)
+    "RUF",  # ruff-specific rules
+    "PT",   # flake8-pytest-style (PT006/PT007 parametrize, PT011 pytest.raises match=)
+    "D103", # missing docstring in public function (enforced only in tests via per-file-ignores)
+]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"!tests/**/*.py" = ["D103"]  # enforce test function docstrings only in tests/
+"tests/**/*.py" = ["S101"]   # allow assert in tests
+
+[tool.ruff.lint.isort]
+known-first-party = ["your_package"]
+
+# ── Mypy — strict type checking ───────────────────────────────────────────────
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+show_error_codes = true
+# Add packages = ["<package-name>"] in your project's pyproject.toml
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "unit: fast isolated tests, all external deps mocked",
+    "integration: tests against real controlled services, no mocks",
+    "e2e: full flow tests with real data and network, no mocks",
+]
+
+# ── Coverage — unit tests only, 80% minimum ──────────────────────────────────
+#
+# Run: pytest tests/unit/ --cov=<project-packages> --cov-report=term-missing
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "tests/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

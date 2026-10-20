@@ -1,0 +1,9 @@
+# <type>(<scope>): <what> [<subtask-id>]
+# max 72 chars — imperative, lowercase, no period
+# types: feat | fix | refactor | test | chore | docs
+
+
+# WHY — 2 to 4 lines explaining the motivation, not the what
+
+
+# Plan: docs/plan/phase-NN-<name>.md#NMK

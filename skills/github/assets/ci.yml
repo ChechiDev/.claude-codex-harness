@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - ".editorconfig"
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# ── Lint jobs — parallel, no dependencies ────────────────────────────────────
+
+jobs:
+  ruff:
+    name: Ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --group lint
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  flake8:
+    name: Flake8
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --group lint
+      - run: uv run flake8 .
+
+  mypy:
+    name: Mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --group lint
+      - run: uv run mypy
+
+# ── Unit tests — runs only if all lint jobs pass ──────────────────────────────
+
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [ruff, flake8, mypy]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --group test
+      - name: Run unit tests with coverage
+        run: |
+          uv run pytest tests/unit/ \
+            --cov=<project-packages> \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=80
+      - name: Coverage comment on PR
+        uses: MishaKav/pytest-coverage-comment@main
+        if: github.event_name == 'pull_request'
+        with:
+          pytest-xml-coverage-path: coverage.xml
+          title: Unit Test Coverage
+
+# ── Integration tests — only on PR to main ───────────────────────────────────
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [ruff, flake8, mypy]
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    env:
+      # DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+      ENVIRONMENT: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --group test
+      - name: Run integration tests
+        run: uv run pytest tests/integration/ -v
