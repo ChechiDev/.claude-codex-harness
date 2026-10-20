@@ -3,12 +3,12 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/harness/guard_write.sh\"",
-            "description": "Blocks writes to tests/acceptance/ (Codex oracle) and to src/ without PLAN_APPROVED."
+            "description": "Blocks writes to tests/acceptance/ (Codex oracle), Codex verdicts, and src/ outside the approved plan scope."
           }
         ]
       },
@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/harness/guard_bash.sh\"",
-            "description": "Blocks commits/PRs with agent attribution."
+            "description": "Blocks Claude commits, agent attribution, and shell writes to protected paths."
           }
         ]
       }

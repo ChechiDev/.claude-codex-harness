@@ -11,41 +11,65 @@ Commands:
   feature-name <id>   print the title of the task/subtask <id>
   done-ids            print the leaf ids in done status (one per line)
   declared-files <id> print the files declared for leaf <id> (one per line)
+  verdict <file>      print the verdict of a Codex review file (empty if none)
   validate            validate invariants; exit != 0 with [FAIL] messages on failure
 """
+
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
+from typing import Any
 
 FEATURES_FILE = Path("feature_list.json")
 VALID = {"pending", "in_progress", "done", "blocked"}
+# Only the explicit verdict line counts: a substring match would let a
+# CHANGES_REQUESTED review that merely mentions "PLAN_APPROVED" open the gate.
+RE_VERDICT = re.compile(
+    r"^\*\*Verdict:\*\*[ \t]*(PLAN_APPROVED|APPROVED|CHANGES_REQUESTED)[ \t]*$", re.MULTILINE
+)
+
+Item = dict[str, Any]
 
 
-def _tasks() -> list[dict]:
+def _tasks() -> list[Item]:
     data = json.loads(FEATURES_FILE.read_text(encoding="utf-8"))
-    return data["features"]
+    features: list[Item] = data["features"]
+    return features
 
 
-def _leaves() -> list[dict]:
-    """Yield the atomic work units: subtasks, or the task itself if it has none."""
-    out: list[dict] = []
+def leaves() -> list[Item]:
+    """Return the atomic work units: subtasks, or the task itself if it has none."""
+    out: list[Item] = []
     for t in _tasks():
         subs = t.get("subtasks") or []
         if subs:
             for s in subs:
-                out.append({"id": s["id"], "status": s.get("status", "pending"),
-                            "name": s.get("title", ""), "files": s.get("files", [])})
+                out.append(
+                    {
+                        "id": s["id"],
+                        "status": s.get("status", "pending"),
+                        "name": s.get("title", ""),
+                        "files": s.get("files", []),
+                    }
+                )
         else:
-            out.append({"id": t["id"], "status": t.get("status", "pending"),
-                        "name": t.get("title", ""), "files": t.get("files", [])})
+            out.append(
+                {
+                    "id": t["id"],
+                    "status": t.get("status", "pending"),
+                    "name": t.get("title", ""),
+                    "files": t.get("files", []),
+                }
+            )
     return out
 
 
-def _all_items() -> list[dict]:
+def _all_items() -> list[Item]:
     """Every task and subtask (for name lookup by any id)."""
-    out: list[dict] = []
+    out: list[Item] = []
     for t in _tasks():
         out.append({"id": t["id"], "name": t.get("title", "")})
         for s in t.get("subtasks") or []:
@@ -53,10 +77,37 @@ def _all_items() -> list[dict]:
     return out
 
 
+def current_leaf_id() -> str | None:
+    ids = [str(leaf["id"]) for leaf in leaves() if leaf["status"] == "in_progress"]
+    return ids[0] if ids else None
+
+
+def leaf_files(fid: str) -> list[str] | None:
+    """Declared files of leaf <fid>, normalized (no ./ or a/./b); None if unknown id."""
+    for leaf in leaves():
+        if str(leaf["id"]) == str(fid):
+            return [_normalize(f) for f in leaf.get("files", [])]
+    return None
+
+
+def _normalize(rel: str) -> str:
+    parts = [p for p in Path(rel).parts if p != "."]
+    return "/".join(parts)
+
+
+def read_verdict(path: Path) -> str:
+    """The verdict token of a Codex review file, or "" if missing/unparseable."""
+    try:
+        match = RE_VERDICT.search(path.read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+    return match.group(1) if match else ""
+
+
 def in_progress_id() -> int:
-    ids = [leaf["id"] for leaf in _leaves() if leaf["status"] == "in_progress"]
-    if ids:
-        print(ids[0])
+    fid = current_leaf_id()
+    if fid:
+        print(fid)
     return 0
 
 
@@ -69,35 +120,40 @@ def feature_name(fid: str) -> int:
 
 
 def done_ids() -> int:
-    for leaf in _leaves():
+    for leaf in leaves():
         if leaf["status"] == "done":
             print(leaf["id"])
     return 0
 
 
 def declared_files(fid: str) -> int:
-    for leaf in _leaves():
-        if str(leaf["id"]) == str(fid):
-            for f in leaf.get("files", []):
-                print(f)
-            return 0
-    return 1
+    files = leaf_files(fid)
+    if files is None:
+        return 1
+    for f in files:
+        print(f)
+    return 0
+
+
+def verdict(path: str) -> int:
+    print(read_verdict(Path(path)))
+    return 0
 
 
 def validate() -> int:
-    leaves = _leaves()
+    units = leaves()
     rc = 0
-    in_progress = [leaf for leaf in leaves if leaf["status"] == "in_progress"]
+    in_progress = [leaf for leaf in units if leaf["status"] == "in_progress"]
     if len(in_progress) > 1:
         ids = ", ".join(leaf["id"] for leaf in in_progress)
         print(f"[FAIL]  {len(in_progress)} leaves in in_progress (max 1): {ids}")
         rc = 1
-    for leaf in leaves:
+    for leaf in units:
         if leaf["status"] not in VALID:
             print(f"[FAIL]  Invalid status in {leaf['id']}: {leaf['status']}")
             rc = 1
     if rc == 0:
-        print(f"[OK]    feature_list.json valid ({len(leaves)} work units)")
+        print(f"[OK]    feature_list.json valid ({len(units)} work units)")
     return rc
 
 
@@ -105,11 +161,13 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
         return 2
+    if argv[0] == "verdict":
+        return verdict(argv[1]) if len(argv) > 1 else 2
     if not FEATURES_FILE.exists():
         print("[FAIL]  No feature_list.json in the cwd (run: make plan)", file=sys.stderr)
         return 1
     cmd, *rest = argv
-    dispatch = {
+    dispatch: dict[str, Any] = {
         "in-progress-id": lambda: in_progress_id(),
         "feature-name": lambda: feature_name(rest[0]) if rest else 2,
         "done-ids": lambda: done_ids(),
@@ -120,7 +178,8 @@ def main(argv: list[str]) -> int:
     if fn is None:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         return 2
-    return fn()
+    rc: int = fn()
+    return rc
 
 
 if __name__ == "__main__":

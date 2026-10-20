@@ -5,3 +5,7 @@ __pycache__/
 
 # If you test the harness by installing it on a toy project, do not commit it.
 /sandbox/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -24,15 +24,15 @@ TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DEST="${1:-}"; shift || true
 FORCE=0
-LANG="python"       # which template set to copy (python | c)
+TPL_LANG="python"   # template set (python | c). Not LANG: that is the exported locale.
 PYPKG=""            # --python <pkg>: scaffold a Python layer (implies lang=python)
 CNAME=""            # --c <name>:     scaffold a C layer       (implies lang=c)
 while [ $# -gt 0 ]; do
   case "$1" in
     --force)  FORCE=1 ;;
-    --lang)   shift; LANG="${1:-}" ;;
-    --python) shift; PYPKG="${1:-}"; LANG="python" ;;
-    --c)      shift; CNAME="${1:-}"; LANG="c" ;;
+    --lang)   shift; TPL_LANG="${1:-}" ;;
+    --python) shift; PYPKG="${1:-}"; TPL_LANG="python" ;;
+    --c)      shift; CNAME="${1:-}"; TPL_LANG="c" ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift || true
@@ -40,12 +40,12 @@ done
 if [ -z "$DEST" ]; then
   echo "usage: install.sh <project-path> [--force] [--lang python|c] [--python <pkg> | --c <name>]" >&2; exit 2
 fi
-case "$LANG" in python|c) ;; *) echo "error: --lang must be python or c" >&2; exit 2 ;; esac
+case "$TPL_LANG" in python|c) ;; *) echo "error: --lang must be python or c" >&2; exit 2 ;; esac
 for v in "$PYPKG" "$CNAME"; do
   case "$v" in --*) echo "error: --python/--c needs a name argument" >&2; exit 2 ;; esac
 done
 # Template set: Python uses templates/, C uses templates-c/.
-TPLSUB="templates"; [ "$LANG" = "c" ] && TPLSUB="templates-c"
+TPLSUB="templates"; [ "$TPL_LANG" = "c" ] && TPLSUB="templates-c"
 mkdir -p "$DEST"
 DEST="$(cd "$DEST" && pwd)"
 
@@ -76,7 +76,7 @@ copy() {  # copy <path-in-template-set> <path-in-dest>
 
 echo "Installing harness into: $DEST"
 echo "From toolkit:            $TOOLKIT"
-echo "Language / templates:    $LANG ($TPLSUB/)"
+echo "Language / templates:    $TPL_LANG ($TPLSUB/)"
 echo ""
 
 # --- Symlinks (generic) ---

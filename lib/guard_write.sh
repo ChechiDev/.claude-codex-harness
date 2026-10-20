@@ -1,54 +1,13 @@
 #!/usr/bin/env bash
-# PreToolUse hook (matcher: Edit|Write). Enforces two non-bypassable rules:
+# PreToolUse hook (matcher: Edit|Write|MultiEdit|NotebookEdit). Rules:
 #   1. tests/acceptance/ is read-only for Claude (Codex oracle).
-#   2. No writing to src/ without PLAN_APPROVED for the in_progress feature.
+#   2. Codex-owned files (gate verdicts, acceptance seals) are read-only for Claude.
+#   3. No writing to src/ without PLAN_APPROVED for the in_progress subtask, and
+#      only to the files declared in its `files:` (micro-task scope).
+# Paths are resolved (symlinks, .., relative spellings) before matching.
 # Blocks by returning exit 2 and a stderr message that Claude reads.
+# The decision logic lives in _guard.py (shared with the Bash guard and check.sh).
 set -uo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
-cd "$PROJECT_DIR" || exit 0
-
-INPUT="$(cat)"
-FILE="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("file_path",""))' 2>/dev/null)"
-[ -z "$FILE" ] && exit 0
-
-# Normalize to a project-relative path for matching.
-REL="${FILE#"$PROJECT_DIR"/}"
-
-case "$REL" in
-  tests/acceptance/*|*/tests/acceptance/*)
-    echo "BLOCKED: tests/acceptance/ is the independent oracle written by Codex and is READ-ONLY for Claude. If you think an acceptance test is wrong, stop and report it as a blocker in progress/current.md — do not edit it." >&2
-    exit 2
-    ;;
-esac
-
-case "$REL" in
-  src/*|*/src/*)
-    ID="$(python3 "$HARNESS_DIR/_harness.py" in-progress-id 2>/dev/null)"
-    if [ -z "$ID" ]; then
-      echo "BLOCKED: there is no in_progress feature in feature_list.json. The leader must pick and plan a feature before implementing." >&2
-      exit 2
-    fi
-    REVIEW="progress/plan_review_${ID}.md"
-    if [ ! -f "$REVIEW" ] || ! grep -q "PLAN_APPROVED" "$REVIEW" 2>/dev/null; then
-      echo "BLOCKED: feature ${ID} has no plan approved by Codex ($REVIEW = PLAN_APPROVED). The leader must pass the plan gate before the implementer touches src/." >&2
-      exit 2
-    fi
-    # Micro-task scope: the write must target a file declared in the subtask's
-    # `files:` list in docs/plan/. No declaration, or a file outside it, is blocked.
-    FILES="$(python3 "$HARNESS_DIR/_harness.py" declared-files "$ID" 2>/dev/null)"
-    if [ -z "$FILES" ]; then
-      echo "BLOCKED: subtask ${ID} declares no 'files:' in docs/plan/. Micro-task rule: the leader must list the exact files (1-3) this subtask will create/modify, run 'make plan', and re-pass the plan gate before any src/ write." >&2
-      exit 2
-    fi
-    if ! printf '%s\n' "$FILES" | grep -Fxq "$REL"; then
-      echo "BLOCKED: '$REL' is NOT in the declared 'files:' of subtask ${ID}. Allowed files:" >&2
-      printf '  - %s\n' $FILES >&2
-      echo "If this file is genuinely needed, STOP: the leader must add it to docs/plan/ (keep the subtask micro — 1-3 files), run 'make plan', and re-pass the plan gate. Do not implement anything outside the plan." >&2
-      exit 2
-    fi
-    ;;
-esac
-
-exit 0
+exec python3 "$HARNESS_DIR/_guard.py" write

@@ -64,20 +64,36 @@ docs/plan: pending N.M.K
    → next N.M.K
 ```
 
-## Non-bypassable rules (enforced by harness hooks)
+## Harness rules (enforced by hooks + `make check`)
 
-1. Claude does not write to `src/` without `progress/plan_review_<N.M.K>.md` = `PLAN_APPROVED`.
+1. Claude does not write to `src/` without `progress/plan_review_<N.M.K>.md` whose
+   `**Verdict:**` line is exactly `PLAN_APPROVED` (a review that merely *mentions*
+   the word does not count).
 2. **Micro-tasks**: a write to `src/` must target a file declared in the subtask's
    `files:` (1-3 files) in `docs/plan/`. Anything outside it is blocked — the plan
-   has to be updated and re-approved first (`guard_write.sh`).
-3. Claude **never** writes to `tests/acceptance/` (Codex oracle).
-4. Claude **never** commits (`guard_bash.sh`): only Codex commits at close. Escape
-   valve for a conscious manual commit: `HARNESS_ALLOW_COMMIT=1`.
+   has to be updated and re-approved first. Paths are resolved (symlinks, `..`,
+   `./`) before matching.
+3. Claude **never** writes to `tests/acceptance/` (Codex oracle) nor to the
+   Codex-owned verdicts/seals in `progress/`.
+4. Claude **never** commits: the Bash guard parses the command (git global
+   options, wrappers like `env`/`command`, `bash -c`, `eval`, git aliases), it
+   does not match substrings. Escape valve for a conscious manual commit:
+   start Claude Code with `HARNESS_ALLOW_COMMIT=1` (an inline
+   `HARNESS_ALLOW_COMMIT=1 git commit` does not count).
 5. No `done` without `progress/review_<N.M.K>.md` = `APPROVED`, a **complete**
    `docs/reference/<N.M.K>-<name>.md` (`doc_gate`), and `make check` green.
 6. No agent attribution in commits.
    > The close commit is made by Codex (outside Claude's hooks): there, no-attribution
    > is enforced by the Codex prompt instruction, not by a hook.
+
+### Two layers of enforcement
+
+| Layer | What | Limits |
+|-------|------|--------|
+| **Per call** (`PreToolUse`) | `guard_write.sh` covers `Edit/Write/MultiEdit/NotebookEdit`; `guard_bash.sh` blocks shell writes to protected paths (redirections, `tee`, `sed -i`, `cp/mv/rm`, `find -delete`, `git checkout/restore/clean/apply`, `patch`, interpreters writing protected paths…) | The Bash guard is a best-effort parser: an arbitrary program can always write a file in a way no parser sees. |
+| **Outcome** (`make check` → `_guard.py integrity`, also run by the Stop hook) | Every `src/` change vs `HEAD` must be in the in_progress subtask's `files:`; sealed acceptance tests (`progress/acceptance_<N.M.K>.sha256`, written right after `PLAN_APPROVED`) must be byte-identical | Needs git history (skipped with a warning before the first commit). |
+
+The second layer is what makes the rules hold regardless of *how* a file was written.
 
 Clean code (no monster functions, bounded complexity/args) is enforced by the
 ruff caps (C90 + PLR09xx) that ship by default via the `py-style`/`py-init`
@@ -102,10 +118,12 @@ make check   # verify + ./harness/check.sh (plan sync + invariants + gate consis
 
 - `uv` and Python 3.12+.
 - The Codex CLI authenticated (`codex login`). The review gates run Codex with
-  `--sandbox danger-full-access` by default (it must write files and run the uv
-  toolchain); override with `HARNESS_CODEX_SANDBOX=workspace-write` if your
-  environment is already externally sandboxed. Run `/codex:setup` in Claude Code
-  to check readiness.
+  `--sandbox workspace-write` (least privilege): it can write the project, plus
+  the uv cache, plus — only in the `doc` phase, which commits — the git dir. The
+  network stays **off** unless `HARNESS_CODEX_NETWORK=1` (needed only if uv must
+  download dependencies during a gate; run `uv sync --all-groups` beforehand to
+  avoid it). `HARNESS_CODEX_SANDBOX=danger-full-access` remains as an explicit
+  opt-out. Run `/codex:setup` in Claude Code to check readiness.
 
 ### 1. Clone the toolkit (once per machine)
 
@@ -221,6 +239,15 @@ can audit each step as its file appears.
 
 If you prefer to drive Codex yourself, set `HARNESS_CODEX_MODE=manual`: the
 script prints the exact `codex …` command and prompt instead of running it.
+After an approved plan gate in manual mode, **you** (not Claude — the Bash guard
+blocks it) seal the oracle: `./harness/review_with_codex.sh seal <N.M.K>`.
+
+### Stop hook
+
+`stop_gate.sh` runs `make check` before the session ends. A green result is cached
+per working-tree fingerprint, so an unchanged tree does not re-run the suite. If
+the stop was already blocked once and the check is still red, it reports but does
+not block again, so the session cannot loop.
 
 ## On-disk state contract (per subtask `<N.M.K>`)
 
@@ -229,8 +256,20 @@ docs/plan/phase-NN-<name>.md      # the plan + status (source of truth)
 progress/current.md               # live session
 progress/plan_review_<N.M.K>.md   # PLAN_APPROVED | CHANGES_REQUESTED (Codex)
 tests/acceptance/test_<N.M.K>.py  # independent oracle (Codex, read-only for Claude)
+progress/acceptance_<N.M.K>.sha256 # seal of the oracle, verified by make check
 progress/impl_<N.M.K>.md          # implementer report (Claude)
 progress/review_<N.M.K>.md        # APPROVED | CHANGES_REQUESTED (Codex)
 docs/reference/<N.M.K>-<name>.md  # output documentation (Codex)
 progress/history.md               # append-only log (Codex, at close)
+```
+
+## Developing the toolkit
+
+The hooks have their own test suite (the toolkit is still not a package):
+
+```bash
+uv sync
+uv run pytest            # hook behavior on throwaway projects
+uv run ruff check lib/_guard.py lib/_harness.py tests
+uv run mypy              # strict, over lib/_guard.py, lib/_harness.py and tests/
 ```

@@ -1,0 +1,35 @@
+# The toolkit is not a Python package: this file only drives the test suite for
+# the harness hooks/scripts (tests/) and the lint/type gates over lib/.
+[project]
+name = "claude-codex-harness"
+version = "0.0.0"
+description = "Test suite for the claude-codex-harness hooks."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["skills", "templates", "templates-c"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C90", "PLR09"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "lib"
+files = ["lib/_guard.py", "lib/_harness.py", "tests"]

@@ -58,7 +58,12 @@ echo "── 6. Documentation gate ───────────────
 if ! bash "$HARNESS_DIR/doc_gate.sh"; then EXIT=1; fi
 
 echo ""
-echo "── 7. Summary ──────────────────────────────────────────"
+echo "── 7. Integrity backstop (src/ scope + sealed oracle) ──"
+# Re-checks from git/disk what the per-call hooks guard, whatever tool wrote it.
+if ! python3 "$HARNESS_DIR/_guard.py" integrity; then EXIT=1; fi
+
+echo ""
+echo "── 8. Summary ──────────────────────────────────────────"
 if [ $EXIT -eq 0 ]; then
   ok "Harness invariants OK."
 else

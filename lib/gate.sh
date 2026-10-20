@@ -12,7 +12,8 @@ rc=0
 while read -r ID; do
   [ -z "$ID" ] && continue
   REVIEW="progress/review_${ID}.md"
-  if [ ! -f "$REVIEW" ] || ! grep -q "APPROVED" "$REVIEW" 2>/dev/null; then
+  # Exact verdict line only: "Not APPROVED yet" or PLAN_APPROVED must not pass.
+  if [ "$(python3 "$HARNESS_DIR/_harness.py" verdict "$REVIEW")" != "APPROVED" ]; then
     echo "[FAIL]  feature ${ID} is 'done' but has no Codex review APPROVED ($REVIEW)"
     rc=1
   fi
