@@ -1,3 +1,9 @@
+# ── Build system — required so the src/ package is installable/importable ───
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 # ── Project — production metadata and runtime dependencies ───────────────────
 
 [project]

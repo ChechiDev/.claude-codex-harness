@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # install.sh — installs the harness onto a target project (Model B).
 #
-#   install.sh <project-path> [--force]
+#   install.sh <project-path> [--force] [--python <package-name>]
+#
+# --python delegates to lib/scaffold_python.sh (minimal Python layer) so the
+# project runs `make check` green without manual pyproject editing. install.sh
+# itself stays harness-only; the Python logic lives in its own script.
 #
 # SYMLINK (generic, updated via `git pull` in the toolkit):
 #   <target>/.claude/agents        -> <toolkit>/agents
@@ -18,11 +22,23 @@ set -euo pipefail
 
 TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-DEST="${1:-}"
+DEST="${1:-}"; shift || true
 FORCE=0
-[ "${2:-}" = "--force" ] && FORCE=1
+PYPKG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force) FORCE=1 ;;
+    --python) shift; PYPKG="${1:-}" ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+  shift || true
+done
 if [ -z "$DEST" ]; then
-  echo "usage: install.sh <project-path> [--force]" >&2; exit 2
+  echo "usage: install.sh <project-path> [--force] [--python <package-name>]" >&2; exit 2
+fi
+if [ -n "$PYPKG" ]; then
+  # Reject a misplaced flag given as the package value.
+  case "$PYPKG" in --*) echo "error: --python needs a package name" >&2; exit 2 ;; esac
 fi
 mkdir -p "$DEST"
 DEST="$(cd "$DEST" && pwd)"
@@ -71,6 +87,16 @@ copy Makefile           Makefile
 copy CHECKPOINTS.md     CHECKPOINTS.md
 copy docs               docs
 copy progress           progress
+
+if [ -n "$PYPKG" ]; then
+  echo ""
+  # --- Python layer (delegated; keeps install.sh harness-only) ---
+  if [ "$FORCE" -eq 1 ]; then
+    bash "$TOOLKIT/lib/scaffold_python.sh" "$DEST" "$PYPKG" --force
+  else
+    bash "$TOOLKIT/lib/scaffold_python.sh" "$DEST" "$PYPKG"
+  fi
+fi
 
 echo ""
 # --- Generated (derived from docs/plan/) ---
