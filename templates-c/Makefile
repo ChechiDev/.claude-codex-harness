@@ -49,8 +49,13 @@ verify: lint type test
 plan:
 	python3 harness/sync_plan.py
 
-check: verify
-	./harness/check.sh
+# Both halves always run (-k keeps verify going past a red step), so one run
+# reports every failure; the result is red if either half is red.
+check:
+	@rc=0; \
+	$(MAKE) --no-print-directory -k verify || rc=1; \
+	./harness/check.sh || rc=1; \
+	exit $$rc
 
 env-check:
 	@command -v $(CC) >/dev/null 2>&1 || { echo "[FAIL]  $(CC) not found"; exit 1; }

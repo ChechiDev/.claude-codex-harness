@@ -21,8 +21,13 @@ plan:
 	python3 harness/sync_plan.py
 
 # Single entry point for agent and hooks: toolchain + harness invariants.
-check: verify
-	./harness/check.sh
+# Both halves always run (-k keeps verify going past a red step), so one run
+# reports every failure; the result is red if either half is red.
+check:
+	@rc=0; \
+	$(MAKE) --no-print-directory -k verify || rc=1; \
+	./harness/check.sh || rc=1; \
+	exit $$rc
 
 # Toolchain presence check, used by harness/check.sh (language-agnostic entry point).
 env-check:
