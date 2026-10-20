@@ -6,6 +6,10 @@
 ## 1. Before starting (mandatory)
 
 1. Run `make check`. If it fails, **stop** and fix the harness before touching anything.
+   Exception — **plan gate**: once Codex has written the acceptance tests for the
+   subtask, they are intentionally **red**, so `make verify`/`make check` are
+   expected to fail on *those* tests. That is the correct state at the plan phase,
+   not a harness failure. Green is required at session start, the code gate, and close.
 2. Read `progress/current.md` (where the last session left off).
 3. Read `docs/plan/` and pick **one** `pending` subtask `N.M.K`. One at a time.
 

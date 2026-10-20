@@ -33,9 +33,10 @@ Plan for **traceability**: one subtask = one atomic unit of implementation (a
 single class, function, method, adapter…). **Never** bundle several things into
 one subtask.
 
-- Each subtask `N.M.K` declares a `files:` list with the **exact** files it will
-  create/modify — **1 to 3 files**, no more. Annotate each with an inline comment
-  (`# crea:` / `# modifica:`) describing its single purpose.
+- Each subtask `N.M.K` declares a `files:` list with the **exact production files
+  (under `src/`)** it will create/modify — **1 to 3 files**, no more. Annotate each
+  with an inline comment (`# crea:` / `# modifica:`) describing its single purpose.
+  Unit tests (`tests/unit/`) are the implementer's and are not declared here.
 - Break the `description` down enough that the scope is unambiguous before any code.
 - The harness **enforces** this: `guard_write.sh` blocks any write to `src/` that
   is not in the subtask's declared `files:`. If a file is missing, there is no

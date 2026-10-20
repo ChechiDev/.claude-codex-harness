@@ -24,10 +24,15 @@ Common criteria (what a senior backend engineer would look at):
   monster functions (the ruff caps C90/PLR09xx in `pyproject.toml` enforce
   length/complexity/args; if `make verify` is green they pass, but still flag
   poor decomposition).
-- **Micro-task scope**: one subtask = one atomic unit (a class/function/method),
-  touching **1-3 files** declared in the subtask's `files:`. Reject anything that
-  bundles several concerns or overflows its declared files.
-- **Toolchain**: `make verify` (ruff + strict mypy + pytest) must be green.
+- **Micro-task scope**: one subtask = one atomic unit (a class/function/method).
+  `files:` declares the **1-3 production files (under `src/`)** it creates/modifies.
+  The accompanying `tests/unit/` are the implementer's and are **expected** — they
+  do not need to be declared. Reject only when a subtask bundles several concerns
+  or touches `src/` files outside its declared `files:`.
+- **Toolchain**: `make verify` (ruff + strict mypy + pytest) must be green **in
+  `code` mode**. In `plan` mode the acceptance tests you write are left **red** by
+  design, so a red suite is expected — do **not** run `make check`/`make verify`
+  as a blocking preflight there (see the plan-gate exception in `AGENTS.md`).
 - Objective criteria from `docs/architecture.md`, `docs/conventions.md`, and `CHECKPOINTS.md`.
 - The shared-standard skills apply: read `py-pytest`, `py-style`, `py-pydantic`, `py-typing` as authoritative.
 
@@ -84,8 +89,10 @@ Input: the files changed by the implementer (see `progress/impl_<N.M.K>.md`).
 2. Review each file against the common criteria. Are the unit tests real or trivial?
    Check **DRY/SOLID** actively (duplicated or misplaced logic → `CHANGES_REQUESTED`
    citing `file:line`).
-3. **Scope check**: the changed files must match the subtask's declared `files:`
-   (1-3). If the implementation touched files outside the plan → `CHANGES_REQUESTED`.
+3. **Scope check**: the changed **`src/` files** must match the subtask's declared
+   `files:` (1-3). Unit tests under `tests/unit/` are expected and not part of the
+   declared scope. If the implementation touched **`src/`** files outside the plan
+   → `CHANGES_REQUESTED`.
 4. Walk through `CHECKPOINTS.md` marking `[x]`/`[ ]` with a reason.
 
 Verdict in `progress/review_<N.M.K>.md`:

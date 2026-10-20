@@ -19,9 +19,11 @@
 ## Micro-task rule (enforced)
 
 A subtask is the smallest traceable unit. It declares a `files:` list of the
-**exact 1-3 files** it creates/modifies. The harness blocks any write to `src/`
-outside that list (`guard_write.sh`), and Codex rejects subtasks that bundle
-several concerns. If a unit needs more than ~3 files, split it into more subtasks.
+**exact 1-3 production files (under `src/`)** it creates/modifies. The harness
+blocks any write to `src/` outside that list (`guard_write.sh`), and Codex rejects
+subtasks that bundle several concerns. Unit tests (`tests/unit/`) are the
+implementer's and are not declared. If a unit needs more than ~3 `src/` files,
+split it into more subtasks.
 
 Ids are assigned here during planning and are the ids used everywhere else
 (`feature_list.json`, `progress/`, `docs/reference/<id>-<name>.md`, commit footer

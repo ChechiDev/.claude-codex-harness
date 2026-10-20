@@ -98,28 +98,57 @@ make check   # verify + ./harness/check.sh (plan sync + invariants + gate consis
 
 ## Getting started
 
+### Requirements
+
+- `uv` and Python 3.12+.
+- The Codex CLI authenticated (`codex login`). The review gates run Codex with
+  `--sandbox danger-full-access` by default (it must write files and run the uv
+  toolchain); override with `HARNESS_CODEX_SANDBOX=workspace-write` if your
+  environment is already externally sandboxed. Run `/codex:setup` in Claude Code
+  to check readiness.
+
 ### 1. Clone the toolkit (once per machine)
 
 ```bash
 git clone git@github.com:<you>/claude-codex-harness.git ~/.claude-codex-harness
 ```
 
-Requirements: `uv`, Python 3.9+, and the Codex CLI authenticated
-(`codex login`). Run `/codex:setup` in Claude Code to check readiness.
-
 ### 2. Install it onto a project
+
+**A. New project (recommended — one scaffold command):**
+
+```bash
+# create the uv package (src/ layout, Python 3.12)
+uv init --package --python 3.12 --name my_pkg /path/to/project
+# install the harness AND the minimal Python layer in one go
+~/.claude-codex-harness/install.sh /path/to/project --python my_pkg
+```
+
+`--python <pkg>` delegates to `lib/scaffold_python.sh`, which drops in the
+canonical `pyproject.toml` (ruff + strict mypy + pytest, with clean-code caps),
+`src/<pkg>/py.typed`, and a smoke test — so the project runs `make check` green
+with no manual editing. (For a full team project with git/CI/GitHub, use the
+`py-init` skill instead of `--python`.)
+
+**B. Existing project (harness layer only):**
 
 ```bash
 ~/.claude-codex-harness/install.sh /path/to/project
 ```
 
-This creates the symlinks (`.claude/agents`, `.claude/codex`, `.claude/skills`,
-`.claude/settings.json`, `harness/`), copies the customizable templates
-(`CLAUDE.md`, `AGENTS.md`, `Makefile`, `CHECKPOINTS.md`, `docs/`, `progress/`),
-and generates `feature_list.json` from `docs/plan/`. It is **idempotent**: it
-does not overwrite existing files unless you pass `--force`.
+Needs a `pyproject.toml` with ruff/mypy/pytest already in place.
 
-Because the generic parts are symlinked, running `git pull` in
+Either way, `install.sh`:
+- creates the symlinks (`.claude/agents`, `.claude/codex`, `.claude/skills`,
+  `.claude/settings.json`, `harness/`),
+- copies the customizable templates (`CLAUDE.md`, `AGENTS.md`, `Makefile`,
+  `CHECKPOINTS.md`, `docs/`, `progress/`),
+- generates `feature_list.json` from `docs/plan/`,
+- runs `link-global.sh` (idempotent) to link `~/.claude/{skills,CLAUDE.md}` into
+  the toolkit.
+
+It is **idempotent**: it does not overwrite existing files unless you pass
+`--force`. Because the generic parts are symlinked, running `git pull` in
 `~/.claude-codex-harness` updates every installed project at once.
 
 ### 3. Prepare the project
@@ -131,7 +160,8 @@ cd /path/to/project
 #   docs/architecture.md    → your bounded contexts / ORM
 #   docs/plan/PLAN.md        → goals
 # rename docs/plan/phase-01-example.md → phase-01-<name>.md and write the backlog
-uv sync                      # install deps (needs pyproject.toml with ruff/mypy/pytest)
+#   (each subtask declares a files: list of 1-3 src/ files — micro-tasks)
+uv sync --all-groups         # install deps + the project itself
 make plan                    # regenerate feature_list.json from docs/plan/
 make check                   # must finish green before any agent works
 ```

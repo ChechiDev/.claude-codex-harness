@@ -51,9 +51,15 @@ Do not edit production code. Do not add agent attribution.
 EOF
 )"
 
-# --- Model and effort for the codex CLI (verified with codex exec --help). -----
+# --- Model, effort and sandbox for the codex CLI (verified with codex exec --help).
 # Effort is not a dedicated flag: it is passed as a config override.
-CODEX_ARGS=(--model "$MODEL")
+# Sandbox: the reviewer must WRITE (acceptance tests + verdict) and RUN the uv
+# toolchain (`make check` writes to ~/.cache/uv), so read-only (the codex default)
+# fails. Default to danger-full-access — the gate runs on the user's own machine,
+# invoked explicitly by them. Override with HARNESS_CODEX_SANDBOX (e.g.
+# workspace-write) when the environment is already externally sandboxed.
+SANDBOX="${HARNESS_CODEX_SANDBOX:-danger-full-access}"
+CODEX_ARGS=(--model "$MODEL" --sandbox "$SANDBOX")
 case "$EFFORT" in
   low|medium|high|xhigh) CODEX_ARGS+=(-c "model_reasoning_effort=$EFFORT") ;;
 esac

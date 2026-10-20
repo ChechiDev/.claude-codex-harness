@@ -111,7 +111,9 @@ disallow_untyped_defs = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--strict-markers"
+# importlib mode: required so dotted acceptance filenames like
+# tests/acceptance/test_1.1.1.py (the harness id scheme) collect correctly.
+addopts = "--strict-markers --import-mode=importlib"
 markers = [
     "unit: fast isolated tests, all external deps mocked",
     "integration: tests against real controlled services, no mocks",
