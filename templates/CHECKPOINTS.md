@@ -24,6 +24,9 @@
 
 ## C4 — Quality and security
 - [ ] `make verify` green (ruff + strict mypy + pytest).
+- [ ] **SOLID / clean code**: single responsibility; no monster functions (ruff
+      C90/PLR09xx caps pass); **DRY** — no duplicated logic, reuses what exists.
+- [ ] **Micro-task scope**: only the subtask's declared `files:` (1-3) were touched.
 - [ ] No debug `print()`; structured logging.
 - [ ] Boundary validation (Pydantic v2 / serializers).
 - [ ] No concatenated SQL, no secrets in code, no logging of PII/tokens.
@@ -35,7 +38,9 @@
 - [ ] Tests use `tmp_path`/`TemporaryDirectory`, not fs mocks.
 
 ## C6 — The close is correct
-- [ ] `docs/reference/<N.M.K>-<name>.md` written (the why + contracts).
+- [ ] `docs/reference/<N.M.K>-<name>.md` written with the required structure:
+      frontmatter (`id`, `alias`, `tags`, `date`) + the five `<!-- section: … -->`
+      anchors (concept/planning/execution/problems/files). `doc_gate` must pass.
 - [ ] `status: done` set in `docs/plan/`; `feature_list.json` regenerated.
 - [ ] `progress/history.md` has an entry for the subtask.
 - [ ] Single commit: `<type>(<scope>): <what> [N.M.K]` + `Plan:` footer, **no agent attribution**.

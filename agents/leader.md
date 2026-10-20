@@ -23,8 +23,27 @@ The unit of work is the **subtask `N.M.K`** (a leaf). Tasks `N.M` are groupings.
 
 Write/update the phase files `docs/plan/phase-NN-<name>.md` in the parseable
 format (see `docs/plan/PLAN.md`): tasks `## N.M`, subtasks `### N.M.K`, with
-`status`, `layer`, `description`, and task-level `acceptance`. **You assign the
-ids here.** After editing the plan, run `make plan` to regenerate `feature_list.json`.
+`status`, `layer`, `description`, task-level `acceptance`, and a per-subtask
+`files:` list. **You assign the ids here.** After editing the plan, run
+`make plan` to regenerate `feature_list.json`.
+
+## Micro-task granularity (non-negotiable)
+
+Plan for **traceability**: one subtask = one atomic unit of implementation (a
+single class, function, method, adapter…). **Never** bundle several things into
+one subtask.
+
+- Each subtask `N.M.K` declares a `files:` list with the **exact** files it will
+  create/modify — **1 to 3 files**, no more. Annotate each with an inline comment
+  (`# crea:` / `# modifica:`) describing its single purpose.
+- Break the `description` down enough that the scope is unambiguous before any code.
+- The harness **enforces** this: `guard_write.sh` blocks any write to `src/` that
+  is not in the subtask's declared `files:`. If a file is missing, there is no
+  workaround — you must add it to `docs/plan/`, run `make plan`, and re-pass the
+  plan gate. Nothing gets implemented outside the plan.
+
+If a unit of work would need more than ~3 files, it is not a subtask: split it
+into several `N.M.K` subtasks.
 
 ## Per-subtask cycle
 

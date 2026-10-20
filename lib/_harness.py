@@ -10,6 +10,7 @@ Commands:
   in-progress-id      print the id of the single in_progress leaf (empty if none)
   feature-name <id>   print the title of the task/subtask <id>
   done-ids            print the leaf ids in done status (one per line)
+  declared-files <id> print the files declared for leaf <id> (one per line)
   validate            validate invariants; exit != 0 with [FAIL] messages on failure
 """
 from __future__ import annotations
@@ -35,10 +36,10 @@ def _leaves() -> list[dict]:
         if subs:
             for s in subs:
                 out.append({"id": s["id"], "status": s.get("status", "pending"),
-                            "name": s.get("title", "")})
+                            "name": s.get("title", ""), "files": s.get("files", [])})
         else:
             out.append({"id": t["id"], "status": t.get("status", "pending"),
-                        "name": t.get("title", "")})
+                        "name": t.get("title", ""), "files": t.get("files", [])})
     return out
 
 
@@ -74,6 +75,15 @@ def done_ids() -> int:
     return 0
 
 
+def declared_files(fid: str) -> int:
+    for leaf in _leaves():
+        if str(leaf["id"]) == str(fid):
+            for f in leaf.get("files", []):
+                print(f)
+            return 0
+    return 1
+
+
 def validate() -> int:
     leaves = _leaves()
     rc = 0
@@ -103,6 +113,7 @@ def main(argv: list[str]) -> int:
         "in-progress-id": lambda: in_progress_id(),
         "feature-name": lambda: feature_name(rest[0]) if rest else 2,
         "done-ids": lambda: done_ids(),
+        "declared-files": lambda: declared_files(rest[0]) if rest else 2,
         "validate": lambda: validate(),
     }
     fn = dispatch.get(cmd)

@@ -33,6 +33,8 @@ subagent) writes the code.
 - ❌ Do not hand-edit `feature_list.json`: edit `docs/plan/` and run `make plan`.
 - ✅ Implement via `subagent_type: "implementer"` (one subtask `N.M.K`).
 - ✅ Run gates via `./harness/review_with_codex.sh <plan|code|doc> <N.M.K>`.
+- ✅ **Micro-tasks**: each subtask is one atomic unit and declares a `files:` list
+  of 1-3 files in `docs/plan/`. The harness blocks `src/` writes outside it.
 
 ### Commit authorization (within the harness)
 

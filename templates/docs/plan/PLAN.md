@@ -14,7 +14,14 @@
 
 - **Phase** = `NN` (file).
 - **Task** = `N.M` → a feature.
-- **Subtask** = `N.M.K` → a unit of implementation (what the `implement` skill consumes).
+- **Subtask** = `N.M.K` → **one atomic micro-task** (a single class/function/method).
+
+## Micro-task rule (enforced)
+
+A subtask is the smallest traceable unit. It declares a `files:` list of the
+**exact 1-3 files** it creates/modifies. The harness blocks any write to `src/`
+outside that list (`guard_write.sh`), and Codex rejects subtasks that bundle
+several concerns. If a unit needs more than ~3 files, split it into more subtasks.
 
 Ids are assigned here during planning and are the ids used everywhere else
 (`feature_list.json`, `progress/`, `docs/reference/<id>-<name>.md`, commit footer
@@ -36,11 +43,19 @@ Ids are assigned here during planning and are the ids used everywhere else
 ### 1.1.1 <subtask title>
 - status: pending
 - layer: application
+- files:
+  - src/<pkg>/application/foo.py        # crea: clase Foo
+  - src/<pkg>/application/__init__.py    # modifica: export
 
 ### 1.1.2 <subtask title>
 - status: pending
 - layer: infrastructure
+- files:
+  - src/<pkg>/infrastructure/bar.py     # crea: adapter Bar
 ```
+
+`files:` lists the 1-3 files the subtask will touch (inline `# crea:`/`# modifica:`
+comments are optional and ignored by the parser).
 
 `status` ∈ `pending | in_progress | done | blocked`.
 `layer` ∈ `domain | application | infrastructure | interfaces`.

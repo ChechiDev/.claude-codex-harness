@@ -18,7 +18,15 @@ Common criteria (what a senior backend engineer would look at):
   the domain entity (mapped in infra).
 - **Boundary validation**: API input/output with schemas (Pydantic v2 / serializers). External data = untrusted.
 - **Defensive security**: no concatenated SQL, no secrets in code, no logging of sensitive data.
-- **Quality**: SOLID, clear naming, typed errors, no debug `print()`, structured logging.
+- **Quality / SOLID / clean code**: single responsibility, clear naming, typed
+  errors, no debug `print()`, structured logging. **DRY: reject duplicated logic
+  or code that should reuse something that already exists** — cite where. No
+  monster functions (the ruff caps C90/PLR09xx in `pyproject.toml` enforce
+  length/complexity/args; if `make verify` is green they pass, but still flag
+  poor decomposition).
+- **Micro-task scope**: one subtask = one atomic unit (a class/function/method),
+  touching **1-3 files** declared in the subtask's `files:`. Reject anything that
+  bundles several concerns or overflows its declared files.
 - **Toolchain**: `make verify` (ruff + strict mypy + pytest) must be green.
 - Objective criteria from `docs/architecture.md`, `docs/conventions.md`, and `CHECKPOINTS.md`.
 - The shared-standard skills apply: read `py-pytest`, `py-style`, `py-pydantic`, `py-typing` as authoritative.
@@ -32,8 +40,11 @@ Input: the subtask `N.M.K` in `docs/plan/phase-NN-<name>.md` + `progress/current
 You do **two things**:
 
 1. **Review the subtask plan**: does the approach respect the layers? does it put
-   domain logic in infra? does the scope match the subtask without overflowing?
-   is the test strategy real TDD? are ports/adapters missing?
+   domain logic in infra? is the test strategy real TDD? are ports/adapters missing?
+   **Scope check (reject if it fails):** the subtask must be atomic (one
+   class/function/method) and declare a `files:` list of **1-3 files**; if it has
+   no `files:`, declares >3, or clearly bundles several units of work →
+   `CHANGES_REQUESTED` asking the leader to split it and declare the files.
 2. **Write the acceptance tests** in `tests/acceptance/test_<N.M.K>.py`: black box,
    derived from the subtask's acceptance criteria, **not from any implementation**
    (none exists yet). They test observable behavior. These tests are the oracle;
@@ -71,7 +82,11 @@ Input: the files changed by the implementer (see `progress/impl_<N.M.K>.md`).
 
 1. Run `make verify`. If red → `CHANGES_REQUESTED`, no further analysis.
 2. Review each file against the common criteria. Are the unit tests real or trivial?
-3. Walk through `CHECKPOINTS.md` marking `[x]`/`[ ]` with a reason.
+   Check **DRY/SOLID** actively (duplicated or misplaced logic → `CHANGES_REQUESTED`
+   citing `file:line`).
+3. **Scope check**: the changed files must match the subtask's declared `files:`
+   (1-3). If the implementation touched files outside the plan → `CHANGES_REQUESTED`.
+4. Walk through `CHECKPOINTS.md` marking `[x]`/`[ ]` with a reason.
 
 Verdict in `progress/review_<N.M.K>.md`:
 

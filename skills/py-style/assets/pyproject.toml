@@ -61,13 +61,29 @@ select = [
     "S",    # flake8-bandit (security)
     "RUF",  # ruff-specific rules
     "PT",   # flake8-pytest-style (PT006/PT007 parametrize, PT011 pytest.raises match=)
+    "C90",  # mccabe: cyclomatic complexity (C901) — no monster functions
+    "PLR0911", # pylint: too-many-return-statements
+    "PLR0912", # pylint: too-many-branches
+    "PLR0913", # pylint: too-many-arguments
+    "PLR0915", # pylint: too-many-statements — caps function length
     "D103", # missing docstring in public function (enforced only in tests via per-file-ignores)
 ]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 "!tests/**/*.py" = ["D103"]  # enforce test function docstrings only in tests/
-"tests/**/*.py" = ["S101"]   # allow assert in tests
+# Tests may be longer/branchier than production code: relax the SOLID caps there.
+"tests/**/*.py" = ["S101", "PLR0915", "PLR0912", "C901"]  # allow assert + longer tests
+
+# ── Clean-code caps (SOLID / no monster functions) ──────────────────────────
+# Enforced by `make verify` (lint gate), so Codex sees red before approving.
+[tool.ruff.lint.mccabe]
+max-complexity = 8      # a more branchy function → refactor it
+
+[tool.ruff.lint.pylint]
+max-statements = 40     # a longer function → split it
+max-args = 5
+max-branches = 10
 
 [tool.ruff.lint.isort]
 known-first-party = ["your_package"]

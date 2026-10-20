@@ -17,7 +17,11 @@ feature_list.json. The leader writes/edits this; Codex sets status at close.
 ### 1.1.1 ‹subtask title: port/entity…›
 - status: pending
 - layer: domain
+- files:
+  - src/‹pkg›/domain/‹entity›.py          # crea: ‹una sola clase/VO›
 
 ### 1.1.2 ‹subtask title: adapter…›
 - status: pending
 - layer: infrastructure
+- files:
+  - src/‹pkg›/infrastructure/‹adapter›.py  # crea: ‹un solo adapter›

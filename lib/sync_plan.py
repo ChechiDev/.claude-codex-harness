@@ -26,6 +26,9 @@ Phase file format (docs/plan/phase-NN-<name>.md):
   ### 1.1.1 <subtask title>
   - status: pending
   - layer: application
+  - files:
+    - src/domain/value_objects/email.py   # crea: clase Email (inline comment opcional)
+    - src/domain/value_objects/__init__.py # modifica: export
 """
 from __future__ import annotations
 
@@ -41,6 +44,7 @@ RE_TASK = re.compile(r"^##\s+(\d+\.\d+)\s+(.*)$")
 RE_SUBTASK = re.compile(r"^###\s+(\d+\.\d+\.\d+)\s+(.*)$")
 RE_META = re.compile(r"^-\s+(\w+):\s*(.*)$")
 RE_AC = re.compile(r"^\s*-\s+(AC\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*$")
+RE_LIST_ITEM = re.compile(r"^\s+-\s+(\S.*)$")  # indented list item (files block)
 VALID_STATUS = {"pending", "in_progress", "done", "blocked"}
 
 
@@ -55,23 +59,36 @@ def parse_phase(path: Path) -> list[dict]:
     task: dict | None = None
     sub: dict | None = None
     in_acceptance = False
+    in_files = False
+    files_target: dict | None = None
 
     for raw in path.read_text(encoding="utf-8").splitlines():
         m = RE_TASK.match(raw)
         if m:
             task = {"id": m.group(1), "title": m.group(2).strip(), "layer": "",
-                    "description": "", "acceptance": [], "subtasks": [], "status": "pending"}
+                    "description": "", "acceptance": [], "files": [],
+                    "subtasks": [], "status": "pending"}
             tasks.append(task)
             sub = None
-            in_acceptance = False
+            in_acceptance = in_files = False
             continue
 
         m = RE_SUBTASK.match(raw)
         if m and task is not None:
-            sub = {"id": m.group(1), "title": m.group(2).strip(), "layer": "", "status": "pending"}
+            sub = {"id": m.group(1), "title": m.group(2).strip(), "layer": "",
+                   "files": [], "status": "pending"}
             task["subtasks"].append(sub)
-            in_acceptance = False
+            in_acceptance = in_files = False
             continue
+
+        if in_files:
+            fm = RE_LIST_ITEM.match(raw)
+            if fm and files_target is not None:
+                # Strip optional inline comment: "src/x.py  # crea: ..." -> "src/x.py"
+                files_target["files"].append(fm.group(1).split("#", 1)[0].strip())
+                continue
+            if raw.strip():
+                in_files = False  # block ended
 
         if in_acceptance:
             m = RE_AC.match(raw)
@@ -88,7 +105,11 @@ def parse_phase(path: Path) -> list[dict]:
             if target is None:
                 continue
             if key == "acceptance" and val == "":
-                in_acceptance = True
+                in_acceptance, in_files = True, False
+            elif key == "files" and val == "":
+                in_files, in_acceptance = True, False
+                files_target = target
+                target.setdefault("files", [])
             elif key == "status":
                 target["status"] = _norm_status(val)
             elif key in ("layer", "description", "title"):

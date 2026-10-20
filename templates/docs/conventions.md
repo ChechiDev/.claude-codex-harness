@@ -7,6 +7,10 @@ Code, names, and comments in **English**.
 - **uv** for deps/environment · **ruff** (lint + format) · **mypy** strict · **pytest** (`pytest-asyncio` for async).
 - `src/` layout. Everything goes through the `Makefile` (`make lint`, `make type`, `make test`).
 - PEP8 via ruff; do not format by hand.
+- **Clean-code caps enforced by ruff** (C90 + PLR09xx in `pyproject.toml`): bounded
+  complexity, function length, args and branches. A monster function fails `make verify`.
+- **Micro-task discipline**: one subtask = one atomic unit (class/function/method),
+  1-3 files declared in the plan's `files:`. Enforced by the harness.
 
 ## Naming
 

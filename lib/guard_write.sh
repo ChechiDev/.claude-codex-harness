@@ -35,6 +35,19 @@ case "$REL" in
       echo "BLOCKED: feature ${ID} has no plan approved by Codex ($REVIEW = PLAN_APPROVED). The leader must pass the plan gate before the implementer touches src/." >&2
       exit 2
     fi
+    # Micro-task scope: the write must target a file declared in the subtask's
+    # `files:` list in docs/plan/. No declaration, or a file outside it, is blocked.
+    FILES="$(python3 "$HARNESS_DIR/_harness.py" declared-files "$ID" 2>/dev/null)"
+    if [ -z "$FILES" ]; then
+      echo "BLOCKED: subtask ${ID} declares no 'files:' in docs/plan/. Micro-task rule: the leader must list the exact files (1-3) this subtask will create/modify, run 'make plan', and re-pass the plan gate before any src/ write." >&2
+      exit 2
+    fi
+    if ! printf '%s\n' "$FILES" | grep -Fxq "$REL"; then
+      echo "BLOCKED: '$REL' is NOT in the declared 'files:' of subtask ${ID}. Allowed files:" >&2
+      printf '  - %s\n' $FILES >&2
+      echo "If this file is genuinely needed, STOP: the leader must add it to docs/plan/ (keep the subtask micro — 1-3 files), run 'make plan', and re-pass the plan gate. Do not implement anything outside the plan." >&2
+      exit 2
+    fi
     ;;
 esac
 

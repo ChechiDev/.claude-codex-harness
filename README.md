@@ -67,11 +67,21 @@ docs/plan: pending N.M.K
 ## Non-bypassable rules (enforced by harness hooks)
 
 1. Claude does not write to `src/` without `progress/plan_review_<N.M.K>.md` = `PLAN_APPROVED`.
-2. Claude **never** writes to `tests/acceptance/` (Codex oracle).
-3. No `done` without `progress/review_<N.M.K>.md` = `APPROVED` and `make check` green.
-4. No agent attribution in commits made by Claude.
+2. **Micro-tasks**: a write to `src/` must target a file declared in the subtask's
+   `files:` (1-3 files) in `docs/plan/`. Anything outside it is blocked — the plan
+   has to be updated and re-approved first (`guard_write.sh`).
+3. Claude **never** writes to `tests/acceptance/` (Codex oracle).
+4. Claude **never** commits (`guard_bash.sh`): only Codex commits at close. Escape
+   valve for a conscious manual commit: `HARNESS_ALLOW_COMMIT=1`.
+5. No `done` without `progress/review_<N.M.K>.md` = `APPROVED`, a **complete**
+   `docs/reference/<N.M.K>-<name>.md` (`doc_gate`), and `make check` green.
+6. No agent attribution in commits.
    > The close commit is made by Codex (outside Claude's hooks): there, no-attribution
    > is enforced by the Codex prompt instruction, not by a hook.
+
+Clean code (no monster functions, bounded complexity/args) is enforced by the
+ruff caps (C90 + PLR09xx) that ship by default via the `py-style`/`py-init`
+skills, so a violation fails `make verify` before Codex can approve.
 
 ## Toolchain (always uv)
 

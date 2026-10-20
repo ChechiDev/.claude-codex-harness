@@ -49,7 +49,11 @@ echo "── 5. Gate consistency ───────────────�
 if ! bash "$HARNESS_DIR/gate.sh"; then EXIT=1; fi
 
 echo ""
-echo "── 6. Summary ──────────────────────────────────────────"
+echo "── 6. Documentation gate ───────────────────────────────"
+if ! bash "$HARNESS_DIR/doc_gate.sh"; then EXIT=1; fi
+
+echo ""
+echo "── 7. Summary ──────────────────────────────────────────"
 if [ $EXIT -eq 0 ]; then
   ok "Harness invariants OK."
 else

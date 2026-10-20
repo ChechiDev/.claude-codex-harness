@@ -16,16 +16,64 @@ and finish with a **single commit**. You do not change production code or tests.
 
 1. **Write the reference documentation** → `docs/reference/<N.M.K>-<name>.md`
    (`<name>` is the subtask slug; the id matches `docs/plan/` and `feature_list.json`).
-   Document the **why** and the contracts, not what the code already says. Follow
-   the `docs` skill standard (Diátaxis "reference"). If a cross-cutting doc also
-   needs a touch (`docs/architecture.md`, `docs/conventions.md`), update it; if
-   nothing changes conceptually, say so and do not invent.
+   It is an **Obsidian-style** note and **must** follow the exact structure below.
+   The `doc_gate` (in `make check`) blocks the close if the frontmatter keys or any
+   of the five section anchors are missing — keep the anchors verbatim.
+
+   ````markdown
+   ---
+   id: <N.M.K>
+   alias:
+     - <short alias for the task/subtask>
+   tags:
+     - <coherent tags for this task/subtask>
+   date: <yyyy-mm-dd HH:MM>
+   ---
+
+   <!-- section: concept -->
+   ## <didactic title>
+
+   Professor-style explanation of the concept this subtask implements. Teach it
+   clearly, with **output examples**, diagrams/graphics, tables — whatever makes
+   it unambiguous. You may extend as much as needed. This is the main section.
+
+   <!-- section: planning -->
+   ## How it was planned
+
+   How the task/subtask was planned (scope, declared `files:`, acceptance criteria).
+
+   <!-- section: execution -->
+   ## How it was executed
+
+   How it was actually implemented (approach, key decisions, the why / contracts —
+   do not restate what the code already says).
+
+   <!-- section: problems -->
+   ## Problems & resolution
+
+   Problems encountered (if any) and how they were solved. If none: "None.".
+
+   <!-- section: files -->
+   ## Files created / modified
+
+   Every file touched, as Obsidian links where useful: `[[src/domain/email.py]]`
+   — one line each with a short note on what changed.
+   ````
+
+   Use Obsidian conventions: sections as `##` headings and file references as
+   wikilinks (`[[...]]`) where it helps navigation. Keep the five `<!-- section: … -->`
+   anchors exactly as shown. If a cross-cutting doc also needs a touch
+   (`docs/architecture.md`, `docs/conventions.md`), update it; if nothing changes
+   conceptually, say so and do not invent.
 2. **Mark done in the plan**: set `status: done` for subtask `N.M.K` in
    `docs/plan/phase-NN-<name>.md`.
 3. **Regenerate the index**: run `make plan` (regenerates `feature_list.json`).
 4. **Update tracking**: tick the gate boxes in `progress/current.md` and append the
    close entry to `progress/history.md`.
-5. **Single commit** of everything (code + `tests/acceptance/` + `docs/reference/`
+5. **Run `make check`** — it must be green (it includes `make verify`, the gate
+   consistency check, and the `doc_gate` that verifies this reference doc is
+   complete). Do not commit if it is red.
+6. **Single commit** of everything (code + `tests/acceptance/` + `docs/reference/`
    + `docs/plan/` + `feature_list.json` + `progress/`). Use the `commit` standard:
    `<type>(<scope>): <what> [N.M.K]` + 2-4 line body (why) +
    footer `Plan: docs/plan/phase-NN-<name>.md#NMK`.
