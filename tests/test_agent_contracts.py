@@ -145,6 +145,7 @@ def _harness_docs() -> list[Path]:
     for tpl in TEMPLATE_SETS:
         docs += [p for p in (TOOLKIT / tpl).rglob("*.md")]
     docs += [IMPLEMENT, TOOLKIT / "skills/github/commit/SKILL.md", TOOLKIT / "README.md"]
+    docs += sorted((TOOLKIT / "docs").glob("*.md"))
     return docs
 
 
