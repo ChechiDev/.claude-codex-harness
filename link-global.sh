@@ -16,6 +16,8 @@ set -euo pipefail
 
 TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_HOME:-$HOME/.claude}"
+QUIET=0; [ "${1:-}" = "--quiet" ] && QUIET=1   # --quiet: report changes only
+. "$TOOLKIT/lib/_colors.sh"
 
 backup_if_real() {  # backup_if_real <path>
   local p="$1"
@@ -30,7 +32,7 @@ link() {  # link <src-in-toolkit> <dest-in-~/.claude>
   local src="$TOOLKIT/$1" dest="$CLAUDE_DIR/$2"
   [ -e "$src" ] || { echo "error: $src not found" >&2; exit 1; }
   if [ -L "$dest" ]; then
-    echo "[ok] $dest already -> $(readlink "$dest")"; return 0
+    [ "$QUIET" -eq 1 ] || ok "$dest already -> $(readlink "$dest")"; return 0
   fi
   mkdir -p "$(dirname "$dest")"
   backup_if_real "$dest"
@@ -50,4 +52,4 @@ fi
 link skills           skills
 link global/CLAUDE.md  CLAUDE.md
 
-echo "Done. ~/.claude/skills and ~/.claude/CLAUDE.md now live in the toolkit (shared via git)."
+[ "$QUIET" -eq 1 ] || echo "Done. ~/.claude/skills and ~/.claude/CLAUDE.md now live in the toolkit (shared via git)."

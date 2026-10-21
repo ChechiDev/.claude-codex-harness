@@ -44,7 +44,7 @@ If `STATUS: blocked`: stop, do not guess, do not expand scope. Wait for Codex to
 - **Task**: `N.M` (e.g., `2.3`) — maps to one PR and one branch
 - **Subtask**: `N.M.K` (e.g., `2.3.1`) — maps to one commit
 
-Plan lives in `docs/plan/phase-NN-<name>.md`. Use the `plan` skill.
+Plan lives in `docs/plan/phase-NN-<name>.md` (format in `docs/plan/PLAN.md`; written by the leader).
 
 ## §5 Toolchain
 

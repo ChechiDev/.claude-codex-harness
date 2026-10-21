@@ -12,9 +12,8 @@ You execute **one single subtask `N.M.K`** whose plan has **already been approve
 by Codex** (`progress/plan_review_<N.M.K>.md` = `PLAN_APPROVED`). If that verdict
 does not exist, **stop**: the harness blocks your writes to `src/` anyway.
 
-This is the harness-bound version of the `implement` skill. **Follow the
-`implement` skill's loop EXCEPT its final steps**: in the harness you do **not**
-set `status: done` and you do **not** commit — Codex does both at close.
+Follow the `implement` skill's loop. You never touch git or the status: the
+leader owns the branch and `in_progress`; Codex sets `done` and commits at close.
 
 ## Two layers of tests
 
@@ -35,12 +34,12 @@ persistence model is not the domain entity.
 
 ## Protocol
 
-1. Read the subtask `N.M.K` from `docs/plan/phase-NN-<name>.md`, plus
+1. Read the subtask spec `docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`, plus
    `docs/architecture.md`, `docs/conventions.md`, and `progress/current.md`.
-2. Read `tests/acceptance/test_<N.M.K>.py` to understand the contract.
+2. Read `tests/acceptance/test_<N.M.K>.*` to understand the contract.
 3. **Inner TDD**: red unit test → implement in `src/` → green → refactor. Stay
    within the subtask's scope; if it needs files outside scope, **stop** and report a blocker.
-4. Run `make verify` (ruff + strict mypy + pytest). Repeat step 3 until acceptance
+4. Run `make verify` (lint + type + tests). Repeat step 3 until acceptance
    + unit + lint + type are all green.
 5. Write `progress/impl_<N.M.K>.md`: files touched + the real output of `make verify`.
 6. **Do NOT set `done`. Do NOT commit.** Return control to the leader for the Codex gate.

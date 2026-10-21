@@ -19,6 +19,8 @@ def _project(tmp_path: Path, template: str, verify_red: bool) -> tuple[Path, dic
     root = tmp_path / "proj"
     (root / "harness").mkdir(parents=True)
     shutil.copy(TOOLKIT / template / "Makefile", root / "Makefile")
+    for helper in ("status.sh", "_colors.sh"):  # used by the Makefile recipes
+        (root / "harness" / helper).symlink_to(TOOLKIT / "lib" / helper)
     check = root / "harness" / "check.sh"
     check.write_text(CHECK_SH)
     check.chmod(0o755)
@@ -74,8 +76,65 @@ def test_check_is_green_when_both_halves_pass(tmp_path: Path, template: str) -> 
     assert res.returncode == 0, res.stdout + res.stderr
 
 
+def test_c_failing_unit_test_is_named(tmp_path: Path) -> None:
+    root, env = _project(tmp_path, "templates-c", verify_red=False)
+    (root / "tests" / "unit").mkdir(parents=True)
+    (root / "tests" / "unit" / "test_ok.c").write_text("int main(void) { return 0; }\n")
+    (root / "tests" / "unit" / "test_bad.c").write_text("int main(void) { return 1; }\n")
+    res = subprocess.run(
+        ["make", "-s", "test"], cwd=root, env=env, text=True, capture_output=True, check=False
+    )
+    assert res.returncode != 0
+    assert "[FAIL]  tests/unit/test_bad.c" in res.stdout
+    assert "test_ok.c" not in res.stdout
+
+
 def test_python_verify_runs_every_tool_even_after_a_failure(tmp_path: Path) -> None:
     root, env = _project(tmp_path, "templates", verify_red=True)
     out = _check(root, env, check_rc=0).stdout
     for tool in ("uv run ruff check", "uv run mypy", "uv run pytest"):
         assert tool in out, out
+
+
+def test_python_test_without_tests_is_ok(tmp_path: Path) -> None:
+    root, env = _project(tmp_path, "templates", verify_red=False)
+    env["UV_RC"] = "5"  # pytest: no tests collected
+    res = subprocess.run(
+        ["make", "-s", "test"], cwd=root, env=env, text=True, capture_output=True, check=False
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "[OK]    no tests yet" in res.stdout
+
+
+def test_python_test_failure_is_still_red(tmp_path: Path) -> None:
+    root, env = _project(tmp_path, "templates", verify_red=True)  # UV_RC=1
+    res = subprocess.run(["make", "-s", "test"], cwd=root, env=env, capture_output=True)
+    assert res.returncode != 0
+
+
+def _c_env_check(tmp_path: Path, cc: str | None = None) -> subprocess.CompletedProcess[str]:
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "harness").symlink_to(TOOLKIT / "lib")
+    shutil.copy(TOOLKIT / "templates-c" / "Makefile", root / "Makefile")
+    args = ["make", "-s", "env-check"] + ([f"CC={cc}"] if cc else [])
+    return subprocess.run(args, cwd=root, text=True, capture_output=True, check=False)
+
+
+@pytest.mark.skipif(not shutil.which("gcc"), reason="needs gcc")
+def test_c_env_check_compiles_and_runs_the_probe_outside_the_project(tmp_path: Path) -> None:
+    res = _c_env_check(tmp_path)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "C toolchain" in res.stdout
+    assert "compiles and runs" in res.stdout
+    project_files = sorted(p.name for p in (tmp_path / "proj").iterdir())
+    assert project_files == ["Makefile", "harness"]
+
+
+def test_c_env_check_fails_when_the_compiler_cannot_build(tmp_path: Path) -> None:
+    broken = tmp_path / "brokencc"
+    broken.write_text("#!/usr/bin/env bash\nexit 1\n")
+    broken.chmod(0o755)
+    res = _c_env_check(tmp_path, cc=str(broken))
+    assert res.returncode != 0
+    assert "[FAIL]" in res.stdout

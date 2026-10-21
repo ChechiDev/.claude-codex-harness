@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # The single entry point through which Claude (leader) invokes Codex.
-#   review_with_codex.sh <plan|code|doc> <feature-id>
-#   review_with_codex.sh seal <feature-id>   (human, manual mode: seal the oracle)
+#   review_with_codex.sh roadmap              Codex reviews PLAN.md + every phase (scope)
+#   review_with_codex.sh phase <NN>           Codex reviews the breakdown of phase NN
+#   review_with_codex.sh <plan|code|doc> <N.M.K>   per-subtask gates and close
+#   review_with_codex.sh seal <N.M.K|roadmap|phase NN>   (human, manual mode: seal)
+#
+# Each gate checks its preconditions first (roadmap approved before a phase gate,
+# phase approved before a subtask plan gate) and, when Codex approves, seals what
+# it approved so `make check` catches any later silent change.
 #
 # Reads the model and effort from the role prompt header (codex/*.md) and passes
 # them to the codex CLI. Execution mode via HARNESS_CODEX_MODE:
@@ -16,23 +22,36 @@
 set -uo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HARNESS_DIR/_colors.sh"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 CODEX_DIR="$PROJECT_DIR/.claude/codex"
 MODE_EXEC="${HARNESS_CODEX_MODE:-auto}"
 cd "$PROJECT_DIR" || exit 1
 
-PHASE="${1:-}"; ID="${2:-}"
-if [ -z "$PHASE" ] || [ -z "$ID" ]; then
-  echo "usage: review_with_codex.sh <plan|code|doc|seal> <feature-id>" >&2; exit 2
-fi
-
+usage() {
+  echo "usage: review_with_codex.sh roadmap | phase <NN> | <plan|code|doc> <N.M.K>" \
+       "| seal <N.M.K|roadmap|phase NN>" >&2
+  exit 2
+}
+PHASE="${1:-}"; shift || true
+HARNESS_PY="$HARNESS_DIR/_harness.py"
 case "$PHASE" in
-  seal) exec python3 "$HARNESS_DIR/_guard.py" seal "$ID" ;;
-  plan|code) ROLE="$CODEX_DIR/reviewer.md"; CODEX_PHASE="$PHASE" ;;
-  doc)       ROLE="$CODEX_DIR/documenter.md"; CODEX_PHASE="doc" ;;
-  *) echo "invalid phase: $PHASE (plan|code|doc|seal)" >&2; exit 2 ;;
+  seal)    exec python3 "$HARNESS_DIR/_guard.py" seal "$@" ;;
+  roadmap) ID="roadmap"; ROLE="$CODEX_DIR/reviewer.md" ;;
+  phase|plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
+  doc)     ID="${1:-}"; ROLE="$CODEX_DIR/documenter.md" ;;
+  *) usage ;;
 esac
+[ -n "$ID" ] || usage
+CODEX_PHASE="$PHASE"
 [ -f "$ROLE" ] || { echo "role prompt not found: $ROLE" >&2; exit 1; }
+
+# Preconditions: never review a step whose prerequisite is not approved yet.
+case "$PHASE" in
+  roadmap) python3 "$HARNESS_PY" roadmap-ready || exit 1 ;;
+  phase)   python3 "$HARNESS_PY" phase-ready "$ID" || exit 1 ;;
+  plan)    python3 "$HARNESS_PY" subtask-ready "$ID" || exit 1 ;;
+esac
 
 # Read config from the role prompt's YAML header.
 read_cfg() { grep -E "^$1:" "$ROLE" | head -1 | sed -E "s/^$1:[[:space:]]*//"; }
@@ -41,13 +60,28 @@ EFFORT="$(read_cfg codex_effort)"
 : "${MODEL:=default}"
 : "${EFFORT:=medium}"
 
-FEATURE_NAME="$(python3 "$HARNESS_DIR/_harness.py" feature-name "$ID" 2>/dev/null)"
+# What this gate reviews, and where its verdict goes.
+case "$PHASE" in
+  roadmap)
+    TARGET="the roadmap: docs/plan/PLAN.md and the title + goal of every docs/plan/phase-*.md"
+    VERDICT_FILE="progress/roadmap_review.md"; SEAL_ARGS=(roadmap); SEAL_ON="ROADMAP_APPROVED" ;;
+  phase)
+    PHASE_FILE="$(ls docs/plan/phase-"$ID"-*.md 2>/dev/null | head -1)"
+    TARGET="the breakdown of phase $ID: ${PHASE_FILE:-docs/plan/phase-$ID-<slug>.md} (tasks) and every subtask spec in ${PHASE_FILE%.md}/"
+    VERDICT_FILE="progress/phase_review_$ID.md"; SEAL_ARGS=(phase "$ID"); SEAL_ON="PHASE_APPROVED" ;;
+  *)
+    TARGET="subtask $ID, spec: $(python3 "$HARNESS_PY" spec "$ID" 2>/dev/null)"
+    VERDICT_FILE="progress/plan_review_$ID.md"; SEAL_ARGS=("$ID"); SEAL_ON="PLAN_APPROVED"
+    [ "$PHASE" = "plan" ] || SEAL_ON="" ;;
+esac
+FEATURE_NAME="$(python3 "$HARNESS_PY" feature-name "$ID" 2>/dev/null)"
 
 # Build the concrete instruction for Codex.
 PROMPT="$(cat <<EOF
 Act strictly according to your role defined in: $ROLE
 Phase: $CODEX_PHASE
 Feature: id=$ID name=$FEATURE_NAME
+Review: $TARGET
 Project root: $PROJECT_DIR
 
 Context you must read: AGENTS.md, docs/architecture.md, docs/conventions.md,
@@ -89,15 +123,16 @@ if [ "$MODE_EXEC" = "manual" ]; then
   printf 'codex exec'; printf ' %q' "${CODEX_ARGS[@]}"; echo
   echo "--- prompt ---"
   echo "$PROMPT"
-  if [ "$PHASE" = "plan" ]; then
-    echo "--- after PLAN_APPROVED, seal the acceptance tests (human only) ---"
-    echo "./harness/review_with_codex.sh seal $ID"
+  echo "--- verdict file: $VERDICT_FILE ---"
+  if [ -n "$SEAL_ON" ]; then
+    echo "--- after $SEAL_ON, seal what was approved (human only) ---"
+    echo "./harness/review_with_codex.sh seal ${SEAL_ARGS[*]}"
   fi
   exit 0
 fi
 
 if ! command -v codex >/dev/null 2>&1; then
-  echo "[FAIL]  codex is not in PATH. Use HARNESS_CODEX_MODE=manual or install Codex." >&2
+  fail "codex is not in PATH. Use HARNESS_CODEX_MODE=manual or install Codex." >&2
   exit 1
 fi
 
@@ -105,10 +140,11 @@ fi
 printf '%s\n' "$PROMPT" | codex exec "${CODEX_ARGS[@]}"
 RC=$?
 
-# Seal the oracle right after an approved plan gate: check.sh then fails if the
-# acceptance tests change afterwards, whichever tool changed them.
-if [ "$PHASE" = "plan" ] && [ $RC -eq 0 ] &&
-   [ "$(python3 "$HARNESS_DIR/_harness.py" verdict "progress/plan_review_${ID}.md")" = "PLAN_APPROVED" ]; then
-  python3 "$HARNESS_DIR/_guard.py" seal "$ID" || RC=1
+# Seal what Codex just approved (roadmap, phase breakdown, or the subtask's
+# acceptance tests + spec): check.sh then fails if it changes afterwards,
+# whichever tool changed it.
+if [ -n "$SEAL_ON" ] && [ $RC -eq 0 ] &&
+   [ "$(python3 "$HARNESS_PY" verdict "$VERDICT_FILE")" = "$SEAL_ON" ]; then
+  python3 "$HARNESS_DIR/_guard.py" seal "${SEAL_ARGS[@]}" || RC=1
 fi
 exit $RC

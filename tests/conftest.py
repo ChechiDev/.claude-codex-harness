@@ -37,9 +37,13 @@ class Project:
             "id": LEAF_ID,
             "title": "user entity",
             "status": status,
+            "depends": [],
             "files": [DECLARED] if files is None else files,
+            "spec": f"docs/plan/phase-01-users/{LEAF_ID}-user-entity.md",
         }
-        data = {"features": [{"id": "1.1", "title": "users", "status": status, "subtasks": [sub]}]}
+        task = {"id": "1.1", "title": "users", "phase": "01", "status": status, "subtasks": [sub]}
+        phase = {"id": "01", "title": "users", "status": status, "tasks": ["1.1"]}
+        data = {"phases": [phase], "features": [task]}
         self.write("feature_list.json", json.dumps(data))
 
     def set_verdict(self, kind: str, verdict: str, extra: str = "") -> None:
@@ -87,6 +91,9 @@ def project(tmp_path: Path) -> Iterator[Project]:
     proj.write(".gitignore", "harness\n.claude/\n")
     proj.write(DECLARED, "")
     proj.set_leaf()
+    # Roadmap and phase 01 already approved by Codex: the fixture starts mid-cycle.
+    proj.write("progress/roadmap_review.md", "# Roadmap\n\n**Verdict:** ROADMAP_APPROVED\n")
+    proj.write("progress/phase_review_01.md", "# Phase\n\n**Verdict:** PHASE_APPROVED\n")
     proj.set_verdict("plan", "PLAN_APPROVED")
     proj.commit_all("init")
     yield proj
@@ -99,3 +106,76 @@ def write_payload(path: str | Path, tool: str = "Write") -> dict[str, Any]:
 
 def bash_payload(command: str) -> dict[str, Any]:
     return {"tool_name": "Bash", "tool_input": {"command": command}}
+
+
+# ── docs/plan projects (phases + specs + Codex verdicts) ─────────────────────
+
+PHASE = "# Phase {n} — {title}\n- goal: {title} goal.\n{tasks}"
+TASK = "\n## {tid} Task {tid}\n- layer: domain\n- goal: g.\n"
+SPEC = (
+    "# {sid} Sub {sid}\n- status: {status}\n- layer: domain\n- depends: {depends}\n"
+    "- files:\n  - src/app/m{slug}.py\n"
+    "- acceptance:\n  - AC1 | works | tests/acceptance/test_{sid}.py::test_ac1_works\n"
+)
+
+
+class Plan:
+    """A throwaway project: docs/plan + Codex verdict files, synced with sync_plan."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        (root / "docs" / "plan").mkdir(parents=True)
+        (root / "docs" / "plan" / "PLAN.md").write_text("# Project plan\n\n## Vision\nv.\n")
+        (root / "progress").mkdir()
+        self.phases: dict[str, list[str]] = {}
+        self.specs: dict[str, tuple[str, str]] = {}
+
+    def phase(self, n: str, *tasks: str) -> Plan:
+        self.phases[n] = list(tasks)
+        return self
+
+    def sub(self, sid: str, status: str = "pending", depends: str = "none") -> Plan:
+        self.specs[sid] = (status, depends)
+        return self
+
+    def verdict(self, name: str, verdict: str) -> Plan:
+        (self.root / "progress" / name).write_text(f"# Review\n\n**Verdict:** {verdict}\n")
+        return self
+
+    def approve_roadmap(self) -> Plan:
+        return self.verdict("roadmap_review.md", "ROADMAP_APPROVED")
+
+    def approve_phase(self, n: str) -> Plan:
+        return self.verdict(f"phase_review_{n}.md", "PHASE_APPROVED")
+
+    def sync(self) -> Plan:
+        plan = self.root / "docs" / "plan"
+        for n, tasks in self.phases.items():
+            body = "".join(TASK.format(tid=t) for t in tasks)
+            (plan / f"phase-{n}-p{n}.md").write_text(PHASE.format(n=n, title=f"P{n}", tasks=body))
+        for sid, (status, depends) in self.specs.items():
+            n = f"{int(sid.split('.')[0]):02d}"
+            folder = plan / f"phase-{n}-p{n}"
+            folder.mkdir(exist_ok=True)
+            text = SPEC.format(sid=sid, status=status, depends=depends, slug=sid.replace(".", ""))
+            (folder / f"{sid}-s.md").write_text(text)
+        res = self.run_py("sync_plan.py")
+        assert res.returncode == 0, res.stdout + res.stderr
+        return self
+
+    def run_py(self, script: str, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["python3", str(TOOLKIT / "lib" / script), *args],
+            cwd=self.root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def validate(self) -> subprocess.CompletedProcess[str]:
+        return self.run_py("_harness.py", "validate")
+
+
+@pytest.fixture
+def plan(tmp_path: Path) -> Plan:
+    return Plan(tmp_path)

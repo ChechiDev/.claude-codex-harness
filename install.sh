@@ -53,31 +53,26 @@ if [ "$TOOLKIT" = "$DEST" ]; then
   echo "error: the target cannot be the toolkit itself" >&2; exit 2
 fi
 
-GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
-linked() { printf "${GREEN}[symlink]${NC} %s -> %s\n" "$1" "$2"; }
-copied() { printf "${GREEN}[copy]${NC}    %s\n" "$1"; }
-genned() { printf "${GREEN}[gen]${NC}     %s\n" "$1"; }
-skipped(){ printf "${YELLOW}[skip]${NC}    %s (already exists; use --force to overwrite)\n" "$1"; }
+. "$TOOLKIT/lib/_colors.sh"
+# Output: one line per step (items collected, printed together).
+LINKED=(); COPIED=(); KEPT=()
 
 link() {  # link <target-in-toolkit> <path-in-dest>
   local target="$TOOLKIT/$1" dest="$DEST/$2"
   mkdir -p "$(dirname "$dest")"
   ln -sfn "$target" "$dest"
-  linked "$2" "$target"
+  LINKED+=("$2")
 }
 
 copy() {  # copy <path-in-template-set> <path-in-dest>
   local src="$TOOLKIT/$TPLSUB/$1" dest="$DEST/$2"
   mkdir -p "$(dirname "$dest")"
-  if [ -e "$dest" ] && [ "$FORCE" -ne 1 ]; then skipped "$2"; return; fi
+  if [ -e "$dest" ] && [ "$FORCE" -ne 1 ]; then KEPT+=("$2"); return; fi
   cp -R "$src" "$dest"
-  copied "$2"
+  COPIED+=("$2")
 }
 
-echo "Installing harness into: $DEST"
-echo "From toolkit:            $TOOLKIT"
-echo "Language / templates:    $TPL_LANG ($TPLSUB/)"
-echo ""
+echo "Installing harness ($TPL_LANG) into $DEST"
 
 # --- Symlinks (generic) ---
 link agents        .claude/agents
@@ -85,8 +80,8 @@ link codex         .claude/codex
 link skills        .claude/skills
 link settings.json .claude/settings.json
 link lib           harness
+row "$GREEN" "[symlink]" "${LINKED[*]}"
 
-echo ""
 # --- Copies (customizable) ---
 copy CLAUDE.md          CLAUDE.md
 copy AGENTS.md          AGENTS.md
@@ -94,30 +89,90 @@ copy Makefile           Makefile
 copy CHECKPOINTS.md     CHECKPOINTS.md
 copy docs               docs
 copy progress           progress
+[ ${#COPIED[@]} -gt 0 ] && row "$GREEN" "[copy]" "${COPIED[*]}"
+[ ${#KEPT[@]} -gt 0 ] && row "$ORANGE" "[SKIP]" "${KEPT[*]} (exist; --force to overwrite)"
 
 # --- Language layer (delegated; keeps install.sh harness-only) ---
 SCAFFOLD_ARGS=(); [ "$FORCE" -eq 1 ] && SCAFFOLD_ARGS=(--force)
 if [ -n "$PYPKG" ]; then
-  echo ""
   bash "$TOOLKIT/lib/scaffold_python.sh" "$DEST" "$PYPKG" "${SCAFFOLD_ARGS[@]}"
 fi
 if [ -n "$CNAME" ]; then
-  echo ""
   bash "$TOOLKIT/lib/scaffold_c.sh" "$DEST" "$CNAME" "${SCAFFOLD_ARGS[@]}"
 fi
 
-echo ""
-# --- Generated (derived from docs/plan/) ---
-( cd "$DEST" && python3 "$TOOLKIT/lib/sync_plan.py" >/dev/null ) && genned "feature_list.json (from docs/plan/)"
+# --- Generated (derived from docs/plan/; a fresh install has an empty plan) ---
+( cd "$DEST" && python3 "$TOOLKIT/lib/sync_plan.py" >/dev/null )
 
-echo ""
+# --- .gitignore: secrets and build artifacts never reach a commit ---
+IGNORES=(.env)
+if [ "$TPL_LANG" = "c" ]; then
+  IGNORES+=("*.o" "*.bin")
+else
+  IGNORES+=(.venv/ __pycache__/ .pytest_cache/ .mypy_cache/ .ruff_cache/ "pyproject.toml.bak.*")
+fi
+touch "$DEST/.gitignore"
+for entry in "${IGNORES[@]}"; do
+  grep -qxF -- "$entry" "$DEST/.gitignore" || printf '%s\n' "$entry" >> "$DEST/.gitignore"
+done
+row "$GREEN" "[gen]" "feature_list.json .gitignore"
+
+# --- Python deps (before the root commit, so uv.lock is part of it) ---
+CHECK=1
+if [ "$TPL_LANG" = "python" ]; then
+  if [ ! -f "$DEST/pyproject.toml" ]; then
+    CHECK=0
+  elif out="$(cd "$DEST" && uv sync --all-groups --quiet 2>&1)"; then
+    row "$GREEN" "[uv]" "uv sync --all-groups"
+  else
+    printf '%s\n' "$out"
+    row "$RED" "[FAIL]" "uv sync --all-groups"
+    exit 1
+  fi
+fi
+
+# --- Git base: root commit on main + setup branch (fresh repos only) ---
+# The harness needs a base commit: the src/ scope backstop diffs against HEAD and
+# every subtask branches from main. Existing history is never touched.
+[ -d "$DEST/.git" ] || git init -q -b main "$DEST"
+SETUP_BRANCH="chore/project-setup"
+GIT_KEPT=0
+git_identity() {  # name + email from env or config; never guessed
+  local name="${GIT_AUTHOR_NAME:-$(git -C "$DEST" config user.name || true)}"
+  local email="${GIT_AUTHOR_EMAIL:-$(git -C "$DEST" config user.email || true)}"
+  [ -n "$name" ] && [ -n "$email" ]
+}
+if git -C "$DEST" rev-parse -q --verify HEAD >/dev/null; then
+  GIT_KEPT=1
+  row "$ORANGE" "[git]" "existing history kept"
+elif ! git_identity; then
+  row "$ORANGE" "[git]" "no git identity (user.name/user.email): root commit skipped"
+else
+  git -C "$DEST" symbolic-ref HEAD refs/heads/main
+  git -C "$DEST" add -A
+  if git -C "$DEST" commit -q -m "chore: install harness"; then
+    git -C "$DEST" switch -q -c "$SETUP_BRANCH"
+    row "$GREEN" "[git]" "root commit on main · on $SETUP_BRANCH"
+  else
+    row "$ORANGE" "[git]" "git commit failed: root commit skipped"
+  fi
+fi
+
 # --- Machine-level config (idempotent; links ~/.claude into the toolkit) ---
-bash "$TOOLKIT/link-global.sh"
+bash "$TOOLKIT/link-global.sh" --quiet
 
-echo ""
-echo "Done. Next steps:"
-echo "  1. cd $DEST && fill in docs/plan/ (rename phase-01-example.md, assign N.M.K ids)."
-echo "  2. make plan        # regenerate feature_list.json after editing docs/plan/"
-echo "  3. Make sure you have a pyproject.toml with ruff/mypy/pytest (uv)."
-echo "  4. make check       # must finish green"
-echo "  5. (optional) /codex:setup --enable-review-gate"
+# --- Final gate: the project must start green ---
+if [ "$CHECK" -eq 0 ]; then
+  row "$ORANGE" "[SKIP]" "make check: no pyproject.toml (use --python <pkg>)"
+  exit 0
+fi
+# Captured to stay quiet when green; colors kept if it is replayed on a terminal.
+REPLAY_COLOR=""; [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && REPLAY_COLOR=1
+if out="$(cd "$DEST" && FORCE_COLOR="$REPLAY_COLOR" make -s --no-print-directory check 2>&1)"; then
+  row "$GREEN" "[OK]" "harness ready · make check green"
+else
+  printf '%s\n' "$out"
+  hint=""; [ "$GIT_KEPT" -eq 1 ] && hint="; uncommitted install files count as changes: commit them"
+  row "$RED" "[FAIL]" "harness installed but make check is red (output above)$hint"
+  exit 1
+fi

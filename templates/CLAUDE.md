@@ -32,7 +32,9 @@ subagent) writes the code.
 - ❌ Do not set `status: done`, write `docs/reference/`, or commit: Codex closes.
 - ❌ Do not hand-edit `feature_list.json`: edit `docs/plan/` and run `make plan`.
 - ✅ Implement via `subagent_type: "implementer"` (one subtask `N.M.K`).
-- ✅ Run gates via `./harness/review_with_codex.sh <plan|code|doc> <N.M.K>`.
+- ✅ Run gates via `./harness/review_with_codex.sh roadmap | phase <NN> | <plan|code|doc> <N.M.K>`.
+- ✅ Plan by discovery (one question at a time) → PLAN.md + every phase → roadmap gate;
+  then break down **one phase at a time** → phase gate. Stop for the user's OK at each level.
 - ✅ **Micro-tasks**: each subtask is one atomic unit and declares a `files:` list
   of 1-3 files in `docs/plan/`. The harness blocks `src/` writes outside it.
 
@@ -47,14 +49,14 @@ unless asked" rule — it applies only inside the harness close step, and carrie
 
 1. Read `AGENTS.md`, `docs/plan/PLAN.md`, `progress/current.md`.
 2. Run `make check`. If it fails, stop and report.
-3. Follow the per-subtask cycle in `.claude/agents/leader.md`.
+3. Run `make status` and continue from its `Next:` line (flow in `.claude/agents/leader.md`).
 
 ### When the leader role does NOT apply
 
 - Conceptual questions / exploration (read-only) → answer directly yourself.
 - Changes outside `src/` and `tests/` (docs/plan, progress, config) → you may edit them yourself.
 
-## Project context ‹fill in›
+## Project context ‹filled in by the leader during discovery›
 
 - **Domain:** ‹what this service solves›
 - **Framework:** ‹FastAPI | Django›

@@ -5,7 +5,7 @@
 #
 #   scaffold_c.sh <project-dir> <name> [--force]
 #
-# Creates: include/<name>/version.h, a src/ dir, and tests/unit/test_smoke.c.
+# Creates the layout: src/, include/<name>/ and tests/unit/ (no placeholder code).
 # The build/test contract lives in the Makefile (installed by install.sh).
 # Idempotent and non-destructive: existing files are kept unless --force.
 set -euo pipefail
@@ -20,55 +20,23 @@ if ! printf '%s' "$NAME" | grep -qE '^[a-z_][a-z0-9_]*$'; then
 fi
 mkdir -p "$DEST"; DEST="$(cd "$DEST" && pwd)"
 
-GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
-did()  { printf "${GREEN}[c]${NC}      %s\n" "$1"; }
-skip() { printf "${YELLOW}[c]${NC}      %s\n" "$1"; }
-
-UPPER="$(printf '%s' "$NAME" | tr '[:lower:]' '[:upper:]')"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_colors.sh"
+# Output: one line for what was created, one for what was kept.
+DONE=(); KEPT=()
+did()  { DONE+=("$1"); }
+skip() { KEPT+=("$1"); }
 
 # git repo (parity with `uv init` for Python; the Codex close needs a repo).
 if [ ! -d "$DEST/.git" ]; then
-  git init -b main "$DEST" >/dev/null 2>&1 && did "git init (branch main)"
+  git init -b main "$DEST" >/dev/null 2>&1 && did "git init"
 fi
 
-mkdir -p "$DEST/src" "$DEST/include/$NAME" "$DEST/tests/unit"
-[ -f "$DEST/src/.gitkeep" ] || touch "$DEST/src/.gitkeep"
+# Layout only: tests/ holds real project tests (the toolchain probe lives in
+# the harness: harness/probes/smoke.c, run by `make env-check`).
+for dir in src "include/$NAME" tests/unit; do
+  [ -d "$DEST/$dir" ] || { mkdir -p "$DEST/$dir"; did "$dir/"; }
+done
 
-# ── include/<name>/version.h ─────────────────────────────────────────────────
-VER="$DEST/include/$NAME/version.h"
-if [ -f "$VER" ] && [ "$FORCE" -ne 1 ]; then
-  skip "include/$NAME/version.h exists"
-else
-  cat > "$VER" <<EOF
-#ifndef ${UPPER}_VERSION_H
-#define ${UPPER}_VERSION_H
-
-#define ${UPPER}_VERSION "0.1.0"
-
-#endif /* ${UPPER}_VERSION_H */
-EOF
-  did "include/$NAME/version.h"
-fi
-
-# ── tests/unit/test_smoke.c ──────────────────────────────────────────────────
-SMOKE="$DEST/tests/unit/test_smoke.c"
-if [ -f "$SMOKE" ]; then
-  skip "tests/unit/test_smoke.c exists"
-else
-  cat > "$SMOKE" <<EOF
-#include <assert.h>
-#include <string.h>
-
-#include "$NAME/version.h"
-
-int main(void)
-{
-    /* Smoke test: the version macro is defined and non-empty. */
-    assert(strlen(${UPPER}_VERSION) > 0);
-    return 0;
-}
-EOF
-  did "tests/unit/test_smoke.c"
-fi
-
-echo "C layer ready. Next: make verify"
+[ ${#DONE[@]} -gt 0 ] && row "$GREEN" "[c]" "${DONE[*]}"
+[ ${#KEPT[@]} -gt 0 ] && row "$ORANGE" "[SKIP]" "${KEPT[*]} (exist; --force to rewrite)"
+exit 0

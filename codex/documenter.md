@@ -14,8 +14,9 @@ and finish with a **single commit**. You do not change production code or tests.
 
 ## Close steps (in order)
 
-1. **Write the reference documentation** → `docs/reference/<N.M.K>-<name>.md`
-   (`<name>` is the subtask slug; the id matches `docs/plan/` and `feature_list.json`).
+1. **Write the reference documentation** → `docs/reference/<N.M.K>-<slug>.md`, with
+   the **same file name as the subtask spec** `docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md` (the PLAN.md
+   index links to exactly that name).
    It is an **Obsidian-style** note and **must** follow the exact structure below.
    The `doc_gate` (in `make check`) blocks the close if the frontmatter keys or any
    of the five section anchors are missing — keep the anchors verbatim.
@@ -65,9 +66,11 @@ and finish with a **single commit**. You do not change production code or tests.
    anchors exactly as shown. If a cross-cutting doc also needs a touch
    (`docs/architecture.md`, `docs/conventions.md`), update it; if nothing changes
    conceptually, say so and do not invent.
-2. **Mark done in the plan**: set `status: done` for subtask `N.M.K` in
-   `docs/plan/phase-NN-<name>.md`.
-3. **Regenerate the index**: run `make plan` (regenerates `feature_list.json`).
+2. **Mark done in the plan**: set `status: done` in its spec `docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`
+   (the only place status is written; change nothing else in the spec — the
+   approved plan is sealed).
+3. **Regenerate the index**: run `make plan` (regenerates `feature_list.json` and
+   the index in `docs/plan/PLAN.md`).
 4. **Update tracking**: tick the gate boxes in `progress/current.md` and append the
    close entry to `progress/history.md`.
 5. **Run `make check`** — it must be green (it includes `make verify`, the gate
@@ -76,7 +79,7 @@ and finish with a **single commit**. You do not change production code or tests.
 6. **Single commit** of everything (code + `tests/acceptance/` + `docs/reference/`
    + `docs/plan/` + `feature_list.json` + `progress/`). Use the `commit` standard:
    `<type>(<scope>): <what> [N.M.K]` + 2-4 line body (why) +
-   footer `Plan: docs/plan/phase-NN-<name>.md#NMK`.
+   footer `Plan: docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`.
 
 ## Rules
 

@@ -7,10 +7,7 @@ HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 cd "$PROJECT_DIR" || exit 1
 
-GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'; NC='\033[0m'
-ok()   { printf "${GREEN}[OK]${NC}    %s\n" "$1"; }
-fail() { printf "${RED}[FAIL]${NC}  %s\n" "$1"; }
-warn() { printf "${YELLOW}[WARN]${NC}  %s\n" "$1"; }
+. "$HARNESS_DIR/_colors.sh"
 
 EXIT=0
 
@@ -18,7 +15,7 @@ echo "── 1. Environment ─────────────────�
 # Language-agnostic: delegate the toolchain check to the Makefile's env-check
 # target. Fall back to the uv check for older Makefiles without that target.
 if make -n env-check >/dev/null 2>&1; then
-  if ! make env-check; then EXIT=1; fi
+  if ! make -s --no-print-directory env-check; then EXIT=1; fi
 elif command -v uv >/dev/null 2>&1; then
   ok "uv -> $(uv --version 2>/dev/null)"
 else
@@ -38,11 +35,11 @@ for d in .claude/agents .claude/codex harness docs/plan docs/reference; do
 done
 
 echo ""
-echo "── 3. Plan sync (docs/plan → feature_list.json) ────────"
+echo "── 3. Plan sync (docs/plan → feature_list + PLAN index) ─"
 if ! python3 "$HARNESS_DIR/sync_plan.py" --check; then EXIT=1; fi
 
 echo ""
-echo "── 4. feature_list.json ────────────────────────────────"
+echo "── 4. Plan rules (roadmap · phase by phase · subtasks) ─"
 if [ -f feature_list.json ]; then
   if ! python3 "$HARNESS_DIR/_harness.py" validate; then EXIT=1; fi
 else
@@ -58,7 +55,7 @@ echo "── 6. Documentation gate ───────────────
 if ! bash "$HARNESS_DIR/doc_gate.sh"; then EXIT=1; fi
 
 echo ""
-echo "── 7. Integrity backstop (src/ scope + sealed oracle) ──"
+echo "── 7. Integrity (src/ scope · sealed oracle · plan) ────"
 # Re-checks from git/disk what the per-call hooks guard, whatever tool wrote it.
 if ! python3 "$HARNESS_DIR/_guard.py" integrity; then EXIT=1; fi
 

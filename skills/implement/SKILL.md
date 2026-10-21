@@ -1,84 +1,75 @@
 ---
 name: implement
-description: "Claude only: Trigger: implement subtask, start implementation, code, subtask N.M.K. Implementation loop: branch, test-first, code, verify, commit, output format."
+description: "Claude only: Trigger: implement subtask, start implementation, code, subtask N.M.K. Implementation loop: read the subtask, test-first, code, make verify, write the impl report."
 license: Apache-2.0
 metadata:
   author: "chechidev"
-  version: "1.0"
+  version: "2.0"
 ---
 
 ## Activation Contract
 
-Claude only. Load when receiving a subtask to implement from the orchestrator.
+Claude only. Load when receiving a subtask `N.M.K` to implement from the leader.
 
-Standards always active: `py-pytest`, `py-style`, `py-pydantic`, `py-typing`, `commit`, `branch`.
+Standards: the project's `docs/conventions.md` and `docs/architecture.md` (authoritative).
+Python projects also load `py-pytest`, `py-style`, `py-pydantic`, `py-typing`;
+C projects follow the C conventions (C11, warning-clean compile, explicit error/ownership).
 
 ## Hard Rules
 
 1. **One subtask per session.** Never batch multiple subtasks.
-2. **Read only the current subtask and its listed files.** Do not scan the repo beyond what the subtask references. The plan file (`docs/plan/<file>.md`) is always read to get the subtask spec — that is not scanning. Editing it is allowed only for the `Status` field.
-3. **Test first.** Write the test, confirm it fails, then implement.
-4. **Never commit with failing tests, ruff, or mypy.**
-5. **Scope is the subtask.** Never change files outside the `Files` list. If an out-of-scope change is needed → stop, report `STATUS: blocked`.
-6. **Never touch CI files** (`ci.yml`, `e2e.yml`, anything under `.github/workflows/`) unless the subtask explicitly lists them in `Files`.
-7. **Reply only with the Output format.** No explanations unless blocked.
+2. **Plan approved first.** No `PLAN_APPROVED` in `progress/plan_review_<N.M.K>.md` → stop
+   (the harness blocks writes to `src/` anyway).
+3. **Read only the subtask and its declared `files:`.** Reading the plan file and the
+   acceptance test is not scanning. Never edit `docs/plan/` or `feature_list.json`.
+4. **Test first.** Write the unit test, confirm it fails, then implement.
+5. **Scope is the subtask.** Write under `src/` only the files in its `files:` list; unit
+   tests go in `tests/unit/`. Needing another file → stop, report `blocked`.
+6. **Acceptance tests are read-only** (`tests/acceptance/`, the Codex oracle). If one looks
+   wrong → stop, report `blocked`.
+7. **No git, no status.** The leader owns the branch and `in_progress`; Codex sets `done`
+   and makes the single commit at close.
+8. **Never touch CI files** (`.github/workflows/`) unless the subtask lists them.
 
 ## Implementation Loop
 
-1. **Create the task branch** if it does not exist:
-   `git checkout main && git pull origin main && git checkout -b <type>/<task-id>-<short-name>`
-   Use the `branch` standard for naming. If the branch already exists: `git checkout <branch-name>`.
-2. **Read the subtask**: open `docs/plan/<phase-file>.md`, read only the `N.M.K` section and the files listed in `Files`.
-   If the subtask touches code with potential callers outside `Files`, run Graphify before editing:
-   ```bash
-   uv run graphify affected "<module>"
-   uv run graphify path <module-A> <module-B>
-   ```
-   If impact analysis reveals safe implementation requires touching files not in `Files` → report `STATUS: blocked`. Never expand scope unilaterally.
-3. **Set Status to `in progress`** in the subtask.
-4. **Write the test** as specified in the `Test` field. Run the `Done when` command and confirm it **fails** — if it already passes, the behavior is already implemented; stop and report `STATUS: blocked`.
-5. **Implement** the code changes in the files listed in `Files`.
-6. **Verify**:
-   ```bash
-   <Done when command>
-   uv run ruff check .
-   uv run mypy
-   ```
-   All three must pass. Fix any failure before continuing.
-7. **Set Status to `done`** in the subtask.
-8. **Commit** using the `commit` standard:
-   `<type>(<scope>): <what> [N.M.K]` + 2-4 line body (why) + `Plan: docs/plan/<file>.md#NMK`
-9. **Reply** with the Output format.
+1. **Read the subtask spec** `docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`: its `files:`,
+   `depends`, `acceptance:` and `## Description`, plus `tests/acceptance/test_<N.M.K>.*`.
+2. **Write the unit test** in `tests/unit/` and run it: it must **fail**. If it already
+   passes, the behavior exists → stop, report `blocked`.
+3. **Implement** in the declared `files:` only.
+4. **Verify**: `make verify` (lint + type + tests: acceptance and unit). Fix until green;
+   refactor while green.
+5. **Report**: write `progress/impl_<N.M.K>.md` with the files touched, the decisions
+   taken (non-obvious choices, discarded alternatives) and the real `make verify` output.
+6. **Reply** to the leader with the Output Format and return control.
 
 ## Output Format
 
+A single line:
+
 ```
-STATUS: done | blocked
-SUBTASK: N.M.K
-COMMIT: <hash> | none
-FILES: <comma-separated list> | none
-DONE_WHEN: pass | fail (<command output summary>)
-NOTES: <only if blocked or relevant; 1-2 lines>
-DECISIONS: <non-obvious choices or discarded alternatives; "none" if nothing relevant>
+done -> subtask <N.M.K> implemented; see progress/impl_<N.M.K>.md (pending Codex review)
+```
+or
+```
+blocked -> see progress/current.md
 ```
 
-`COMMIT` and `FILES` are `none` when `STATUS: blocked`.
+Never return the diff in chat.
 
 ## Blocked Protocol
 
-Stop and reply `STATUS: blocked` when:
+Write the reason in `progress/current.md` and reply `blocked` when:
 - The spec is ambiguous and cannot be resolved from the subtask text alone.
-- Implementing the subtask requires changing files not listed in `Files`.
-- The `Done when` command fails and the fix is out of scope.
+- Implementing it requires files not listed in `files:`.
+- An acceptance test looks wrong, or `make verify` fails for an out-of-scope reason.
 - A dependency (another subtask) is not yet `done`.
 
-Never guess. Never expand scope. Never edit the plan beyond the `Status` field.
+Never guess. Never expand scope.
 
 ## References
 
-- `../py-pytest/SKILL.md` — test standards
-- `../py-style/SKILL.md` — code style
-- `../py-pydantic/SKILL.md` — Pydantic validation patterns
-- `../py-typing/SKILL.md` — type annotation standards
-- `../github/commit/SKILL.md` — commit format
-- `../github/branch/SKILL.md` — branch naming
+- `../py-pytest/SKILL.md`, `../py-style/SKILL.md`, `../py-pydantic/SKILL.md`,
+  `../py-typing/SKILL.md` — Python standards
+- `docs/conventions.md`, `docs/architecture.md` — project standards (all languages)

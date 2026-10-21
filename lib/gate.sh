@@ -6,6 +6,7 @@ set -uo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+. "$HARNESS_DIR/_colors.sh"
 cd "$PROJECT_DIR" || exit 0
 
 rc=0
@@ -14,10 +15,10 @@ while read -r ID; do
   REVIEW="progress/review_${ID}.md"
   # Exact verdict line only: "Not APPROVED yet" or PLAN_APPROVED must not pass.
   if [ "$(python3 "$HARNESS_DIR/_harness.py" verdict "$REVIEW")" != "APPROVED" ]; then
-    echo "[FAIL]  feature ${ID} is 'done' but has no Codex review APPROVED ($REVIEW)"
+    fail "feature ${ID} is 'done' but has no Codex review APPROVED ($REVIEW)"
     rc=1
   fi
 done < <(python3 "$HARNESS_DIR/_harness.py" done-ids 2>/dev/null)
 
-[ $rc -eq 0 ] && echo "[OK]    gates consistent (every 'done' has APPROVED)"
+[ $rc -eq 0 ] && ok "gates consistent (every 'done' has APPROVED)"
 exit $rc

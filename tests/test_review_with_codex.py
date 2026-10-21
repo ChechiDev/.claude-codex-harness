@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,16 +13,22 @@ from conftest import LEAF_ID, Project
 UV_CACHE = "/tmp/fake-uv-cache"
 
 
-def _manual(project: Project, phase: str, **env: str) -> str:
-    res = project.run(
+def _manual(project: Project, phase: str, *args: str, **env: str) -> str:
+    res = _manual_run(project, phase, *(args or (LEAF_ID,)), **env)
+    assert res.returncode == 0, res.stdout + res.stderr
+    return res.stdout
+
+
+def _manual_run(
+    project: Project, phase: str, *args: str, **env: str
+) -> subprocess.CompletedProcess[str]:
+    return project.run(
         "review_with_codex.sh",
         None,
         phase,
-        LEAF_ID,
+        *args,
         env={"HARNESS_CODEX_MODE": "manual", "UV_CACHE_DIR": UV_CACHE, **env},
     )
-    assert res.returncode == 0, res.stderr
-    return res.stdout
 
 
 @pytest.mark.parametrize("phase", ["plan", "code"])
@@ -107,3 +114,89 @@ def test_seal_refuses_without_plan_approved(project: Project) -> None:
     project.write(f"tests/acceptance/test_{LEAF_ID}.py", "def test_ac1(): ...\n")
     res = project.run("review_with_codex.sh", None, "seal", LEAF_ID)
     assert res.returncode != 0
+
+
+# ── roadmap and phase gates ──────────────────────────────────────────────────
+
+
+def _codex_writing(tmp: Path, rel: str, verdict: str) -> dict[str, str]:
+    bin_dir = tmp / "fakebin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text(
+        "#!/usr/bin/env bash\ncat >/dev/null\n"
+        f"printf '# r\\n\\n**Verdict:** {verdict}\\n' > {rel}\n"
+    )
+    codex.chmod(0o755)
+    return {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+
+def test_roadmap_gate_takes_no_id_and_names_the_plan_files(project: Project) -> None:
+    out = _manual(project, "roadmap", "")
+    assert "Phase: roadmap" in out
+    assert "docs/plan/PLAN.md" in out
+    assert "progress/roadmap_review.md" in out
+    assert "seal roadmap" in out
+
+
+def test_phase_gate_names_the_phase_and_its_verdict_file(project: Project) -> None:
+    out = _manual(project, "phase", "01")
+    assert "Phase: phase" in out
+    assert "progress/phase_review_01.md" in out
+    assert "seal phase 01" in out
+
+
+def test_phase_gate_refuses_before_the_roadmap_is_approved(project: Project) -> None:
+    (project.root / "progress/roadmap_review.md").unlink()
+    res = _manual_run(project, "phase", "01")
+    assert res.returncode != 0
+    assert "ROADMAP_APPROVED" in res.stdout + res.stderr
+
+
+def test_plan_gate_refuses_before_the_phase_is_approved(project: Project) -> None:
+    (project.root / "progress/phase_review_01.md").unlink()
+    res = _manual_run(project, "plan", LEAF_ID)
+    assert res.returncode != 0
+    assert "PHASE_APPROVED" in res.stdout + res.stderr
+
+
+def test_plan_gate_prompt_points_at_the_subtask_spec(project: Project) -> None:
+    out = _manual(project, "plan")
+    assert f"docs/plan/phase-01-users/{LEAF_ID}-user-entity.md" in out
+
+
+def test_approved_roadmap_gate_seals_the_roadmap(project: Project, tmp_path: Path) -> None:
+    project.write("docs/plan/PLAN.md", "# Plan\n")
+    env = _codex_writing(tmp_path, "progress/roadmap_review.md", "ROADMAP_APPROVED")
+    res = project.run("review_with_codex.sh", None, "roadmap", env=env)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (project.root / "progress/plan_roadmap.sha256").is_file()
+
+
+def test_approved_phase_gate_seals_the_phase(project: Project, tmp_path: Path) -> None:
+    project.write("docs/plan/phase-01-users.md", "# Phase 01 — users\n- goal: g\n")
+    env = _codex_writing(tmp_path, "progress/phase_review_01.md", "PHASE_APPROVED")
+    res = project.run("review_with_codex.sh", None, "phase", "01", env=env)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (project.root / "progress/plan_phase_01.sha256").is_file()
+
+
+def test_rejected_phase_gate_does_not_seal(project: Project, tmp_path: Path) -> None:
+    project.write("docs/plan/phase-01-users.md", "# Phase 01 — users\n- goal: g\n")
+    env = _codex_writing(tmp_path, "progress/phase_review_01.md", "CHANGES_REQUESTED")
+    project.run("review_with_codex.sh", None, "phase", "01", env=env)
+    assert not (project.root / "progress/plan_phase_01.sha256").exists()
+
+
+@pytest.mark.parametrize("args", [["seal", "roadmap"], ["seal", "phase", "01"]])
+def test_seal_forwards_plan_targets(project: Project, args: list[str]) -> None:
+    project.write("docs/plan/phase-01-users.md", "# Phase 01 — users\n- goal: g\n")
+    res = project.run("review_with_codex.sh", None, *args)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_usage_lists_every_gate(project: Project) -> None:
+    res = project.run("review_with_codex.sh", None, "bogus")
+    assert res.returncode == 2
+    for gate in ("roadmap", "phase <NN>", "plan|code|doc", "seal"):
+        assert gate in res.stderr

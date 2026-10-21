@@ -131,6 +131,13 @@ ACC = f"tests/acceptance/test_{LEAF_ID}.py"
         f"echo '**Verdict:** PLAN_APPROVED' > progress/plan_review_{LEAF_ID}.md",
         f"sha256sum {ACC} > progress/acceptance_{LEAF_ID}.sha256",
         f"./harness/review_with_codex.sh seal {LEAF_ID}",
+        "./harness/review_with_codex.sh seal roadmap",
+        "./harness/review_with_codex.sh seal phase 01",
+        "python3 harness/_guard.py seal roadmap",
+        "echo '**Verdict:** ROADMAP_APPROVED' > progress/roadmap_review.md",
+        "echo '**Verdict:** PHASE_APPROVED' > progress/phase_review_01.md",
+        "sha256sum docs/plan/PLAN.md > progress/plan_roadmap.sha256",
+        "echo 'int x;' > include/pkg/user.h",
     ],
 )
 def test_blocks_bash_writes_to_protected_paths(project: Project, cmd: str) -> None:

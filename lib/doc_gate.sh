@@ -13,6 +13,7 @@ set -uo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+. "$HARNESS_DIR/_colors.sh"
 cd "$PROJECT_DIR" || exit 0
 
 ANCHORS="concept planning execution problems files"
@@ -23,25 +24,25 @@ while read -r ID; do
   # Match docs/reference/<ID>-*.md (and tolerate a bare <ID>.md).
   DOC="$(ls docs/reference/"${ID}"-*.md docs/reference/"${ID}".md 2>/dev/null | head -1)"
   if [ -z "$DOC" ] || [ ! -f "$DOC" ]; then
-    echo "[FAIL]  leaf ${ID} is 'done' but has no docs/reference/${ID}-<name>.md"
+    fail "leaf ${ID} is 'done' but has no docs/reference/${ID}-<name>.md"
     rc=1
     continue
   fi
   # Frontmatter keys (within a leading --- ... --- block, checked loosely).
   for key in "id:" "date:" "alias:" "tags:"; do
     if ! grep -qE "^${key}" "$DOC"; then
-      echo "[FAIL]  ${DOC}: missing frontmatter key '${key%:}'"
+      fail "${DOC}: missing frontmatter key '${key%:}'"
       rc=1
     fi
   done
   # Required section anchors.
   for a in $ANCHORS; do
     if ! grep -qF "<!-- section: ${a} -->" "$DOC"; then
-      echo "[FAIL]  ${DOC}: missing section anchor '<!-- section: ${a} -->'"
+      fail "${DOC}: missing section anchor '<!-- section: ${a} -->'"
       rc=1
     fi
   done
 done < <(python3 "$HARNESS_DIR/_harness.py" done-ids 2>/dev/null)
 
-[ $rc -eq 0 ] && echo "[OK]    reference docs complete (every 'done' documented)"
+[ $rc -eq 0 ] && ok "reference docs complete (every 'done' documented)"
 exit $rc

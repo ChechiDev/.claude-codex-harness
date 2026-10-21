@@ -65,6 +65,10 @@ def test_blocks_acceptance_tests(project: Project) -> None:
         f"progress/plan_review_{LEAF_ID}.md",
         f"progress/review_{LEAF_ID}.md",
         f"progress/acceptance_{LEAF_ID}.sha256",
+        "progress/roadmap_review.md",
+        "progress/phase_review_01.md",
+        "progress/plan_roadmap.sha256",
+        "progress/plan_phase_01.sha256",
     ],
 )
 def test_blocks_codex_owned_verdict_files(project: Project, rel: str) -> None:
@@ -79,6 +83,8 @@ def test_blocks_codex_owned_verdict_files(project: Project, rel: str) -> None:
         f"progress/impl_{LEAF_ID}.md",
         "progress/current.md",
         "docs/plan/phase-01-x.md",
+        "docs/plan/phase-01-x/1.1.1-y.md",
+        "docs/plan/PLAN.md",
         "tests/unit/test_user.py",
     ],
 )
@@ -112,3 +118,12 @@ def test_settings_matcher_covers_every_file_writing_tool() -> None:
     assert matchers
     tools = set(matchers[0].split("|"))
     assert {"Edit", "Write", "MultiEdit", "NotebookEdit"} <= tools
+
+
+def test_c_headers_are_scoped_like_src(project: Project) -> None:
+    # include/ holds C public headers: same micro-task scope as src/.
+    res = project.run("guard_write.sh", write_payload("include/pkg/user.h"))
+    assert res.returncode == BLOCKED
+    assert "NOT in the declared" in res.stderr
+    project.set_leaf(files=[DECLARED, "include/pkg/user.h"])
+    assert project.run("guard_write.sh", write_payload("include/pkg/user.h")).returncode == 0

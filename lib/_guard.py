@@ -6,7 +6,11 @@ Commands:
   write        PreToolUse (Edit|Write|MultiEdit|NotebookEdit); hook JSON on stdin
   bash         PreToolUse (Bash); hook JSON on stdin
   integrity    backstop for check.sh: src/ scope vs plan + sealed acceptance tests
-  seal <id>    record progress/acceptance_<id>.sha256 (needs PLAN_APPROVED)
+               + sealed (approved) roadmap and phase breakdowns
+  seal <id>         record progress/acceptance_<id>.sha256 (needs PLAN_APPROVED) and
+                    re-seal its spec in the phase seal
+  seal roadmap      record progress/plan_roadmap.sha256 (needs ROADMAP_APPROVED)
+  seal phase <NN>   record progress/plan_phase_<NN>.sha256 (needs PHASE_APPROVED)
   fingerprint  print a hash of the git working-tree state (Stop-hook cache key)
 
 Guards exit 0 to allow and 2 to block (reason on stderr). The Bash guard is a
@@ -31,15 +35,18 @@ from pathlib import Path
 from typing import Any
 
 import _harness
+import _plan_seal
+from _status import say
 
 BLOCK = 2
 ROOT = Path(os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()))
 # Roots whose deletion (or deletion of an ancestor) destroys protected state.
-PROTECTED_ROOTS = ("src", "tests/acceptance", "progress")
+PROTECTED_ROOTS = ("src", "include", "tests/acceptance", "progress")
 SKIP_DIRS = {"node_modules", "site-packages"}
+# Gate verdicts (roadmap, phase, plan, code) and every seal under progress/.
 RE_CODEX_OWNED = re.compile(
-    r"^(progress/(plan_review|review)_[^/]+\.md|progress/acceptance_[^/]+\.sha256"
-    r"|\.git/harness-[^/]+)$"
+    r"^(progress/(plan_review|review|phase_review)_[^/]+\.md|progress/roadmap_review\.md"
+    r"|progress/[^/]+\.sha256|\.git/harness-[^/]+)$"
 )
 RE_ATTRIBUTION = re.compile(r"co-authored-by|generated with|🤖|claude code|codex|anthropic", re.I)
 
@@ -81,8 +88,8 @@ MSG_SHELL_OPAQUE = (
     "touching protected paths). Use the Edit/Write tools so the plan scope is enforced."
 )
 MSG_SEAL = (
-    "BLOCKED: sealing acceptance tests is done by the plan gate itself (or by the human in manual "
-    "mode), never by Claude."
+    "BLOCKED: sealing (acceptance tests, the approved roadmap or a phase) is done by the Codex "
+    "gate itself (or by the human in manual mode), never by Claude."
 )
 MSG_ATTRIBUTION = (
     "BLOCKED: the commit/PR contains agent attribution (Co-Authored-By / 'Generated with' / "
@@ -132,7 +139,8 @@ def classify(rel: str) -> str | None:
     parts = tuple(Path(rel).parts)
     if _segment_index(parts, ("tests", "acceptance")) >= 0:
         return "acceptance"
-    if _segment_index(parts, ("src",)) >= 0:
+    # include/ holds C public headers: same micro-task scope as src/.
+    if _segment_index(parts, ("src",)) >= 0 or _segment_index(parts, ("include",)) >= 0:
         return "src"
     return None
 
@@ -287,13 +295,24 @@ SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_PROTECTED = re.compile(
-    r"(^|[\s'\"(=/])(src/|tests/acceptance|progress/(plan_review|review|acceptance)_)"
+    r"(^|[\s'\"(=/])(src/|include/|tests/acceptance"
+    r"|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_))"
 )
 RE_WRITE_CALL = re.compile(
     r"\b(write|write_text|write_bytes|unlink|remove|rename|replace|rmtree|truncate|chmod|"
     r"makedirs|mkdir|touch|copy|copyfile|copy2|move|symlink|rmdir)\b"
     r"|open\([^)]*,\s*['\"][^'\"]*[wax+]"
 )
+
+
+def _is_seal(name: str, args: list[str]) -> bool:
+    """`review_with_codex.sh seal …` or `_guard.py seal …`, run directly or via python."""
+    if name in ("review_with_codex.sh", "_guard.py"):
+        return args[:1] == ["seal"]
+    if INTERPRETERS.match(name):
+        scripts = [i for i, a in enumerate(args) if os.path.basename(a) == "_guard.py"]
+        return any(args[i + 1 : i + 2] == ["seal"] for i in scripts)
+    return False
 
 
 class BashAnalyzer:
@@ -348,7 +367,7 @@ class BashAnalyzer:
             self.run(" ".join(args), depth + 1)
         elif name in ("patch",):
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd=name))
-        elif name == "review_with_codex.sh" and args[:1] == ["seal"]:
+        elif _is_seal(name, args):
             raise Blocked(MSG_SEAL)
         else:
             self._file_verbs(name, args)
@@ -502,16 +521,16 @@ def changed_paths() -> list[str] | None:
 def check_scope() -> int:
     changed = changed_paths()
     if changed is None:
-        print("[WARN]  src/ scope check skipped (not a git repo or no commits yet)")
+        say("WARN", "src/ scope check skipped (not a git repo or no commits yet)")
         return 0
     leaf = _current_leaf()
     allowed = set(_harness.leaf_files(leaf) or []) if leaf else set()
     stray = [p for p in changed if classify(p) == "src" and p not in allowed]
     for path in stray:
         owner = f"subtask {leaf}" if leaf else "no in_progress subtask"
-        print(f"[FAIL]  {path} changed outside the declared files: ({owner})")
+        say("FAIL", f"{path} changed outside the declared files: ({owner})")
     if not stray:
-        print("[OK]    src/ changes are within the in_progress subtask's declared files")
+        say("OK", "src/ changes are within the in_progress subtask's declared files")
     return 1 if stray else 0
 
 
@@ -529,9 +548,10 @@ def check_seals() -> int:
             digest, rel = line.split(maxsplit=1)
             target = ROOT / rel
             if not target.is_file() or _sha256(target) != digest:
-                print(
-                    f"[FAIL]  {rel} no longer matches its seal ({manifest.name}): "
-                    "acceptance tests are Codex-owned and must not change"
+                say(
+                    "FAIL",
+                    f"{rel} no longer matches its seal ({manifest.name}): "
+                    "acceptance tests are Codex-owned and must not change",
                 )
                 rc = 1
     leaf = _current_leaf()
@@ -541,17 +561,29 @@ def check_seals() -> int:
         and _acceptance_files(leaf)
         and not (ROOT / _manifest_rel(leaf)).exists()
     ):
-        print(
-            f"[WARN]  acceptance tests of {leaf} are not sealed "
-            f"(human: ./harness/review_with_codex.sh seal {leaf})"
+        say(
+            "WARN",
+            f"acceptance tests of {leaf} are not sealed "
+            f"(human: ./harness/review_with_codex.sh seal {leaf})",
         )
     if rc == 0:
-        print(f"[OK]    sealed acceptance tests intact ({len(manifests)} seal(s))")
+        say("OK", f"sealed acceptance tests intact ({len(manifests)} seal(s))")
     return rc
 
 
+def check_plan_seals() -> int:
+    problems, warnings = _plan_seal.verify(ROOT)
+    for msg in problems:
+        say("FAIL", msg)
+    for msg in warnings:
+        say("WARN", msg)
+    if not problems:
+        say("OK", "approved plan intact (roadmap and phase seals)")
+    return 1 if problems else 0
+
+
 def integrity() -> int:
-    return check_scope() | check_seals()
+    return check_scope() | check_seals() | check_plan_seals()
 
 
 def _acceptance_files(leaf: str) -> list[Path]:
@@ -564,16 +596,58 @@ def _manifest_rel(leaf: str) -> str:
 
 def seal(leaf: str) -> int:
     if _harness.read_verdict(ROOT / f"progress/plan_review_{leaf}.md") != "PLAN_APPROVED":
-        print(f"[FAIL]  cannot seal {leaf}: its plan review is not PLAN_APPROVED", file=sys.stderr)
+        say("FAIL", f"cannot seal {leaf}: its plan review is not PLAN_APPROVED", sys.stderr)
         return 1
     files = _acceptance_files(leaf)
     if not files:
-        print(f"[FAIL]  cannot seal {leaf}: no tests/acceptance/test_{leaf}.*", file=sys.stderr)
+        say("FAIL", f"cannot seal {leaf}: no tests/acceptance/test_{leaf}.*", sys.stderr)
         return 1
     lines = [f"{_sha256(f)}  {f.relative_to(ROOT).as_posix()}\n" for f in files]
     (ROOT / _manifest_rel(leaf)).write_text("".join(lines), encoding="utf-8")
-    print(f"[OK]    sealed {len(files)} acceptance file(s) -> {_manifest_rel(leaf)}")
+    say("OK", f"sealed {len(files)} acceptance file(s) -> {_manifest_rel(leaf)}")
+    spec, phase = _leaf_spec(leaf)
+    if spec and _plan_seal.reseal_spec(ROOT, spec, phase):
+        say("OK", f"re-sealed its approved spec {spec}")
     return 0
+
+
+def _leaf_spec(leaf: str) -> tuple[str, str]:
+    item = next((s for s in _harness.leaves() if s["id"] == leaf), None)
+    return (str(item["spec"]), str(item["phase"])) if item else ("", "")
+
+
+def seal_roadmap() -> int:
+    if _harness.read_verdict(ROOT / _harness.ROADMAP_REVIEW) != "ROADMAP_APPROVED":
+        say("FAIL", "cannot seal the roadmap: it is not ROADMAP_APPROVED", sys.stderr)
+        return 1
+    entries = _plan_seal.roadmap_entries(ROOT)
+    _plan_seal.write(_plan_seal.roadmap_manifest(ROOT), entries)
+    say("OK", f"sealed the approved roadmap ({len(entries)} file(s))")
+    return 0
+
+
+def seal_phase(pid: str) -> int:
+    if _harness.read_verdict(ROOT / _harness.phase_review(pid)) != "PHASE_APPROVED":
+        say("FAIL", f"cannot seal phase {pid}: it is not PHASE_APPROVED", sys.stderr)
+        return 1
+    entries = _plan_seal.phase_entries(ROOT, pid)
+    if not entries:
+        say("FAIL", f"cannot seal phase {pid}: no docs/plan/phase-{pid}-*.md", sys.stderr)
+        return 1
+    _plan_seal.write(_plan_seal.phase_manifest(ROOT, pid), entries)
+    say("OK", f"sealed the approved phase {pid} ({len(entries)} file(s))")
+    return 0
+
+
+def seal_command(args: list[str]) -> int:
+    if args == ["roadmap"]:
+        return seal_roadmap()
+    if len(args) == 2 and args[0] == "phase":
+        return seal_phase(args[1])
+    if len(args) == 1:
+        return seal(args[0])
+    print("usage: _guard.py seal <N.M.K> | roadmap | phase <NN>", file=sys.stderr)
+    return 2
 
 
 def fingerprint() -> int:
@@ -629,8 +703,8 @@ def main(argv: list[str]) -> int:
         return _run_guard(cmd)
     if cmd == "integrity":
         return integrity()
-    if cmd == "seal" and rest:
-        return seal(rest[0])
+    if cmd == "seal":
+        return seal_command(rest)
     if cmd == "fingerprint":
         return fingerprint()
     print(__doc__, file=sys.stderr)
