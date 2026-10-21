@@ -72,7 +72,9 @@ and finish with a **single commit**. You do not change production code or tests.
 3. **Regenerate the index**: run `make plan` (regenerates `feature_list.json` and
    the index in `docs/plan/PLAN.md`).
 4. **Update tracking**: tick the gate boxes in `progress/current.md` and append the
-   close entry to `progress/history.md`.
+   close entry to `progress/history.md`. Its `**Commit:**` line is the commit
+   subject, never a hash or "pending": the entry is part of the close commit,
+   which cannot contain its own hash (`git log --grep '[N.M.K]'` finds it).
 5. **Run `make check`** — it must be green (it includes `make verify`, the gate
    consistency check, and the `doc_gate` that verifies this reference doc is
    complete). Do not commit if it is red.
@@ -90,6 +92,10 @@ and finish with a **single commit**. You do not change production code or tests.
   > no-attribution rule here is enforced by THIS instruction, not by a hook.
   > Comply strictly.
 - Never commit with `make verify` red.
+- A `blocked` note in `progress/current.md` left by an earlier close attempt
+  is not a reason to stop: its cause may have been fixed since. Re-run the
+  close and let `make check` decide; if it is green, replace the note and
+  finish; if it is still red, update the note with the current failure.
 - Do not duplicate what the code already says; document the why and the contracts.
 
 ## Output
@@ -99,7 +105,7 @@ Final response in one line:
 ```
 closed -> docs/reference/<N.M.K>-<name>.md ; commit <hash>
 ```
-or, if anything blocks the close:
+or, if anything blocks the close (cause recorded in `progress/current.md`):
 ```
-blocked -> see progress/review_<N.M.K>.md
+blocked -> see progress/current.md
 ```

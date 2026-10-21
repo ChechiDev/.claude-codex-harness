@@ -13,5 +13,5 @@ Entry template (filled in at close):
 - **Acceptance:** tests/acceptance/test_<N.M.K>.py — N cases, green
 - **Verification:** make check green. Codex review: APPROVED (review_<N.M.K>.md)
 - **Documentation:** docs/reference/<N.M.K>-<name>.md
-- **Commit:** <hash> — <type>(<scope>): <what> [N.M.K]
+- **Commit:** <type>(<scope>): <what> [N.M.K]   (subject only: the hash is in git log)
 -->

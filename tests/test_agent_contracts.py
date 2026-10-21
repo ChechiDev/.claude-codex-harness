@@ -110,6 +110,22 @@ def test_documenter_closes_in_the_spec() -> None:
     assert f"Plan: {SPEC_PATH}" in text
 
 
+def test_documenter_rechecks_a_stale_blocker() -> None:
+    # A blocked note from an earlier close attempt must not stop a relaunch on its own.
+    text = DOCUMENTER.read_text()
+    assert "is not a reason to stop" in text
+    assert "blocked -> see progress/current.md" in text
+
+
+@pytest.mark.parametrize("tpl", TEMPLATE_SETS)
+def test_history_entry_never_asks_for_the_close_commit_hash(tpl: str) -> None:
+    # The entry is part of the close commit, which cannot contain its own hash.
+    text = (TOOLKIT / tpl / "progress" / "history.md").read_text()
+    assert "<hash>" not in text
+    assert "- **Commit:** <type>(<scope>): <what> [N.M.K]" in text
+    assert "never a hash" in DOCUMENTER.read_text()
+
+
 @pytest.mark.parametrize("doc", [IMPLEMENT, IMPLEMENTER], ids=lambda p: p.parent.name)
 def test_implementer_reads_the_subtask_spec(doc: Path) -> None:
     assert SPEC_PATH in doc.read_text()
