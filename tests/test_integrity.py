@@ -48,6 +48,40 @@ def test_src_change_without_in_progress_leaf_fails(project: Project) -> None:
     assert _integrity(project).returncode == 1
 
 
+def _close(project: Project, approved: bool = True) -> None:
+    """The documenter's close window: code changed, status done, not committed yet."""
+    project.write(DECLARED, "x = 1\n")
+    project.set_leaf(status="done")
+    if approved:
+        project.set_verdict("code", "APPROVED")
+
+
+def test_closing_leaf_src_change_passes(project: Project) -> None:
+    _close(project)
+    res = _integrity(project)
+    assert res.returncode == 0, res.stdout
+
+
+def test_closing_leaf_without_code_approval_fails(project: Project) -> None:
+    _close(project, approved=False)
+    assert _integrity(project).returncode == 1
+
+
+def test_closing_leaf_undeclared_src_change_fails(project: Project) -> None:
+    _close(project)
+    project.write("src/pkg/infra/repo.py", "x = 1\n")
+    res = _integrity(project)
+    assert res.returncode == 1
+    assert "src/pkg/infra/repo.py" in res.stdout
+
+
+def test_closed_leaf_src_change_fails(project: Project) -> None:
+    _close(project)
+    project.commit_all("close 1.1.1")
+    project.write(DECLARED, "x = 2\n")
+    assert _integrity(project).returncode == 1
+
+
 def test_sealed_acceptance_tests_unchanged_pass(project: Project) -> None:
     project.write(ACC, "def test_ac1(): assert False\n")
     _seal(project)

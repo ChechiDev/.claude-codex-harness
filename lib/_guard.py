@@ -518,19 +518,51 @@ def changed_paths() -> list[str] | None:
     return sorted({r for r in rels if r is not None})
 
 
+def _committed_status() -> dict[str, str]:
+    """Leaf id -> status as recorded in HEAD's feature_list.json (empty if absent)."""
+    raw = _git_out("show", "HEAD:./feature_list.json")
+    try:
+        return {
+            str(leaf["id"]): leaf["status"] for leaf in _harness.leaves(json.loads(raw or "{}"))
+        }
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return {}
+
+
+def _closing_leaves() -> list[str]:
+    """Leaves in the close window: done in the tree, not yet in HEAD, code APPROVED.
+
+    The documenter marks the leaf done and runs make check before its commit;
+    once that commit lands the leaf is done in HEAD and its files close again.
+    """
+    try:
+        current = _harness.leaves()
+    except (OSError, ValueError, KeyError):
+        return []
+    committed = _committed_status()
+    return [
+        str(leaf["id"])
+        for leaf in current
+        if leaf["status"] == "done"
+        and committed.get(str(leaf["id"])) != "done"
+        and _harness.read_verdict(ROOT / f"progress/review_{leaf['id']}.md") == "APPROVED"
+    ]
+
+
 def check_scope() -> int:
     changed = changed_paths()
     if changed is None:
         say("WARN", "src/ scope check skipped (not a git repo or no commits yet)")
         return 0
     leaf = _current_leaf()
-    allowed = set(_harness.leaf_files(leaf) or []) if leaf else set()
+    owners = ([leaf] if leaf else []) + _closing_leaves()
+    allowed = {f for fid in owners for f in _harness.leaf_files(fid) or []}
     stray = [p for p in changed if classify(p) == "src" and p not in allowed]
     for path in stray:
-        owner = f"subtask {leaf}" if leaf else "no in_progress subtask"
+        owner = f"subtask {', '.join(owners)}" if owners else "no in_progress subtask"
         say("FAIL", f"{path} changed outside the declared files: ({owner})")
     if not stray:
-        say("OK", "src/ changes are within the in_progress subtask's declared files")
+        say("OK", "src/ changes are within the in_progress/closing subtask's declared files")
     return 1 if stray else 0
 
 

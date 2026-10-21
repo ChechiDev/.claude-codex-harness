@@ -70,8 +70,9 @@ def phases() -> list[Item]:
     return found
 
 
-def leaves() -> list[Item]:
-    """Return the atomic work units: every subtask of every task."""
+def leaves(data: Item | None = None) -> list[Item]:
+    """Return the atomic work units: every subtask of every task (of <data> if given)."""
+    tasks: list[Item] = _tasks() if data is None else data.get("features", [])
     return [
         {
             "id": s["id"],
@@ -82,7 +83,7 @@ def leaves() -> list[Item]:
             "phase": t.get("phase", ""),
             "spec": s.get("spec", ""),
         }
-        for t in _tasks()
+        for t in tasks
         for s in t.get("subtasks") or []
     ]
 
