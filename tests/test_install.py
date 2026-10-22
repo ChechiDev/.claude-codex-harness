@@ -282,3 +282,116 @@ def test_pyproject_backup_is_not_committed(tmp_path: Path) -> None:
     assert _install(dest, env, "--python", "demo").returncode == 0
     assert list(dest.glob("pyproject.toml.bak.*"))  # the backup is kept on disk…
     assert not [f for f in _git(dest, env, "ls-files").splitlines() if ".bak." in f]  # …not in git
+
+
+# ── Installing into an existing repo (monorepo subdir, shared history) ───────
+
+SYMLINKS = [".claude/agents", ".claude/codex", ".claude/skills", ".claude/settings.json", "harness"]
+
+
+def _monorepo(tmp_path: Path, env: dict[str, str], commit: bool = True) -> Path:
+    root = tmp_path / "mono"
+    (root / "backend" / "app").mkdir(parents=True)
+    (root / "backend" / "app" / "main.py").write_text("app = 1\n")
+    (root / "README.md").write_text("mono\n")
+    _git(root, env, "init", "-q", "-b", "main")
+    if commit:
+        _git(root, env, "add", "-A")
+        _git(root, env, "commit", "-qm", "my history")
+    return root
+
+
+def test_monorepo_subdir_install_never_nests_a_repo(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = _monorepo(tmp_path, env)
+    head = _git(root, env, "rev-parse", "HEAD")
+
+    res = _install(root / "backend", env, "--lang", "python")
+
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not (root / "backend" / ".git").exists()
+    assert _git(root, env, "rev-parse", "HEAD") == head
+    assert _git(root, env, "branch", "--show-current") == "main"
+    assert "existing history kept" in res.stdout
+
+
+def test_existing_repo_install_only_adds_files(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = _monorepo(tmp_path, env)
+
+    assert _install(root / "backend", env, "--lang", "python").returncode == 0
+
+    assert _git(root, env, "diff", "--stat") == ""  # no tracked file changed
+    assert (root / "backend" / "app" / "main.py").read_text() == "app = 1\n"
+
+
+def test_existing_repo_keeps_the_harness_symlinks_out_of_git_locally(tmp_path: Path) -> None:
+    # The symlinks point into this machine's toolkit: committed, they break for teammates.
+    env = _env(tmp_path)
+    root = _monorepo(tmp_path, env)
+
+    assert _install(root / "backend", env, "--lang", "python").returncode == 0
+
+    untracked = _git(root, env, "status", "--porcelain", "-uall")
+    for link in SYMLINKS:
+        assert f"backend/{link}" not in untracked, link
+    assert "backend/CLAUDE.md" in untracked  # the plan side is versioned
+    assert not (root / ".gitignore").exists()  # shared ignore files untouched
+    exclude = Path(_git(root, env, "rev-parse", "--git-path", "info/exclude"))
+    excluded = (root / exclude).read_text().splitlines()
+    assert "/backend/harness" in excluded
+
+
+def test_exclude_entries_are_not_duplicated(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = _monorepo(tmp_path, env)
+    assert _install(root / "backend", env, "--lang", "python").returncode == 0
+    assert _install(root / "backend", env, "--lang", "python").returncode == 0
+    exclude = root / _git(root, env, "rev-parse", "--git-path", "info/exclude")
+    assert exclude.read_text().splitlines().count("/backend/harness") == 1
+
+
+def test_monorepo_subdir_without_commits_makes_no_commit(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = _monorepo(tmp_path, env, commit=False)
+
+    res = _install(root / "backend", env, "--lang", "python")
+
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not (root / "backend" / ".git").exists()
+    log = subprocess.run(["git", "log"], cwd=root, env=env, capture_output=True, check=False)
+    assert log.returncode != 0  # still no commits
+    assert "inside an existing repo" in res.stdout
+
+
+def test_src_dirs_option_writes_the_scope_config(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = _monorepo(tmp_path, env)
+    dest = root / "backend"
+
+    res = _install(dest, env, "--lang", "python", "--src-dirs", "app,scripts")
+
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (dest / "harness.toml").read_text() == '[scope]\nsrc_dirs = ["app", "scripts"]\n'
+
+
+def test_src_dirs_never_overwrites_an_existing_config(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = _monorepo(tmp_path, env)
+    dest = root / "backend"
+    (dest / "harness.toml").write_text('[scope]\nsrc_dirs = ["app"]\n')
+
+    res = _install(dest, env, "--lang", "python", "--src-dirs", "lib")
+
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (dest / "harness.toml").read_text() == '[scope]\nsrc_dirs = ["app"]\n'
+    assert "harness.toml" in res.stdout  # reported as kept
+
+
+@pytest.mark.parametrize("bad", ["", "../app", "/etc", 'a"b'])
+def test_src_dirs_rejects_unsafe_values(tmp_path: Path, bad: str) -> None:
+    env = _env(tmp_path)
+    root = _monorepo(tmp_path, env)
+    res = _install(root / "backend", env, "--lang", "python", "--src-dirs", bad)
+    assert res.returncode == 2
+    assert not (root / "backend" / "harness.toml").exists()

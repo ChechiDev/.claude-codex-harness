@@ -78,15 +78,18 @@ Installing harness (python) into /path/to/project
 ~/.claude-codex-harness/install.sh /path/to/project --c myproj
 ```
 
-**Existing project** (it needs a `pyproject.toml` with ruff, mypy and pytest):
+**Existing project** (it needs a `pyproject.toml` with ruff, mypy and pytest),
+including a subdirectory of a monorepo. If the code is not under `src/`, name
+its dirs:
 
 ```bash
-~/.claude-codex-harness/install.sh /path/to/project
+~/.claude-codex-harness/install.sh /path/to/repo/backend --lang python --src-dirs app,scripts
 ```
 
-The installer never overwrites existing files without `--force` and never
-touches existing git history; with history, commit the installed files so
-`make check` is green. All options: [configuration](docs/configuration.md#installsh-options).
+In an existing repo the installer only adds files: it never overwrites one
+without `--force`, never runs `git init` or commits, and keeps the
+machine-local symlinks out of git via `.git/info/exclude`. Commit the rest
+yourself. Details: [installing into an existing repo](docs/configuration.md#installing-into-an-existing-repo).
 
 ### 3. Check the result
 

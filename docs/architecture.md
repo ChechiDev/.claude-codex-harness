@@ -105,7 +105,8 @@ Enforced by the hooks in `settings.json` and by `make check`:
 1. **No code before the plan gate.** Claude does not write to `src/` without
    `progress/plan_review_<N.M.K>.md` whose `**Verdict:**` line is exactly
    `PLAN_APPROVED`. A review that merely mentions the word does not count.
-2. **Micro-tasks.** A write to `src/` (or `include/` for C headers) must target
+2. **Micro-tasks.** A write to `src/` (or `include/` for C headers, or the dirs
+   in `harness.toml`, see [configuration](configuration.md)) must target
    a file declared in the subtask's `files:` (1-3 files). Paths are resolved
    (symlinks, `..`, `./`) before matching. Anything else is blocked until the
    plan is updated and re-approved.

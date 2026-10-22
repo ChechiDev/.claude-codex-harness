@@ -29,8 +29,10 @@ import re
 import shlex
 import subprocess
 import sys
+import tomllib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +42,12 @@ from _status import say
 
 BLOCK = 2
 ROOT = Path(os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()))
-# Roots whose deletion (or deletion of an ancestor) destroys protected state.
-PROTECTED_ROOTS = ("src", "include", "tests/acceptance", "progress")
+# Project config (human-owned): [scope] src_dirs lists the production-code dirs,
+# relative to the project root. Without it, any src/ or include/ segment counts.
+CONFIG_FILE = "harness.toml"
+DEFAULT_SRC_DIRS = ("src", "include")
+# Roots besides the source dirs whose deletion destroys protected state.
+STATE_ROOTS = ("tests/acceptance", "progress")
 SKIP_DIRS = {"node_modules", "site-packages"}
 # Gate verdicts (roadmap, phase, plan, code) and every seal under progress/.
 RE_CODEX_OWNED = re.compile(
@@ -58,6 +64,10 @@ MSG_ACCEPTANCE = (
 MSG_CODEX_OWNED = (
     "BLOCKED: '{rel}' is owned by Codex (gate verdicts, acceptance seals) or by the harness. "
     "Claude never writes it; run the corresponding ./harness/review_with_codex.sh gate instead."
+)
+MSG_CONFIG = (
+    f"BLOCKED: {CONFIG_FILE} is the human-owned harness config (which dirs hold production "
+    "code). Claude never edits it: ask the human to change it."
 )
 MSG_NO_LEAF = (
     "BLOCKED: there is no in_progress feature in feature_list.json. The leader must pick and "
@@ -106,6 +116,42 @@ class Blocked(Exception):
     """A guard decision to block, carrying the message Claude reads."""
 
 
+class ConfigError(Exception):
+    """harness.toml exists but cannot be trusted: the guards fail closed."""
+
+
+@cache
+def src_dirs() -> tuple[str, ...] | None:
+    """Configured source dirs (root-relative), or None to use the src/ include/ default."""
+    path = ROOT / CONFIG_FILE
+    if not path.is_file():
+        return None
+    try:
+        scope = tomllib.loads(path.read_text(encoding="utf-8")).get("scope", {})
+        dirs = scope.get("src_dirs")
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, AttributeError) as exc:
+        raise ConfigError(f"{CONFIG_FILE} is unreadable: {exc}") from exc
+    if dirs is None:
+        return None
+    if (
+        not isinstance(dirs, list)
+        or not dirs
+        or not all(isinstance(d, str) and d.strip("/") for d in dirs)
+    ):
+        raise ConfigError(f"{CONFIG_FILE}: [scope] src_dirs must be a non-empty list of dirs")
+    return tuple(_harness._normalize(d.strip("/")) for d in dirs)
+
+
+def _protected_roots() -> tuple[str, ...]:
+    """Roots whose deletion (or deletion of an ancestor) destroys protected state."""
+    return (*(src_dirs() or DEFAULT_SRC_DIRS), *STATE_ROOTS)
+
+
+def _mentions_protected(command: str) -> bool:
+    dirs = "|".join(re.escape(d) + "/" for d in src_dirs() or DEFAULT_SRC_DIRS)
+    return re.search(rf"(^|[\s'\"(=/])({dirs}|{RE_MENTIONS_STATE})", command) is not None
+
+
 # ── Path classification ──────────────────────────────────────────────────────
 
 
@@ -136,11 +182,16 @@ def classify(rel: str) -> str | None:
     """'acceptance' | 'codex-owned' | 'src' | None for a project-relative path."""
     if RE_CODEX_OWNED.match(rel):
         return "codex-owned"
+    if rel == CONFIG_FILE:
+        return "config"
     parts = tuple(Path(rel).parts)
     if _segment_index(parts, ("tests", "acceptance")) >= 0:
         return "acceptance"
+    dirs = src_dirs()
+    if dirs is not None:
+        return "src" if any(rel == d or rel.startswith(f"{d}/") for d in dirs) else None
     # include/ holds C public headers: same micro-task scope as src/.
-    if _segment_index(parts, ("src",)) >= 0 or _segment_index(parts, ("include",)) >= 0:
+    if any(_segment_index(parts, (d,)) >= 0 for d in DEFAULT_SRC_DIRS):
         return "src"
     return None
 
@@ -153,7 +204,7 @@ def protected_kind(path: Path, destructive: bool = False) -> str | None:
     kind = classify(rel) if rel != "." else None
     if kind or not destructive:
         return kind
-    for root in PROTECTED_ROOTS:
+    for root in _protected_roots():
         if (ROOT / root).is_relative_to(path):
             return f"ancestor of {root}/"
     return None
@@ -175,6 +226,8 @@ def guard_write(payload: dict[str, Any]) -> None:
         raise Blocked(MSG_ACCEPTANCE)
     if kind == "codex-owned":
         raise Blocked(MSG_CODEX_OWNED.format(rel=rel))
+    if kind == "config":
+        raise Blocked(MSG_CONFIG)
     if kind == "src":
         _check_src_scope(rel)
 
@@ -294,9 +347,8 @@ INPLACE_VERBS = {"sed", "perl"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
-RE_MENTIONS_PROTECTED = re.compile(
-    r"(^|[\s'\"(=/])(src/|include/|tests/acceptance"
-    r"|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_))"
+RE_MENTIONS_STATE = (
+    r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_)"
 )
 RE_WRITE_CALL = re.compile(
     r"\b(write|write_text|write_bytes|unlink|remove|rename|replace|rmtree|truncate|chmod|"
@@ -388,7 +440,7 @@ class BashAnalyzer:
             self._check(_destination(args), destructive=False)
         elif (
             INTERPRETERS.match(name)
-            and RE_MENTIONS_PROTECTED.search(self.raw)
+            and _mentions_protected(self.raw)
             and RE_WRITE_CALL.search(self.raw)
         ):
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd=name))
@@ -416,7 +468,7 @@ class BashAnalyzer:
         verb = next((os.path.basename(a) for a in args if not a.startswith("-")), "echo")
         writes = verb in ANY_ARG_VERBS | DEST_ARG_VERBS | INPLACE_VERBS
         # xargs takes its operands from stdin, so judge by what the whole line touches.
-        if writes and (self.found.mentions_protected or RE_MENTIONS_PROTECTED.search(self.raw)):
+        if writes and (self.found.mentions_protected or _mentions_protected(self.raw)):
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd=f"xargs {verb}"))
 
     def _gh(self, args: list[str], depth: int) -> None:
@@ -557,7 +609,12 @@ def check_scope() -> int:
     leaf = _current_leaf()
     owners = ([leaf] if leaf else []) + _closing_leaves()
     allowed = {f for fid in owners for f in _harness.leaf_files(fid) or []}
-    stray = [p for p in changed if classify(p) == "src" and p not in allowed]
+    try:
+        src_dirs()  # validate even when no changed path reaches the src/ test
+        stray = [p for p in changed if classify(p) == "src" and p not in allowed]
+    except ConfigError as exc:
+        say("FAIL", str(exc))
+        return 1
     for path in stray:
         owner = f"subtask {', '.join(owners)}" if owners else "no in_progress subtask"
         say("FAIL", f"{path} changed outside the declared files: ({owner})")

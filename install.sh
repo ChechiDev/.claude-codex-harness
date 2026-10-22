@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh — installs the harness onto a target project (Model B).
 #
-#   install.sh <project-path> [--force] [--python <package-name>]
+#   install.sh <project-path> [--force] [--python <package-name>] [--src-dirs a,b]
 #
 # --python delegates to lib/scaffold_python.sh (minimal Python layer) so the
 # project runs `make check` green without manual pyproject editing. install.sh
@@ -18,6 +18,10 @@
 #   CLAUDE.md AGENTS.md Makefile CHECKPOINTS.md docs/ progress/
 #
 # GENERATED (never copied): feature_list.json is produced from docs/plan/.
+#
+# --src-dirs writes harness.toml ([scope] src_dirs) for code outside src/.
+# Inside an existing repo (history, or a monorepo subdir) nothing is committed
+# and the machine-local symlinks are excluded via .git/info/exclude.
 set -euo pipefail
 
 TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,18 +31,25 @@ FORCE=0
 TPL_LANG="python"   # template set (python | c). Not LANG: that is the exported locale.
 PYPKG=""            # --python <pkg>: scaffold a Python layer (implies lang=python)
 CNAME=""            # --c <name>:     scaffold a C layer       (implies lang=c)
+SRC_DIRS=""         # --src-dirs a,b: production-code dirs when they are not src/
 while [ $# -gt 0 ]; do
   case "$1" in
     --force)  FORCE=1 ;;
     --lang)   shift; TPL_LANG="${1:-}" ;;
     --python) shift; PYPKG="${1:-}"; TPL_LANG="python" ;;
     --c)      shift; CNAME="${1:-}"; TPL_LANG="c" ;;
+    --src-dirs) shift; SRC_DIRS="${1-}"
+      # Root-relative dirs only: no absolute paths, no .., no quoting tricks.
+      if ! printf '%s' "$SRC_DIRS" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9_./-]*(,[A-Za-z0-9_][A-Za-z0-9_./-]*)*$' ||
+         printf '%s' ",$SRC_DIRS," | grep -qE '(^|[,/])\.\.([,/]|$)'; then
+        echo "error: --src-dirs needs comma-separated project-relative dirs (got '$SRC_DIRS')" >&2; exit 2
+      fi ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift || true
 done
 if [ -z "$DEST" ]; then
-  echo "usage: install.sh <project-path> [--force] [--lang python|c] [--python <pkg> | --c <name>]" >&2; exit 2
+  echo "usage: install.sh <project-path> [--force] [--lang python|c] [--python <pkg> | --c <name>] [--src-dirs a,b]" >&2; exit 2
 fi
 case "$TPL_LANG" in python|c) ;; *) echo "error: --lang must be python or c" >&2; exit 2 ;; esac
 for v in "$PYPKG" "$CNAME"; do
@@ -89,6 +100,16 @@ copy Makefile           Makefile
 copy CHECKPOINTS.md     CHECKPOINTS.md
 copy docs               docs
 copy progress           progress
+# --src-dirs: the human-owned scope config (Claude's guards never let it edit it).
+if [ -n "$SRC_DIRS" ]; then
+  if [ -e "$DEST/harness.toml" ] && [ "$FORCE" -ne 1 ]; then
+    KEPT+=("harness.toml")
+  else
+    toml="$(printf '%s' "$SRC_DIRS" | sed 's/,/", "/g')"
+    printf '[scope]\nsrc_dirs = ["%s"]\n' "$toml" > "$DEST/harness.toml"
+    COPIED+=("harness.toml")
+  fi
+fi
 [ ${#COPIED[@]} -gt 0 ] && row "$GREEN" "[copy]" "${COPIED[*]}"
 [ ${#KEPT[@]} -gt 0 ] && row "$ORANGE" "[SKIP]" "${KEPT[*]} (exist; --force to overwrite)"
 
@@ -133,10 +154,23 @@ fi
 
 # --- Git base: root commit on main + setup branch (fresh repos only) ---
 # The harness needs a base commit: the src/ scope backstop diffs against HEAD and
-# every subtask branches from main. Existing history is never touched.
-[ -d "$DEST/.git" ] || git init -q -b main "$DEST"
+# every subtask branches from main. Existing history is never touched, and a
+# project inside another repo (a monorepo subdir) never gets a nested one.
+DEST_REAL="$(cd "$DEST" && pwd -P)"
+TOP="$(git -C "$DEST" rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$TOP" ] || { git init -q -b main "$DEST"; TOP="$DEST_REAL"; }
 SETUP_BRANCH="chore/project-setup"
 GIT_KEPT=0
+INNER=0; [ "$TOP" = "$DEST_REAL" ] || INNER=1
+exclude_symlinks() {  # machine-local links: kept out of a shared repo, locally only
+  local rel="${DEST_REAL#"$TOP"}" file entry
+  file="$(git -C "$DEST" rev-parse --git-path info/exclude)"
+  case "$file" in /*) ;; *) file="$DEST_REAL/$file" ;; esac
+  mkdir -p "$(dirname "$file")"; touch "$file"
+  for entry in .claude/agents .claude/codex .claude/skills .claude/settings.json harness; do
+    grep -qxF -- "$rel/$entry" "$file" || printf '%s\n' "$rel/$entry" >> "$file"
+  done
+}
 git_identity() {  # name + email from env or config; never guessed
   local name="${GIT_AUTHOR_NAME:-$(git -C "$DEST" config user.name || true)}"
   local email="${GIT_AUTHOR_EMAIL:-$(git -C "$DEST" config user.email || true)}"
@@ -144,7 +178,11 @@ git_identity() {  # name + email from env or config; never guessed
 }
 if git -C "$DEST" rev-parse -q --verify HEAD >/dev/null; then
   GIT_KEPT=1
-  row "$ORANGE" "[git]" "existing history kept"
+  exclude_symlinks
+  row "$ORANGE" "[git]" "existing history kept · harness symlinks excluded locally (.git/info/exclude)"
+elif [ "$INNER" -eq 1 ]; then
+  exclude_symlinks
+  row "$ORANGE" "[git]" "inside an existing repo ($TOP) with no commits: no commit made"
 elif ! git_identity; then
   row "$ORANGE" "[git]" "no git identity (user.name/user.email): root commit skipped"
 else
