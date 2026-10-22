@@ -29,8 +29,8 @@ def test_implement_skill_is_language_neutral() -> None:
 def test_leader_creates_the_task_branch() -> None:
     # One branch per task N.M (skills/github/branch); one commit per subtask N.M.K.
     text = LEADER.read_text()
-    assert "git switch -c feat/<N.M>-<slug> main" in text
-    assert "git branch --no-merged main" in text
+    assert 'git switch -c "$(python3 harness/_harness.py branch <N.M>)" main' in text
+    assert "default `feat/<N.M>-<slug>`" in text
 
 
 @pytest.mark.parametrize("cmd", ["git switch -c feat/1.1-user main", "git switch feat/1.1-user"])

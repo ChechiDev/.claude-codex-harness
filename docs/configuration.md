@@ -55,6 +55,45 @@ removing a dir would switch its protection off. If the file is unreadable or
 `make check` fails until it is fixed. Point the copied `Makefile`'s `type`
 target at the same dirs (for example `uv run mypy app scripts`).
 
+## Git conventions (`harness.toml` `[git]`)
+
+Each project can follow its team's branch and commit conventions. The values
+live in the project's `harness.toml`, so two projects can use different ones:
+
+```toml
+[git]
+branch = "feature/{ticket}-{slug}"     # default: "feat/{task}-{slug}"
+commit_prefix = "{ticket} "            # default: "" (no prefix)
+setup_branch = "chore/project-setup"   # default: "chore/project-setup"
+```
+
+| Placeholder | Value | Example |
+|-------------|-------|---------|
+| `{task}` | the task id | `1.1` |
+| `{slug}` | the task title in kebab-case | `tenant-isolation` |
+| `{ticket}` | the task's `- ticket:` line in its phase file | `GUAK-042` |
+
+When a pattern uses `{ticket}`, every task carries one:
+
+```markdown
+## 1.1 Tenant isolation
+- ticket: GUAK-042
+- layer: domain
+- goal: enforce the organization scope on every query
+```
+
+What uses it:
+
+| Who | How |
+|-----|-----|
+| Leader | creates the task branch from `python3 harness/_harness.py branch <N.M>` instead of writing a name |
+| Codex (close) | starts the commit subject with `python3 harness/_harness.py commit-prefix <N.M.K>`: `GUAK-042 feat(tenant): enforce organization scope [1.1.1]` |
+| `make check` | fails if a pattern is invalid, a task lacks a required ticket, or the in_progress subtask is not on its task branch |
+| Leader, before a subtask | `python3 harness/_guard.py setup-pending` fails while `setup_branch` has changes `main` lacks; squash merges count as merged |
+
+Without a `[git]` section nothing is enforced and the defaults apply, so
+projects installed earlier keep working on the branches they already use.
+
 ## Environment variables
 
 | Variable | Values | Default | Read by |

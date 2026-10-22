@@ -12,6 +12,8 @@ Commands:
   seal roadmap      record progress/plan_roadmap.sha256 (needs ROADMAP_APPROVED)
   seal phase <NN>   record progress/plan_phase_<NN>.sha256 (needs PHASE_APPROVED)
   fingerprint  print a hash of the git working-tree state (Stop-hook cache key)
+  setup-pending  exit 1 if the setup branch (harness.toml [git] setup_branch) has
+                 changes main does not contain yet (squash merges count as merged)
 
 Guards exit 0 to allow and 2 to block (reason on stderr). The Bash guard is a
 best-effort shell parser: it cannot see every way a program may write a file,
@@ -29,13 +31,13 @@ import re
 import shlex
 import subprocess
 import sys
-import tomllib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any
 
+import _config
 import _harness
 import _plan_seal
 from _status import say
@@ -44,7 +46,8 @@ BLOCK = 2
 ROOT = Path(os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()))
 # Project config (human-owned): [scope] src_dirs lists the production-code dirs,
 # relative to the project root. Without it, any src/ or include/ segment counts.
-CONFIG_FILE = "harness.toml"
+CONFIG_FILE = _config.CONFIG_FILE
+ConfigError = _config.ConfigError
 DEFAULT_SRC_DIRS = ("src", "include")
 # Roots besides the source dirs whose deletion destroys protected state.
 STATE_ROOTS = ("tests/acceptance", "progress")
@@ -116,30 +119,15 @@ class Blocked(Exception):
     """A guard decision to block, carrying the message Claude reads."""
 
 
-class ConfigError(Exception):
-    """harness.toml exists but cannot be trusted: the guards fail closed."""
-
-
 @cache
+def config() -> _config.Config:
+    """The project's harness.toml (raises ConfigError: callers fail closed)."""
+    return _config.load(ROOT)
+
+
 def src_dirs() -> tuple[str, ...] | None:
     """Configured source dirs (root-relative), or None to use the src/ include/ default."""
-    path = ROOT / CONFIG_FILE
-    if not path.is_file():
-        return None
-    try:
-        scope = tomllib.loads(path.read_text(encoding="utf-8")).get("scope", {})
-        dirs = scope.get("src_dirs")
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, AttributeError) as exc:
-        raise ConfigError(f"{CONFIG_FILE} is unreadable: {exc}") from exc
-    if dirs is None:
-        return None
-    if (
-        not isinstance(dirs, list)
-        or not dirs
-        or not all(isinstance(d, str) and d.strip("/") for d in dirs)
-    ):
-        raise ConfigError(f"{CONFIG_FILE}: [scope] src_dirs must be a non-empty list of dirs")
-    return tuple(_harness._normalize(d.strip("/")) for d in dirs)
+    return config().src_dirs
 
 
 def _protected_roots() -> tuple[str, ...]:
@@ -671,8 +659,67 @@ def check_plan_seals() -> int:
     return 1 if problems else 0
 
 
+def check_branch() -> int:
+    """With [git] configured, the in_progress subtask must be on its task branch."""
+    try:
+        cfg = config()
+    except ConfigError:
+        return 0  # check_scope already reports it
+    leaf = _current_leaf()
+    if not cfg.git_configured or not leaf:
+        return 0
+    if _git_out("rev-parse", "--git-dir") is None:
+        say("WARN", "task branch check skipped (not a git repo)")
+        return 0
+    try:
+        expected = _harness.task_branch(leaf.rsplit(".", 1)[0], cfg)
+    except ValueError as exc:
+        say("FAIL", str(exc))
+        return 1
+    current = (_git_out("branch", "--show-current") or "").strip() or "a detached HEAD"
+    if current != expected:
+        say(
+            "FAIL",
+            f"subtask {leaf} is in_progress on '{current}', but its task branch is "
+            f"'{expected}' (harness.toml [git] branch)",
+        )
+        return 1
+    say("OK", f"subtask {leaf} is on its task branch {expected}")
+    return 0
+
+
 def integrity() -> int:
-    return check_scope() | check_seals() | check_plan_seals()
+    return check_scope() | check_branch() | check_seals() | check_plan_seals()
+
+
+def setup_pending() -> int:
+    """Exit 1 while the setup branch holds changes main does not have yet."""
+    try:
+        branch = config().setup_branch
+    except ConfigError as exc:
+        say("FAIL", str(exc))
+        return 1
+    if _git_out("rev-parse", "-q", "--verify", f"refs/heads/{branch}") is None:
+        return 0  # never created, or deleted after its merge
+    base = _git_out("merge-base", "main", branch)
+    changed = _git_out("diff", "--name-only", (base or "").strip(), branch) if base else None
+    files = [f":(top){f}" for f in (changed or "").splitlines() if f]
+    if base is not None and changed is not None and not files:
+        return 0  # merged (merge commit / fast-forward) or empty
+    same = subprocess.run(
+        ["git", "diff", "--quiet", branch, "main", "--", *files],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if base is not None and files and same.returncode == 0:
+        return 0  # squash-merged: main already has the branch's version of every file
+    say(
+        "FAIL",
+        f"the setup branch '{branch}' has changes main does not contain yet: merge it "
+        "(PR / squash) before the first subtask, or delete it if it is obsolete",
+    )
+    return 1
 
 
 def _acceptance_files(leaf: str) -> list[Path]:
@@ -796,6 +843,8 @@ def main(argv: list[str]) -> int:
         return seal_command(rest)
     if cmd == "fingerprint":
         return fingerprint()
+    if cmd == "setup-pending":
+        return setup_pending()
     print(__doc__, file=sys.stderr)
     return 2
 

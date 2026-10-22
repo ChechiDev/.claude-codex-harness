@@ -55,6 +55,10 @@ footer `Plan: docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`).
 - goal: user value objects with validation
 ```
 
+When `harness.toml` `[git]` uses `{ticket}` (for example
+`branch = "feature/{ticket}-{slug}"`), each task also carries its ticket id:
+`- ticket: GUAK-042`.
+
 ### Subtask spec — `docs/plan/phase-01-users/1.1.1-email-value-object.md`
 
 ```markdown

@@ -22,6 +22,8 @@ Commands:
   phase-ready <NN>       exit 0 if phase NN can go through the phase gate
   subtask-ready <id>     exit 0 if subtask <id> can go through the plan gate
   verdict <file>         print the verdict of a Codex review file (empty if none)
+  branch <N.M>           print the task branch (harness.toml [git] branch)
+  commit-prefix <N.M.K>  print the close-commit subject prefix (may be empty)
   validate               validate invariants; exit != 0 with [FAIL] messages on failure
 """
 
@@ -34,6 +36,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import _config
 from _status import say
 
 FEATURES_FILE = Path("feature_list.json")
@@ -118,6 +121,34 @@ def _normalize(rel: str) -> str:
     return "/".join(parts)
 
 
+def _task(tid: str) -> Item | None:
+    return next((t for t in _tasks() if str(t["id"]) == str(tid)), None)
+
+
+def _render(pattern: str, tid: str, cfg: _config.Config) -> str:
+    """Fill a [git] pattern for task <tid>. Raises ValueError with the reason."""
+    task = _task(tid)
+    if task is None:
+        raise ValueError(f"task {tid} does not exist in docs/plan/")
+    ticket = str(task.get("ticket", ""))
+    if cfg.needs_ticket and not ticket:
+        raise ValueError(
+            f"task {tid} has no '- ticket:' line in its phase file "
+            "(harness.toml [git] uses {ticket})"
+        )
+    if ticket and not _config.RE_TICKET.match(ticket):
+        raise ValueError(f"task {tid}: ticket '{ticket}' may only use letters, digits, - and _")
+    return _config.render(pattern, tid, str(task.get("title", "")), ticket)
+
+
+def task_branch(tid: str, cfg: _config.Config) -> str:
+    """The branch task <tid> lives on. Raises ValueError with the reason."""
+    name = _render(cfg.branch, tid, cfg)
+    if not _config.valid_branch(name):
+        raise ValueError(f"task {tid}: '{name}' is not a valid branch name")
+    return name
+
+
 def read_verdict(path: Path) -> str:
     """The verdict token of a Codex review file, or "" if missing/unparseable."""
     try:
@@ -182,6 +213,22 @@ def _start_problems(leaf: Item, status: dict[str, str]) -> list[str]:
             problems.append(
                 f"{leaf['id']} is {leaf['status']} but depends on {dep} ({status.get(dep)})"
             )
+    return problems
+
+
+def config_problems() -> list[str]:
+    try:
+        cfg = _config.load(Path.cwd())
+    except _config.ConfigError as exc:
+        return [str(exc)]
+    if not cfg.git_configured:
+        return []
+    problems = []
+    for task in _tasks():
+        try:
+            task_branch(str(task["id"]), cfg)
+        except ValueError as exc:
+            problems.append(str(exc))
     return problems
 
 
@@ -274,6 +321,24 @@ def _leaf_field(fid: str, key: str) -> int:
     return _print(leaf.get(key) if leaf else None)
 
 
+def _git_command(render: Callable[[_config.Config], str]) -> int:
+    try:
+        print(render(_config.load(Path.cwd())))
+    except (_config.ConfigError, ValueError) as exc:
+        say("FAIL", str(exc), sys.stderr)
+        return 1
+    return 0
+
+
+def branch(tid: str) -> int:
+    return _git_command(lambda cfg: task_branch(tid, cfg))
+
+
+def commit_prefix(sid: str) -> int:
+    tid = sid.rsplit(".", 1)[0]
+    return _git_command(lambda cfg: _render(cfg.commit_prefix, tid, cfg))
+
+
 def validate() -> int:
     units = leaves()
     problems = []
@@ -287,7 +352,7 @@ def validate() -> int:
         for leaf in units
         if leaf["status"] not in VALID
     ]
-    problems += plan_problems()
+    problems += plan_problems() + config_problems()
     if not problems:
         say("OK", f"feature_list.json valid ({len(units)} work units)")
     return _report(problems)
@@ -315,6 +380,8 @@ def main(argv: list[str]) -> int:
         "phase-ready": lambda: _report(phase_ready_problems(arg)),
         "subtask-ready": lambda: _report(subtask_ready_problems(arg)),
         "validate": validate,
+        "branch": lambda: branch(arg),
+        "commit-prefix": lambda: commit_prefix(arg),
     }
     fn = dispatch.get(cmd)
     if fn is None:

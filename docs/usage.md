@@ -61,8 +61,9 @@ acceptance criteria, description), then runs:
 OK, phase approved. Start the first subtask and run its plan gate.
 ```
 
-The leader switches to the task branch `feat/<N.M>-<slug>` (created from `main`
-for the first subtask of a task), sets the subtask to `in_progress`, runs
+The leader switches to the task branch (`feat/<N.M>-<slug>` by default, or the
+project's pattern in `harness.toml` `[git]`, see [configuration](configuration.md#git-conventions-harnesstoml-git);
+created from `main` for the first subtask of a task), sets the subtask to `in_progress`, runs
 `make plan`, records it in `progress/current.md` and runs:
 
 ```bash

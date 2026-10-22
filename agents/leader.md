@@ -63,6 +63,8 @@ you do). For the current phase:
    - layer: domain
    - goal: <one sentence>
    ```
+   If `harness.toml` `[git]` uses `{ticket}`, every task also needs
+   `- ticket: <id>` (ask the user for the ids; `make check` fails without them).
 2. Write **one spec per subtask** in `docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`
    (format in `docs/plan/PLAN.md`): `status: pending`, `layer`, `depends`,
    `files:` (1-3), `acceptance:` (observable criteria, one test path each:
@@ -102,10 +104,14 @@ If a unit of work would need more than ~3 files, split it into several subtasks.
 1. **Pick** the next `pending` subtask of the current phase whose `depends` are
    all `done` (`make status` names it) and get on its **task branch** (one branch
    per task `N.M`, one commit per subtask — `branch` standard):
-   - If `git branch --no-merged main` lists `chore/project-setup`, **stop**: the
-     project setup must be merged into `main` first (that merge is the user's).
-   - First subtask of the task → `git switch -c feat/<N.M>-<slug> main`
-     (type per the `branch` standard). Later subtasks → `git switch feat/<N.M>-<slug>`.
+   - If `python3 harness/_guard.py setup-pending` fails, **stop**: the project
+     setup branch must reach `main` first (that merge is the user's).
+   - Never write the branch name by hand: the harness computes it from
+     `harness.toml` `[git] branch` (default `feat/<N.M>-<slug>`), and with `[git]`
+     configured `make check` fails on any other branch:
+     `python3 harness/_harness.py branch <N.M>`.
+     First subtask of the task → `git switch -c "$(python3 harness/_harness.py branch <N.M>)" main`.
+     Later subtasks → `git switch "$(python3 harness/_harness.py branch <N.M>)"`.
    Then set `status: in_progress` in its spec, run `make plan`, and record it in
    `progress/current.md`.
 2. **Plan gate — Codex.** `./harness/review_with_codex.sh plan <N.M.K>`. Codex

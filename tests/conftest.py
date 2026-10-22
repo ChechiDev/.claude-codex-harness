@@ -111,7 +111,7 @@ def bash_payload(command: str) -> dict[str, Any]:
 # ── docs/plan projects (phases + specs + Codex verdicts) ─────────────────────
 
 PHASE = "# Phase {n} — {title}\n- goal: {title} goal.\n{tasks}"
-TASK = "\n## {tid} Task {tid}\n- layer: domain\n- goal: g.\n"
+TASK = "\n## {tid} Task {tid}\n{ticket}- layer: domain\n- goal: g.\n"
 SPEC = (
     "# {sid} Sub {sid}\n- status: {status}\n- layer: domain\n- depends: {depends}\n"
     "- files:\n  - src/app/m{slug}.py\n"
@@ -129,6 +129,7 @@ class Plan:
         (root / "progress").mkdir()
         self.phases: dict[str, list[str]] = {}
         self.specs: dict[str, tuple[str, str]] = {}
+        self.tickets: dict[str, str] = {}
 
     def phase(self, n: str, *tasks: str) -> Plan:
         self.phases[n] = list(tasks)
@@ -136,6 +137,17 @@ class Plan:
 
     def sub(self, sid: str, status: str = "pending", depends: str = "none") -> Plan:
         self.specs[sid] = (status, depends)
+        return self
+
+    def ticket(self, tid: str, value: str) -> Plan:
+        self.tickets[tid] = value
+        return self
+
+    def _ticket_line(self, tid: str) -> str:
+        return f"- ticket: {self.tickets[tid]}\n" if tid in self.tickets else ""
+
+    def config(self, text: str) -> Plan:
+        (self.root / "harness.toml").write_text(text)
         return self
 
     def verdict(self, name: str, verdict: str) -> Plan:
@@ -151,7 +163,7 @@ class Plan:
     def sync(self) -> Plan:
         plan = self.root / "docs" / "plan"
         for n, tasks in self.phases.items():
-            body = "".join(TASK.format(tid=t) for t in tasks)
+            body = "".join(TASK.format(tid=t, ticket=self._ticket_line(t)) for t in tasks)
             (plan / f"phase-{n}-p{n}.md").write_text(PHASE.format(n=n, title=f"P{n}", tasks=body))
         for sid, (status, depends) in self.specs.items():
             n = f"{int(sid.split('.')[0]):02d}"

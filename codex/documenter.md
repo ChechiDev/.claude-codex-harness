@@ -80,8 +80,10 @@ and finish with a **single commit**. You do not change production code or tests.
    complete). Do not commit if it is red.
 6. **Single commit** of everything (code + `tests/acceptance/` + `docs/reference/`
    + `docs/plan/` + `feature_list.json` + `progress/`). Use the `commit` standard:
-   `<type>(<scope>): <what> [N.M.K]` + 2-4 line body (why) +
-   footer `Plan: docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`.
+   `<prefix><type>(<scope>): <what> [N.M.K]` + 2-4 line body (why) +
+   footer `Plan: docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`, where `<prefix>`
+   is exactly what `python3 harness/_harness.py commit-prefix <N.M.K>` prints
+   (from `harness.toml` `[git] commit_prefix`; usually empty).
 
 ## Rules
 

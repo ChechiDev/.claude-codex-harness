@@ -21,6 +21,7 @@ Phase file (docs/plan/phase-01-users.md):
   - goal: <one sentence>
 
   ## 1.1 <task title>
+  - ticket: GUAK-042                   (optional; required if harness.toml [git] uses {ticket})
   - layer: domain
   - goal: <one sentence>
 
@@ -207,7 +208,7 @@ class PlanParser:
         if int(m.group(1)) != int(pid):
             self.errors.append(f"task {tid} belongs to phase {int(m.group(1)):02d}, not {pid}")
         meta = _meta(body)
-        return {
+        task: Item = {
             "id": tid,
             "title": m.group(3),
             "phase": pid,
@@ -216,6 +217,9 @@ class PlanParser:
             "status": "pending",
             "subtasks": [],
         }
+        if meta.get("ticket"):  # only when set: older feature_list.json files stay in sync
+            task["ticket"] = meta["ticket"]
+        return task
 
     def _specs(self, pid: str, folder: Path, tasks: dict[str, Item]) -> None:
         if not folder.is_dir():

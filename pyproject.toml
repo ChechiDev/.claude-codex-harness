@@ -32,4 +32,4 @@ max-complexity = 10
 strict = true
 python_version = "3.12"
 mypy_path = "lib"
-files = ["lib/_guard.py", "lib/_harness.py", "lib/_plan_seal.py", "lib/_status.py", "lib/plan_status.py", "lib/sync_plan.py", "tests"]
+files = ["lib/_config.py", "lib/_guard.py", "lib/_harness.py", "lib/_plan_seal.py", "lib/_status.py", "lib/plan_status.py", "lib/sync_plan.py", "tests"]

@@ -121,7 +121,8 @@ cd /path/to/project && claude
    Codex writes the acceptance tests, which stay red until the code exists.
 4. **Approve the plan:** `OK, launch the implementer, then the code gate.`
 5. **Approve the code:** `OK, run the close.` Codex documents the subtask and
-   makes one commit on the task branch `feat/<N.M>-<slug>`.
+   makes one commit on the task branch (`feat/<N.M>-<slug>`, or your team's
+   pattern in [`harness.toml`](docs/configuration.md#git-conventions-harnesstoml-git)).
 6. **Next:** check `make status` and `git log -1`, then approve the next
    subtask. Merge the task branch into `main` when the task is done.
 
