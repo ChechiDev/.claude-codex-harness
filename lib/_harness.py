@@ -10,6 +10,11 @@ Codex before any phase is broken down; phases are broken down one at a time
 (phase N+1 only once phase N is done); a subtask starts only once its phase
 breakdown is approved and its dependencies are done.
 
+`baseline` is work that existed before the harness: it counts as done for
+progression and dependencies once its phase is PHASE_APPROVED, and needs no
+code review nor reference doc (it is not in done-ids). Its status line is part
+of the phase seal (_plan_seal.py), so nothing turns baseline after approval.
+
 Usage: python3 _harness.py <command> [args]
 Commands:
   in-progress-id         print the id of the single in_progress leaf (empty if none)
@@ -41,7 +46,7 @@ from _status import say
 
 FEATURES_FILE = Path("feature_list.json")
 ROADMAP_REVIEW = Path("progress/roadmap_review.md")
-VALID = {"pending", "in_progress", "done", "blocked"}
+VALID = {"pending", "in_progress", "done", "blocked", "baseline"}
 STARTED = {"in_progress", "done"}
 # Only the explicit verdict line counts: a substring match would let a
 # CHANGES_REQUESTED review that merely mentions "PLAN_APPROVED" open the gate.
@@ -169,9 +174,20 @@ def _broken_down(phase: Item) -> bool:
     return bool(phase.get("tasks"))
 
 
+def complete(leaf: Item) -> bool:
+    """Done, or baseline in a phase Codex approved (unapproved baseline is a claim)."""
+    if leaf["status"] == "baseline":
+        return read_verdict(phase_review(str(leaf["phase"]))) == "PHASE_APPROVED"
+    return bool(leaf["status"] == "done")
+
+
+def _complete_ids() -> set[str]:
+    return {str(leaf["id"]) for leaf in leaves() if complete(leaf)}
+
+
 def _done(pid: str) -> bool:
     subs = _phase_leaves(pid)
-    return bool(subs) and all(s["status"] == "done" for s in subs)
+    return bool(subs) and all(complete(s) for s in subs)
 
 
 def _roadmap_problems() -> list[str]:
@@ -200,7 +216,7 @@ def _progression_problems() -> list[str]:
     return problems
 
 
-def _start_problems(leaf: Item, status: dict[str, str]) -> list[str]:
+def _start_problems(leaf: Item, status: dict[str, str], finished: set[str]) -> list[str]:
     problems = []
     pid = leaf["phase"]
     if read_verdict(phase_review(pid)) != "PHASE_APPROVED":
@@ -209,7 +225,7 @@ def _start_problems(leaf: Item, status: dict[str, str]) -> list[str]:
             f"({phase_review(pid)})"
         )
     for dep in leaf.get("depends", []):
-        if status.get(dep) != "done":
+        if dep not in finished:
             problems.append(
                 f"{leaf['id']} is {leaf['status']} but depends on {dep} ({status.get(dep)})"
             )
@@ -225,6 +241,9 @@ def config_problems() -> list[str]:
         return []
     problems = []
     for task in _tasks():
+        subs = task.get("subtasks") or []
+        if not task.get("ticket") and subs and all(s.get("status") == "baseline" for s in subs):
+            continue  # never goes through the cycle, so it never gets a branch
         try:
             task_branch(str(task["id"]), cfg)
         except ValueError as exc:
@@ -235,10 +254,11 @@ def config_problems() -> list[str]:
 def plan_problems() -> list[str]:
     units = leaves()
     status = {str(leaf["id"]): str(leaf["status"]) for leaf in units}
+    finished = _complete_ids()
     problems = _roadmap_problems() + _progression_problems()
     for leaf in units:
         if leaf["status"] in STARTED:
-            problems += _start_problems(leaf, status)
+            problems += _start_problems(leaf, status, finished)
     return problems
 
 
@@ -265,7 +285,7 @@ def subtask_ready_problems(fid: str) -> list[str]:
     if leaf is None:
         return [f"subtask {fid} does not exist in docs/plan/"]
     status = {str(item["id"]): str(item["status"]) for item in leaves()}
-    return _start_problems({**leaf, "status": "starting"}, status)
+    return _start_problems({**leaf, "status": "starting"}, status, _complete_ids())
 
 
 # ── commands ─────────────────────────────────────────────────────────────────

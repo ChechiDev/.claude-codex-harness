@@ -9,7 +9,8 @@ Layout (the leader writes it; Codex reviews it):
   docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md     one spec per subtask (micro-task)
 
 Status is written ONLY in the subtask specs. Task and phase status, feature_list.json
-and the PLAN.md index are derived here — never hand-edit them.
+and the PLAN.md index are derived here — never hand-edit them. `baseline` marks
+work that existed before the harness: it derives like `done` (see _harness.py).
 
 Usage:
   python3 sync_plan.py            write feature_list.json + the PLAN.md index
@@ -28,7 +29,7 @@ Phase file (docs/plan/phase-01-users.md):
 Subtask spec (docs/plan/phase-01-users/1.1.1-email-value-object.md):
 
   # 1.1.1 Email value object
-  - status: pending
+  - status: pending                    (pending | in_progress | done | blocked | baseline)
   - layer: domain
   - depends: none                      (or: 1.1.2, 1.2.1)
   - files:
@@ -66,7 +67,8 @@ RE_SPEC_HEADING = re.compile(r"^#\s+(\d+\.\d+\.\d+)\s+(.+?)\s*$")
 RE_META = re.compile(r"^-\s+(\w+):\s*(.*?)\s*$")
 RE_AC = re.compile(r"^\s+-\s+(AC\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*$")
 RE_ITEM = re.compile(r"^\s+-\s+(\S.*)$")
-VALID_STATUS = ("pending", "in_progress", "done", "blocked")
+VALID_STATUS = ("pending", "in_progress", "done", "blocked", "baseline")
+COMPLETE = ("done", "baseline")
 LIST_KEYS = ("files", "acceptance")
 
 Item = dict[str, Any]
@@ -136,9 +138,9 @@ def _derive(statuses: list[str]) -> str:
     """Task/phase status from its subtasks' statuses."""
     if not statuses:
         return "pending"
-    if all(s == "done" for s in statuses):
+    if all(s in COMPLETE for s in statuses):
         return "done"
-    if "in_progress" in statuses or "done" in statuses:
+    if any(s in ("in_progress", *COMPLETE) for s in statuses):
         return "in_progress"
     if "blocked" in statuses:
         return "blocked"
@@ -304,8 +306,8 @@ def build(parser: PlanParser) -> Item:
 
 # ── PLAN.md index ────────────────────────────────────────────────────────────
 
-MARK = {"done": "[x]", "in_progress": "[~]", "blocked": "[!]", "pending": "[ ]"}
-SUFFIX = {"in_progress": " — in progress", "blocked": " — blocked"}
+MARK = {"done": "[x]", "baseline": "[x]", "in_progress": "[~]", "blocked": "[!]", "pending": "[ ]"}
+SUFFIX = {"in_progress": " — in progress", "blocked": " — blocked", "baseline": " — baseline"}
 
 
 def _subtask_line(sub: Item) -> str:
@@ -324,7 +326,7 @@ def _subtask_line(sub: Item) -> str:
 
 def _phase_block(phase: Item, tasks: list[Item]) -> list[str]:
     subs = [s for t in tasks for s in t["subtasks"]]
-    done = sum(s["status"] == "done" for s in subs)
+    done = sum(s["status"] in COMPLETE for s in subs)
     progress = f"{done}/{len(subs)} done" if tasks else "not broken down yet"
     lines = [f"### Phase {phase['id']} — {phase['title']} · {progress}"]
     if phase["goal"]:
@@ -350,8 +352,10 @@ def render_index(data: Item) -> str:
         lines += ["No phases planned yet.", ""]
     else:
         count = {st: sum(s["status"] == st for s in subs) for st in VALID_STATUS}
+        done = count["done"] + count["baseline"]
+        base = f" ({count['baseline']} baseline)" if count["baseline"] else ""
         lines += [
-            f"{count['done']} of {len(subs)} subtasks done · {count['in_progress']} in progress"
+            f"{done} of {len(subs)} subtasks done{base} · {count['in_progress']} in progress"
             f" · {count['pending']} pending · {count['blocked']} blocked",
             "",
         ]

@@ -11,7 +11,7 @@ Two engines, each with the work the other must not do:
 | Engine | Writes | Never writes |
 |--------|--------|--------------|
 | **Claude** (leader + implementer) | the plan (`docs/plan/`), `src/`, `tests/unit/`, `progress/current.md`, `progress/impl_<N.M.K>.md` | `tests/acceptance/`, Codex verdicts and seals, commits |
-| **Codex** (reviewer + documenter) | gate verdicts, acceptance tests, `docs/reference/`, `progress/history.md`, the close commit | production code, unit tests |
+| **Codex** (reviewer + documenter) | gate verdicts, acceptance tests, `docs/reference/`, `progress/history.md`, the close commit message | production code, unit tests, `.git` |
 
 Whoever writes the code is not the one who approves, documents or commits it.
 The hooks and `make check` enforce this split; it does not depend on the model
@@ -118,9 +118,9 @@ Enforced by the hooks in `settings.json` and by `make check`:
    [configuration](configuration.md) for the escape valve.
 5. **No `done` without proof.** `progress/review_<N.M.K>.md` = `APPROVED`, a
    complete `docs/reference/<N.M.K>-<slug>.md` (`doc_gate`) and `make check` green.
-6. **No agent attribution in commits.** The close commit is made by Codex,
-   outside Claude's hooks, so there the rule is enforced by the documenter
-   prompt (`codex/documenter.md`), not by a hook.
+6. **No agent attribution in commits.** Codex writes the close message;
+   `review_with_codex.sh` commits it only after `make check` is green, and
+   refuses a message with attribution or without `[N.M.K]`.
 
 ### Two layers of enforcement
 
@@ -131,7 +131,7 @@ Enforced by the hooks in `settings.json` and by `make check`:
 
 The outcome layer is what makes the rules hold regardless of *how* a file was
 written. The close window exists because the documenter marks the subtask
-`done` and runs `make check` before its commit; once that commit lands, the
+`done` and the harness runs `make check` before the commit; once that commit lands, the
 subtask is `done` in `HEAD` and its files are closed again.
 
 Clean code (bounded function size, complexity and arguments) is enforced by

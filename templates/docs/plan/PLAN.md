@@ -76,7 +76,7 @@ When `harness.toml` `[git]` uses `{ticket}` (for example
 Immutable value object that validates and normalizes an email address…
 ```
 
-- `status` ∈ `pending | in_progress | done | blocked`.
+- `status` ∈ `pending | in_progress | done | blocked | baseline` (`baseline`: already built before the harness; only the phase gate reviews it).
 - `layer` ∈ `domain | application | infrastructure | interfaces`.
 - `depends`: `none` or subtask ids (`1.1.1, 1.2.3`) that must be `done` first.
 - `files:` the **1-3 production files under `src/`** it creates/modifies (the

@@ -43,10 +43,11 @@ Common criteria (what a senior engineer would look at):
   The accompanying `tests/unit/` are the implementer's and are **expected** — they
   do not need to be declared. Reject only when a subtask bundles several concerns
   or touches `src/` files outside its declared `files:`.
-- **Toolchain**: `make verify` (ruff + strict mypy + pytest) must be green **in
-  `code` mode**. In `plan` mode the acceptance tests you write are left **red** by
-  design, so a red suite is expected — do **not** run `make check`/`make verify`
-  as a blocking preflight there (see the plan-gate exception in `AGENTS.md`).
+- **Toolchain**: never run `make check`, `make verify` or the tests yourself: your
+  sandbox blocks local sockets, so test clients hang. The harness runs `make check`
+  outside the sandbox before your session and the prompt gives you its exit code
+  and log. It must be green **in `code` mode**. In `plan` mode the acceptance tests
+  you write are left **red** by design (see the plan-gate exception in `AGENTS.md`).
 - Objective criteria from `docs/architecture.md`, `docs/conventions.md`, and `CHECKPOINTS.md`.
 - For **Python** projects the shared-standard skills apply: read `py-pytest`,
   `py-style`, `py-pydantic`, `py-typing` as authoritative. For **C** projects use
@@ -104,6 +105,12 @@ Check:
   implementation detail could check.
 - **Phase discipline**: only this phase is broken down; later phases keep only
   their title + goal.
+- **Baseline** (`status: baseline`: work that existed before the harness; it
+  will skip the plan, code and doc gates, so this is its only review): read the
+  declared `files:` and the tests its `acceptance:` names, and request changes
+  for any baseline subtask that the code does not actually implement, that is
+  only partly built (it must be `pending`), or whose tests do not exist. The
+  1-3 `files:` limit and the `tests/acceptance/` path do not apply to it.
 
 Verdict in `progress/phase_review_<NN>.md`:
 
@@ -116,7 +123,7 @@ Verdict in `progress/phase_review_<NN>.md`:
 - Coverage / scope / dependencies / acceptance: ...
 
 ## Per subtask
-- 1.1.1: ok | <issue>
+- 1.1.1: ok | <issue>   (baseline: say what in the code proves it)
 
 ## Requested changes (if CHANGES_REQUESTED)
 1. ...
@@ -177,7 +184,8 @@ or `CHANGES_REQUESTED -> progress/plan_review_<N.M.K>.md`.
 
 Input: the files changed by the implementer (see `progress/impl_<N.M.K>.md`).
 
-1. Run `make verify`. If red → `CHANGES_REQUESTED`, no further analysis.
+1. Read the harness check (exit code and log in the prompt). If it is not 0 →
+   `CHANGES_REQUESTED` citing the failure, no further analysis.
 2. Review each file against the common criteria. Are the unit tests real or trivial?
    Check **DRY/SOLID** actively (duplicated or misplaced logic → `CHANGES_REQUESTED`
    citing `file:line`).
@@ -210,6 +218,6 @@ or `CHANGES_REQUESTED -> progress/review_<N.M.K>.md`.
 
 ## Hard rules
 
-- ❌ Never approve with `make verify` red.
+- ❌ Never approve with the harness check red.
 - ❌ Never edit the implementer's production code.
 - ✅ Be specific: cite `file:line`.

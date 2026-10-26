@@ -3,6 +3,7 @@
 #   review_with_codex.sh roadmap              Codex reviews PLAN.md + every phase (scope)
 #   review_with_codex.sh phase <NN>           Codex reviews the breakdown of phase NN
 #   review_with_codex.sh <plan|code|doc> <N.M.K>   per-subtask gates and close
+#   review_with_codex.sh close <N.M.K>        check + commit a close (after manual `doc`)
 #   review_with_codex.sh seal <N.M.K|roadmap|phase NN>   (human, manual mode: seal)
 #
 # Each gate checks its preconditions first (roadmap approved before a phase gate,
@@ -17,8 +18,15 @@
 # Sandbox (least privilege by default):
 #   HARNESS_CODEX_SANDBOX  workspace-write (default) | read-only | danger-full-access
 #   HARNESS_CODEX_NETWORK  1 → allow network inside workspace-write (default: off)
-# Under workspace-write Codex can write the project but not .git, so the extra
-# writable roots are: the uv cache (always) and the git dir (doc phase only, to commit).
+# Under workspace-write Codex can write the project but not .git; the only extra
+# writable root is the uv cache.
+#
+# The test suite runs HERE, outside the sandbox: with the network off the sandbox
+# also blocks local sockets, so web-framework test clients hang inside it. Before
+# every gate the harness runs HARNESS_CHECK_CMD (default `make check`) and hands
+# Codex the exit code and the log. The close (`doc`) ends with Codex writing its
+# commit message to progress/close_<N.M.K>.msg; the harness then runs the check
+# again and, if green, makes the commit itself (`close`).
 set -uo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,13 +38,36 @@ cd "$PROJECT_DIR" || exit 1
 
 usage() {
   echo "usage: review_with_codex.sh roadmap | phase <NN> | <plan|code|doc> <N.M.K>" \
-       "| seal <N.M.K|roadmap|phase NN>" >&2
+       "| close <N.M.K> | seal <N.M.K|roadmap|phase NN>" >&2
   exit 2
 }
 PHASE="${1:-}"; shift || true
 HARNESS_PY="$HARNESS_DIR/_harness.py"
+CHECK_CMD="${HARNESS_CHECK_CMD:-make check}"
+
+# Run the project check outside the sandbox; $1 = log file. Returns its exit code.
+run_check() { bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null; }
+new_log() { mktemp "${TMPDIR:-/tmp}/harness-check-$1.XXXXXX"; }
+
+# Commit a close: the documenter's message, only with the check green.
+close_commit() {
+  local id="$1" msg="progress/close_$1.msg" log text
+  python3 "$HARNESS_DIR/_guard.py" commit-message "$msg" "$id" || return 1
+  log="$(new_log close)"
+  if ! run_check "$log"; then
+    fail "$CHECK_CMD is red after the close of $id: nothing committed (log: $log)" >&2
+    tail -n 30 "$log" >&2
+    return 1
+  fi
+  text="$(cat "$msg")"
+  rm -f "$msg"
+  git add -A && printf '%s\n' "$text" | git commit -q -F - || return 1
+  ok "closed -> $id ; commit $(git rev-parse --short HEAD)"
+}
+
 case "$PHASE" in
   seal)    exec python3 "$HARNESS_DIR/_guard.py" seal "$@" ;;
+  close)   [ -n "${1:-}" ] || usage; close_commit "$1"; exit $? ;;
   roadmap) ID="roadmap"; ROLE="$CODEX_DIR/reviewer.md" ;;
   phase|plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
   doc)     ID="${1:-}"; ROLE="$CODEX_DIR/documenter.md" ;;
@@ -76,6 +107,16 @@ case "$PHASE" in
 esac
 FEATURE_NAME="$(python3 "$HARNESS_PY" feature-name "$ID" 2>/dev/null)"
 
+CHECK_LOG="$(new_log "$PHASE")"
+run_check "$CHECK_LOG"
+CHECK_RC=$?
+CLOSE_STEP=""
+if [ "$PHASE" = "doc" ]; then
+  CLOSE_STEP="
+Close: do not commit. Write the commit message to progress/close_$ID.msg and
+stop; the harness then runs \`$CHECK_CMD\` and makes the commit."
+fi
+
 # Build the concrete instruction for Codex.
 PROMPT="$(cat <<EOF
 Act strictly according to your role defined in: $ROLE
@@ -87,6 +128,12 @@ Project root: $PROJECT_DIR
 Context you must read: AGENTS.md, docs/architecture.md, docs/conventions.md,
 CHECKPOINTS.md, feature_list.json, and progress/current.md.
 
+Test suite: this sandbox cannot run it (local sockets are blocked).
+Do NOT run \`make check\`, \`make verify\`, the tests or anything that runs them.
+The harness ran \`$CHECK_CMD\` outside the sandbox just before this session:
+exit code $CHECK_RC, full output in $CHECK_LOG.
+That result is the one AGENTS.md step 1 asks for.$CLOSE_STEP
+
 Respect your role's output contract (write the verdict/result to the indicated
 progress/ file and return a single reference line).
 Do not edit production code. Do not add agent attribution.
@@ -95,10 +142,9 @@ EOF
 
 # --- Model, effort and sandbox for the codex CLI (verified with codex exec --help).
 # Effort is not a dedicated flag: it is passed as a config override.
-# Sandbox: the reviewer must WRITE (acceptance tests + verdict) and RUN the uv
-# toolchain, so read-only fails. workspace-write covers the project; it keeps
-# .git read-only and blocks the network, so grant only what each phase needs
-# (verified with `codex sandbox`): the uv cache, plus the git dir for `doc`.
+# Sandbox: the reviewer must WRITE (acceptance tests + verdict) and may run static
+# tools through uv, so read-only fails. workspace-write covers the project; it
+# keeps .git read-only and blocks the network (verified with `codex sandbox`).
 SANDBOX="${HARNESS_CODEX_SANDBOX:-workspace-write}"
 CODEX_ARGS=(--model "$MODEL" --sandbox "$SANDBOX")
 case "$EFFORT" in
@@ -106,10 +152,6 @@ case "$EFFORT" in
 esac
 if [ "$SANDBOX" = "workspace-write" ]; then
   ROOTS=("$(uv cache dir 2>/dev/null || echo "${UV_CACHE_DIR:-$HOME/.cache/uv}")")
-  if [ "$PHASE" = "doc" ]; then
-    ROOTS+=("$(git rev-parse --absolute-git-dir 2>/dev/null)")
-    ROOTS+=("$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")
-  fi
   # A JSON array of strings is valid TOML for the -c override.
   ROOTS_TOML="$(python3 -c 'import json,sys; print(json.dumps(sorted({p for p in sys.argv[1:] if p})))' "${ROOTS[@]}")"
   CODEX_ARGS+=(-c "sandbox_workspace_write.writable_roots=$ROOTS_TOML")
@@ -128,6 +170,10 @@ if [ "$MODE_EXEC" = "manual" ]; then
     echo "--- after $SEAL_ON, seal what was approved (human only) ---"
     echo "./harness/review_with_codex.sh seal ${SEAL_ARGS[*]}"
   fi
+  if [ "$PHASE" = "doc" ]; then
+    echo "--- after Codex writes progress/close_$ID.msg, check and commit ---"
+    echo "./harness/review_with_codex.sh close $ID"
+  fi
   exit 0
 fi
 
@@ -139,6 +185,12 @@ fi
 # Non-interactive execution via `codex exec`.
 printf '%s\n' "$PROMPT" | codex exec "${CODEX_ARGS[@]}"
 RC=$?
+
+if [ "$PHASE" = "doc" ]; then
+  [ $RC -eq 0 ] || exit $RC
+  close_commit "$ID"
+  exit $?
+fi
 
 # Seal what Codex just approved (roadmap, phase breakdown, or the subtask's
 # acceptance tests + spec): check.sh then fails if it changes afterwards,

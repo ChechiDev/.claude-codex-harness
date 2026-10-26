@@ -19,6 +19,7 @@ Item = dict[str, Any]
 OUT = sys.stdout
 TAGS: dict[str, tuple[str, Kind | None]] = {
     "done": ("[DONE]", "OK"),
+    "baseline": ("[BASE]", "OK"),
     "in_progress": ("[WIP]", "WARN"),
     "blocked": ("[BLOCK]", "FAIL"),
     "pending": ("[TODO]", None),
@@ -43,12 +44,20 @@ def _subs(data: Item, pid: str) -> list[Item]:
     return [s for t in data["features"] if t["phase"] == pid for s in t["subtasks"]]
 
 
+def _complete(sub: Item, pid: str) -> bool:
+    return _harness.complete({**sub, "phase": pid})
+
+
+def _complete_ids(data: Item) -> set[str]:
+    return {s["id"] for t in data["features"] for s in t["subtasks"] if _complete(s, t["phase"])}
+
+
 def _phase_line(data: Item, phase: Item) -> str:
     pid, subs = phase["id"], _subs(data, phase["id"])
     head = f"Phase {pid} — {phase['title']}"
     if not phase["tasks"]:
         return f"{head} · not broken down yet"
-    done = sum(s["status"] == "done" for s in subs)
+    done = sum(_complete(s, pid) for s in subs)
     if subs and done == len(subs):
         state = paint("done", "OK", OUT)
     else:
@@ -79,8 +88,9 @@ def _tree(data: Item) -> list[str]:
 def _summary(data: Item) -> str:
     subs = [s for t in data["features"] for s in t["subtasks"]]
     n = {st: sum(s["status"] == st for s in subs) for st in TAGS}
+    base = f" · {n['baseline']} baseline" if n["baseline"] else ""
     return (
-        f"{n['done']} done · {n['in_progress']} in progress · {n['pending']} pending"
+        f"{n['done']} done{base} · {n['in_progress']} in progress · {n['pending']} pending"
         f" · {n['blocked']} blocked  ({len(subs)} subtasks)"
     )
 
@@ -107,12 +117,8 @@ def _phase_next(data: Item, pid: str) -> str:
     current = next((s for s in subs if s["status"] == "in_progress"), None)
     if current:
         return _leaf_next(current["id"])
-    status = {s["id"]: s["status"] for t in data["features"] for s in t["subtasks"]}
-    ready = [
-        s
-        for s in subs
-        if s["status"] == "pending" and all(status.get(d) == "done" for d in s["depends"])
-    ]
+    finished = _complete_ids(data)
+    ready = [s for s in subs if s["status"] == "pending" and set(s["depends"]) <= finished]
     if ready:
         return f"start subtask {ready[0]['id']} (leader: in_progress + make plan)"
     blocked = [s["id"] for s in subs if s["status"] == "blocked"]
@@ -136,7 +142,7 @@ def _current_phase(data: Item) -> Item | None:
     phases: list[Item] = data["phases"]
     for phase in phases:
         subs = _subs(data, phase["id"])
-        if not subs or not all(s["status"] == "done" for s in subs):
+        if not subs or not all(_complete(s, phase["id"]) for s in subs):
             return phase
     return None
 

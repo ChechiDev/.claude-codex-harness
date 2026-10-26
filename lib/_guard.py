@@ -14,6 +14,8 @@ Commands:
   fingerprint  print a hash of the git working-tree state (Stop-hook cache key)
   setup-pending  exit 1 if the setup branch (harness.toml [git] setup_branch) has
                  changes main does not contain yet (squash merges count as merged)
+  commit-message <file> <N.M.K>  exit 1 unless <file> is a close-commit message for
+                 subtask <N.M.K>: subject ending in [N.M.K], no agent attribution
 
 Guards exit 0 to allow and 2 to block (reason on stderr). The Bash guard is a
 best-effort shell parser: it cannot see every way a program may write a file,
@@ -31,7 +33,7 @@ import re
 import shlex
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -55,7 +57,7 @@ SKIP_DIRS = {"node_modules", "site-packages"}
 # Gate verdicts (roadmap, phase, plan, code) and every seal under progress/.
 RE_CODEX_OWNED = re.compile(
     r"^(progress/(plan_review|review|phase_review)_[^/]+\.md|progress/roadmap_review\.md"
-    r"|progress/[^/]+\.sha256|\.git/harness-[^/]+)$"
+    r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+)$"
 )
 RE_ATTRIBUTION = re.compile(r"co-authored-by|generated with|🤖|claude code|codex|anthropic", re.I)
 
@@ -110,7 +112,7 @@ MSG_ATTRIBUTION = (
 )
 MSG_COMMIT = (
     "BLOCKED: Claude does not commit in the harness. The single per-subtask commit is made by "
-    "Codex at close (./harness/review_with_codex.sh doc <N.M.K>). If you really need a manual "
+    "the close (./harness/review_with_codex.sh doc <N.M.K>). If you really need a manual "
     "commit outside the flow, the human must start Claude Code with HARNESS_ALLOW_COMMIT=1."
 )
 
@@ -832,21 +834,45 @@ def _run_guard(kind: str) -> int:
     return 0
 
 
+def commit_message(path: str, leaf: str) -> int:
+    """Validate the documenter's close message before the harness commits it."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        say("FAIL", f"no close message at {path}: the close did not finish", sys.stderr)
+        return 1
+    subject = text.strip().splitlines()[0] if text.strip() else ""
+    problems = []
+    if not subject.endswith(f"[{leaf}]"):
+        problems.append(f"the subject must end with [{leaf}]: {subject!r}")
+    if RE_ATTRIBUTION.search(text):
+        problems.append("it contains agent attribution")
+    for problem in problems:
+        say("FAIL", f"close message {path}: {problem}", sys.stderr)
+    return 1 if problems else 0
+
+
+COMMANDS: dict[str, Callable[[list[str]], int]] = {
+    "write": lambda _: _run_guard("write"),
+    "bash": lambda _: _run_guard("bash"),
+    "integrity": lambda _: integrity(),
+    "seal": seal_command,
+    "fingerprint": lambda _: fingerprint(),
+    "setup-pending": lambda _: setup_pending(),
+    "commit-message": lambda rest: commit_message(*rest) if len(rest) == 2 else _usage(),
+}
+
+
+def _usage() -> int:
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str]) -> int:
     os.chdir(ROOT)
     cmd, *rest = argv or [""]
-    if cmd in ("write", "bash"):
-        return _run_guard(cmd)
-    if cmd == "integrity":
-        return integrity()
-    if cmd == "seal":
-        return seal_command(rest)
-    if cmd == "fingerprint":
-        return fingerprint()
-    if cmd == "setup-pending":
-        return setup_pending()
-    print(__doc__, file=sys.stderr)
-    return 2
+    command = COMMANDS.get(cmd)
+    return command(rest) if command else _usage()
 
 
 if __name__ == "__main__":

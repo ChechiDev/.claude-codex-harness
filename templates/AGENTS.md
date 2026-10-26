@@ -6,6 +6,9 @@
 ## 1. Before starting (mandatory)
 
 1. Run `make check`. If it fails, **stop** and fix the harness before touching anything.
+   **Codex** does not run it: its sandbox blocks the local sockets test clients
+   need, so the harness runs it outside the sandbox and the prompt gives Codex
+   the exit code and log.
    Exception — **plan gate**: once Codex has written the acceptance tests for the
    subtask, they are intentionally **red**, so `make verify`/`make check` are
    expected to fail on *those* tests. That is the correct state at the plan phase,

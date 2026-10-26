@@ -8,7 +8,9 @@ changes afterwards. Any change needs a new Codex approval (which re-seals).
                                  (title + goal) of every phase file
   progress/plan_phase_NN.sha256  the phase file (tasks) + every subtask spec
 
-`- status:` lines are excluded: status moves through the cycle on its own. A
+`- status:` lines are excluded: status moves through the cycle on its own.
+`- status: baseline` is the exception: it is part of what Codex approved, so a
+subtask cannot become (or stop being) baseline after the approval. A
 subtask's own plan gate (PLAN_APPROVED) re-seals that one spec; while that gate
 is still open, a change to the in_progress spec is only a warning.
 """
@@ -24,7 +26,7 @@ import _harness
 PLAN_DIR = Path("docs/plan")
 INDEX_RE = re.compile(r"<!-- plan:index:start -->.*?<!-- plan:index:end -->", re.DOTALL)
 RE_PHASE_FILE = re.compile(r"^phase-(\d{2})-[a-z0-9][a-z0-9-]*\.md$")
-RE_STATUS = re.compile(r"^- status:.*$\n?", re.MULTILINE)
+RE_STATUS = re.compile(r"^- status:(?![ \t]*baseline[ \t]*$).*$\n?", re.MULTILINE | re.IGNORECASE)
 
 Entries = dict[str, str]
 

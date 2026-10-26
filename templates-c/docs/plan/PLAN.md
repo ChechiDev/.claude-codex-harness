@@ -77,7 +77,7 @@ When `harness.toml` `[git]` uses `{ticket}` (for example
 Pure function that splits an address at its single '@'…
 ```
 
-- `status` ∈ `pending | in_progress | done | blocked`.
+- `status` ∈ `pending | in_progress | done | blocked | baseline` (`baseline`: already built before the harness; only the phase gate reviews it).
 - `layer` ∈ `core | adapters | interfaces` (adapt to your project).
 - `depends`: `none` or subtask ids (`1.1.1, 1.2.3`) that must be `done` first.
 - `files:` the **1-3 production files under `src/` or `include/`** it

@@ -111,8 +111,10 @@ OK, run the close.
 ```
 
 Codex writes `docs/reference/1.1.1-<slug>.md`, sets `status: done` in the spec,
-runs `make plan`, updates `progress/current.md` and `progress/history.md`, runs
-`make check` and makes **one commit** on the task branch:
+runs `make plan`, updates `progress/current.md` and `progress/history.md` and
+writes the commit message to `progress/close_1.1.1.msg`. The harness then runs
+`make check` outside Codex's sandbox and, if it is green, makes **one commit**
+on the task branch:
 
 ```text
 feat(domain): add slugify function [1.1.1]
@@ -152,6 +154,44 @@ ls -lt ~/.codex/sessions/$(date +%Y/%m/%d)/ | head
 Claude cannot fake a verdict: writing any Codex-owned file in `progress/` is
 blocked by `guard_write.sh` and `guard_bash.sh`.
 
+## Existing project: register what is already built
+
+On a repository that already has working code, the first phases record that
+work, so the plan holds the whole history and new work can depend on it:
+
+```text
+Read the code and docs/, and plan what is already built as the first phases,
+by area, with its subtasks as baseline. Then plan the pending work.
+```
+
+Each implemented subtask is written with `status: baseline` instead of `pending`:
+
+```markdown
+# 1.1.1 Settings loaded from the environment
+- status: baseline
+- layer: infrastructure
+- depends: none
+- files:
+  - app/core/config.py
+- acceptance:
+  - AC1 | rejects a missing JWT secret | tests/unit/test_core_config.py::test_missing_secret
+
+## Description
+Pydantic settings, validated at startup. Documented in docs/backend/configuration.md.
+```
+
+| | `pending` / `done` | `baseline` |
+|---|---|---|
+| Reviewed by | phase, plan and code gates | the phase gate, against the code |
+| Needs a code review and `docs/reference/` | yes (at the close) | no |
+| Counts as done for phases and `depends` | when `done` | once its phase is `PHASE_APPROVED` |
+| Acceptance tests | new, in `tests/acceptance/` | existing tests |
+
+The phase gate requests changes for a baseline subtask the code does not
+implement, or only partly implements; that one is `pending`. After the
+approval, `status: baseline` is sealed: turning a subtask into baseline (or
+back) fails `make check`.
+
 ## Manual Codex mode
 
 With `HARNESS_CODEX_MODE=manual` (see [configuration](configuration.md)), each
@@ -180,5 +220,6 @@ reports but does not block again, so the session cannot loop.
 | `BLOCKED: '<path>' is NOT in the declared 'files:'` | the code needs a file the plan did not declare | the leader adds it to the spec, `make plan`, and the plan gate runs again |
 | `[FAIL] … no longer matches its seal` | a sealed acceptance test or plan file changed | revert it, or re-run the gate that approved it |
 | `make check` red right after the plan gate | acceptance tests are red until the code exists | expected; continue to step 4 |
-| The close says `blocked -> see progress/current.md` | `make check` was red at close | fix the cause recorded there, then re-run `doc <N.M.K>` |
+| The close says `blocked -> see progress/current.md` | Codex could not finish the close | fix the cause recorded there, then re-run `doc <N.M.K>` |
+| `… is red after the close of <N.M.K>: nothing committed` | `make check` failed after Codex closed | fix it (log path in the message), then `./harness/review_with_codex.sh close <N.M.K>` |
 | `[git] no git identity … root commit skipped` at install | `user.name`/`user.email` unset | set them and run `install.sh` again |

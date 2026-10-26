@@ -77,6 +77,27 @@ you do). For the current phase:
    (tasks, subtasks and their files). The subtask cycle starts only when the
    user says so.
 
+## Existing code: `status: baseline`
+
+When the repository already has working code from before the harness, register
+it first so the plan holds the whole history and new work builds on it:
+
+1. In discovery, read the code and its docs, then plan the existing work as the
+   **first phases** (one per area, in the order it was built) and the new work
+   after them. The roadmap gate reviews all of them.
+2. Break each phase down as usual. A subtask that is already implemented gets
+   `status: baseline` instead of `pending`:
+   - `files:` the production files that hold it (evidence; the 1-3 limit does
+     not apply, list the main ones);
+   - `acceptance:` what it does, each criterion pointing to an **existing** test
+     (`tests/unit/test_x.py::test_y`), never a new `tests/acceptance/` file;
+   - `## Description`: what exists and a link to the doc that describes it.
+   Anything not built yet, or only half built, is `pending`.
+3. The phase gate checks every baseline subtask against the code. Once
+   `PHASE_APPROVED`, baseline counts as done (phase progression, `depends`)
+   with no plan/code gate and no reference doc. It is sealed: never turn a
+   subtask into baseline, or back, after its phase is approved.
+
 Once approved, the roadmap and each phase breakdown are **sealed**: changing them
 (except `status`) makes `make check` fail until the corresponding gate approves
 again. If the plan must change, edit it and re-run that gate — never silently.

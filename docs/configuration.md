@@ -101,6 +101,7 @@ projects installed earlier keep working on the branches they already use.
 | `HARNESS_CODEX_MODE` | `auto`, `manual` | `auto` | `review_with_codex.sh`: `manual` prints the `codex exec` command and prompt instead of running it |
 | `HARNESS_CODEX_SANDBOX` | `workspace-write`, `read-only`, `danger-full-access` | `workspace-write` | `review_with_codex.sh`: the `--sandbox` passed to Codex |
 | `HARNESS_CODEX_NETWORK` | `1` | off | `review_with_codex.sh`: allows network inside `workspace-write` |
+| `HARNESS_CHECK_CMD` | a shell command | `make check` | `review_with_codex.sh`: the check it runs outside the sandbox before each gate and before the close commit |
 | `HARNESS_ALLOW_COMMIT` | `1` | unset | `guard_bash.sh`: lets Claude run `git commit` for a conscious manual commit |
 
 Set them for the whole Claude Code session, not inline on one command. The
@@ -114,13 +115,19 @@ HARNESS_CODEX_MODE=manual claude       # gates print the Codex command instead
 
 ### Codex sandbox
 
-Under `workspace-write`, Codex can write the project but not `.git`, and has no
-network. `review_with_codex.sh` adds only the writable roots each gate needs:
+Under `workspace-write`, Codex can write the project (plus the uv cache) but
+not `.git`, and has no network. With the network off the sandbox also blocks
+local sockets, so test clients such as FastAPI's `TestClient` hang inside it.
+The suite therefore never runs in the sandbox:
 
-| Gate | Extra writable roots |
-|------|----------------------|
-| `roadmap`, `phase`, `plan`, `code` | the uv cache |
-| `doc` (close) | the uv cache + the git dir (it makes the commit) |
+| Step | Who | Where |
+|------|-----|-------|
+| `make check` before every gate | `review_with_codex.sh` | outside the sandbox; Codex gets the exit code and the log |
+| Close: reference doc, `status: done`, tracking, commit message | Codex | sandbox, writes `progress/close_<N.M.K>.msg` |
+| `make check` + the close commit | `review_with_codex.sh` | outside the sandbox; no commit if red, or if the message lacks `[N.M.K]` or carries attribution |
+
+In manual mode, run `./harness/review_with_codex.sh close <N.M.K>` after Codex
+writes the message.
 
 Network is needed only if uv must download dependencies during a gate. Run
 `uv sync --all-groups` before the gates instead of setting `HARNESS_CODEX_NETWORK=1`.
