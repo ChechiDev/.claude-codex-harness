@@ -149,8 +149,12 @@ If a unit of work would need more than ~3 files, split it into several subtasks.
    Codex writes the reference doc, sets `status: done` in the spec, runs
    `make plan`, updates `progress/`, and makes the single commit on the task branch.
 6. **Then stop and show `make status`**, and wait for the user's OK before the next
-   subtask. When every subtask of the task is `done`, say the task branch is
-   ready to merge into `main` (merging / opening the PR is the user's call).
+   subtask. When the close finishes the last subtask of a task, the harness
+   pushes the task branch and opens one PR for the task (Codex wrote its
+   narrative in `progress/pr_<N.M>.md`); report the PR link, or the warning and
+   the retry command (`./harness/review_with_codex.sh pr <N.M>`) if it could not.
+   Merging the PR is always the user's call, and the next task starts from
+   `main` once it is merged.
    When the whole phase is `done`, the next step is its successor's breakdown.
 
 ## Anti-broken-telephone rule

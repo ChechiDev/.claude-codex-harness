@@ -8,6 +8,8 @@
   branch = "feature/{ticket}-{slug}"     task branch (default: feat/{task}-{slug})
   commit_prefix = "{ticket} "            prefix of the close commit subject (default: none)
   setup_branch = "chore/project-setup"   branch that must reach main before the first subtask
+  auto_pr = true                         push and open the task PR when its last subtask closes
+  pr_template = ".github/pr.md"          PR body template (default: the harness's pr_template.md)
 
 Placeholders: {task} (1.1), {slug} (the task title in kebab-case), {ticket} (the
 task's `- ticket:` line in its phase file). Every section and key is optional; a
@@ -42,6 +44,8 @@ class Config:
     branch: str = DEFAULT_BRANCH
     commit_prefix: str = ""
     setup_branch: str = DEFAULT_SETUP_BRANCH
+    auto_pr: bool = True
+    pr_template: str = ""  # empty: the harness's default template
     git_configured: bool = False  # a [git] section: the task branch is enforced
 
     @property
@@ -76,6 +80,13 @@ def _string(section: dict[str, Any], key: str, default: str) -> str:
     if not isinstance(value, str):
         raise ConfigError(f"{CONFIG_FILE}: [git] {key} must be a string")
     return value
+
+
+def _pr(section: dict[str, Any]) -> dict[str, Any]:
+    auto_pr = section.get("auto_pr", True)
+    if not isinstance(auto_pr, bool):
+        raise ConfigError(f"{CONFIG_FILE}: [git] auto_pr must be true or false")
+    return {"auto_pr": auto_pr, "pr_template": _string(section, "pr_template", "")}
 
 
 def _git(section: dict[str, Any]) -> dict[str, str]:
@@ -126,8 +137,5 @@ def load(root: Path) -> Config:
         raise ConfigError(f"{CONFIG_FILE} is unreadable: {exc}") from exc
     scope = _section(data, "scope") or {}
     git = _section(data, "git")
-    return Config(
-        src_dirs=_src_dirs(scope),
-        git_configured=git is not None,
-        **(_git(git) if git is not None else {}),
-    )
+    git_values: dict[str, Any] = {} if git is None else {**_git(git), **_pr(git)}
+    return Config(src_dirs=_src_dirs(scope), git_configured=git is not None, **git_values)

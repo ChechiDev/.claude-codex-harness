@@ -135,11 +135,35 @@ make status                       # the subtask is [DONE]
 The first close commit also carries every plan file that was never committed
 (`docs/plan/`, verdicts, seals), since Claude cannot commit them earlier.
 
-## 6. Next subtask, next phase
+## 6. Task pull request
 
-The leader shows `make status` and waits. When a task `N.M` is done, merge its
-branch into `main` (or open a PR). When a phase is done, the leader breaks down
-the next one (step 2).
+When a close finishes the **last subtask of a task** `N.M`, Codex also writes
+`progress/pr_N.M.md` (overview, approach, decisions, issues resolved and open,
+follow-ups, branch notes, where to start reviewing). After the commit the
+harness pushes the task branch and opens **one PR for the task** with `gh`:
+
+- title `feat: <task title> [N.M]`;
+- body rendered from the PR template: Codex's narrative plus a subtask table
+  (commit, spec, Codex reviews, reference note), the files the branch adds or
+  changes (without `progress/` and other harness bookkeeping), and the head,
+  base and task dependencies;
+- no test output (CI shows it on the PR) and no agent attribution.
+
+If `gh` is missing, the push fails or a PR for the branch already exists, the
+close still succeeds: the harness warns (or just pushes the new commits) and
+prints the retry command, `./harness/review_with_codex.sh pr N.M`. Merging is
+always yours. Turn it off per project with `auto_pr = false` in `harness.toml`
+(see [configuration](configuration.md)).
+
+The "issues resolved" part comes from `progress/review_history/`: every gate
+verdict (roadmap, phase, plan, code) is appended there, so rounds a gate
+rejected survive the next verdict that overwrites the review file.
+
+## 7. Next subtask, next phase
+
+The leader shows `make status` and waits. When a task's PR is merged, the next
+task starts from `main`. When a phase is done, the leader breaks down the next
+one (step 2).
 
 ## Checking that Codex really ran
 

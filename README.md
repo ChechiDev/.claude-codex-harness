@@ -18,6 +18,7 @@ per subtask:  [Codex] plan gate (writes acceptance tests, red)
               → [implementer] TDD until make verify is green
               → [Codex] code gate → [Codex] close: docs + status done + ONE commit
               → you approve the next subtask
+per task:     the last close pushes the task branch and opens ONE PR → you merge
 ```
 
 Claude cannot write `src/` before the plan gate, cannot touch files outside the

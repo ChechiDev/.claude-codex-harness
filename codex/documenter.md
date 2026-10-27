@@ -91,6 +91,63 @@ code or tests.
    `docs/reference/` + `docs/plan/` + `feature_list.json` + `progress/`). It
    refuses a subject that does not end in `[N.M.K]` or any agent attribution.
 
+## Task PR narrative (only when the prompt says this close finishes a task)
+
+The last close of a task `N.M` also writes `progress/pr_<N.M>.md`, before the
+commit message. After the commit the harness pushes the task branch and opens
+one pull request for the whole task; it fills the subtask table, the file list
+and the head/base line itself, and takes the rest from this file. Use exactly
+these `##` headings (the harness matches them by name; leave none out):
+
+```markdown
+## Overview
+## Approach
+## Decisions
+## Issues resolved
+## Issues open
+## Follow-ups
+## Branch notes
+## Where to start reviewing
+```
+
+What goes in each:
+
+- **Overview**: what the task delivers and where it sits in the project, in a
+  short paragraph or two. A reader who skips the rest should get the point.
+- **Approach**: how it was built and why that way: the shape of the solution,
+  the contracts between the pieces, what was deliberately kept simple.
+- **Decisions**: choices that are not obvious from the requirements, or that
+  depart from them, with who made them and why ("the user chose…", "the
+  reviewer asked for…"). If there were none, say so in one line.
+- **Issues resolved**: what a gate or the implementation pushed back on and how
+  it was fixed. Take it from `progress/review_history/` (rounds with
+  `CHANGES_REQUESTED`) for the task's subtasks, its phase and the roadmap, and
+  from the `## Problems & resolution` of the reference notes. Keep only what
+  touches this task.
+- **Issues open**: non-blocking notes still standing (a reviewer remark, a
+  known limitation). "Nothing open." if there are none.
+- **Follow-ups**: what this task leaves constrained or pending for later tasks
+  or phases, taken from the specs and reference notes.
+- **Branch notes**: anything on the branch that is not this task's work (for
+  example a plan change carried by one of its commits). Leave the section
+  empty if there is nothing to say: the harness already writes head, base and
+  the task dependencies.
+- **Where to start reviewing**: two to four files in the order that makes the
+  change easiest to follow, with half a line on why each.
+
+How to write it:
+
+- English, technical but conversational and human: explain it the way a
+  teammate would in a review, in full sentences. Bullets only for genuinely
+  parallel items.
+- No icons, emojis or decorative symbols in headings or bullets.
+- No test results, coverage figures or tool output: CI shows those on the PR.
+- Only facts you can point to in the plan, specs, reference notes, review
+  history or `git log`. Never invent; a short "Nothing to note." is fine.
+- Generic wording: name the project's own requirements documents as they are,
+  without assuming any particular kind of project.
+- No agent attribution (see Rules).
+
 ## Rules
 
 - **No agent attribution** in the commit or in any text (no `Co-Authored-By`, no

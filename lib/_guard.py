@@ -54,9 +54,11 @@ DEFAULT_SRC_DIRS = ("src", "include")
 # Roots besides the source dirs whose deletion destroys protected state.
 STATE_ROOTS = ("tests/acceptance", "progress")
 SKIP_DIRS = {"node_modules", "site-packages"}
-# Gate verdicts (roadmap, phase, plan, code) and every seal under progress/.
+# Gate verdicts (roadmap, phase, plan, code), their history, the task PR
+# narrative and every seal under progress/.
 RE_CODEX_OWNED = re.compile(
     r"^(progress/(plan_review|review|phase_review)_[^/]+\.md|progress/roadmap_review\.md"
+    r"|progress/review_history/[^/]+\.md|progress/pr_[^/]+\.md"
     r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+)$"
 )
 RE_ATTRIBUTION = re.compile(r"co-authored-by|generated with|🤖|claude code|codex|anthropic", re.I)
@@ -338,7 +340,8 @@ SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
-    r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_)"
+    r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_"
+    r"|pr_)"
 )
 RE_WRITE_CALL = re.compile(
     r"\b(write|write_text|write_bytes|unlink|remove|rename|replace|rmtree|truncate|chmod|"

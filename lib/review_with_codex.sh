@@ -4,6 +4,7 @@
 #   review_with_codex.sh phase <NN>           Codex reviews the breakdown of phase NN
 #   review_with_codex.sh <plan|code|doc> <N.M.K>   per-subtask gates and close
 #   review_with_codex.sh close <N.M.K>        check + commit a close (after manual `doc`)
+#   review_with_codex.sh pr <N.M>             push the task branch and open its PR
 #   review_with_codex.sh seal <N.M.K|roadmap|phase NN>   (human, manual mode: seal)
 #
 # Each gate checks its preconditions first (roadmap approved before a phase gate,
@@ -27,6 +28,13 @@
 # Codex the exit code and the log. The close (`doc`) ends with Codex writing its
 # commit message to progress/close_<N.M.K>.msg; the harness then runs the check
 # again and, if green, makes the commit itself (`close`).
+#
+# Every gate verdict is appended to progress/review_history/, so rejected rounds
+# survive. When a close finishes the last subtask of a task, Codex has also
+# written progress/pr_<N.M>.md and the harness pushes the task branch and opens
+# one PR for the task with `gh` (harness.toml [git] auto_pr; HARNESS_AUTO_PR=0
+# turns it off; HARNESS_GH overrides the gh binary). A failed push or PR never
+# undoes the close: it warns and prints the command to retry.
 set -uo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,11 +46,13 @@ cd "$PROJECT_DIR" || exit 1
 
 usage() {
   echo "usage: review_with_codex.sh roadmap | phase <NN> | <plan|code|doc> <N.M.K>" \
-       "| close <N.M.K> | seal <N.M.K|roadmap|phase NN>" >&2
+       "| close <N.M.K> | pr <N.M> | seal <N.M.K|roadmap|phase NN>" >&2
   exit 2
 }
 PHASE="${1:-}"; shift || true
 HARNESS_PY="$HARNESS_DIR/_harness.py"
+PR_PY="$HARNESS_DIR/_pr.py"
+GH="${HARNESS_GH:-gh}"
 CHECK_CMD="${HARNESS_CHECK_CMD:-make check}"
 
 # Run the project check outside the sandbox; $1 = log file. Returns its exit code.
@@ -65,9 +75,52 @@ close_commit() {
   ok "closed -> $id ; commit $(git rev-parse --short HEAD)"
 }
 
+# Push the current (task) branch and open the PR of task $1. Never fails the
+# caller: the close is already committed, so problems become a warning.
+open_pr() {
+  local tid="$1" branch base title body retry
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+  base="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+  base="${base#origin/}"; : "${base:=main}"
+  retry="retry with: ./harness/review_with_codex.sh pr $tid"
+  if ! command -v "$GH" >/dev/null 2>&1; then
+    warn "gh not found: the PR for task $tid was not opened; $retry" >&2
+    return 0
+  fi
+  if ! git push -q -u origin "$branch"; then
+    warn "could not push $branch: the PR for task $tid was not opened; $retry" >&2
+    return 0
+  fi
+  if "$GH" pr view "$branch" --json url >/dev/null 2>&1; then
+    ok "PR already open for $branch (pushed the new commits)"
+    return 0
+  fi
+  title="$(python3 "$PR_PY" title "$tid")"
+  body="$(mktemp "${TMPDIR:-/tmp}/harness-pr.XXXXXX")"
+  if ! python3 "$PR_PY" body "$tid" "$base" >"$body"; then
+    warn "could not build the PR body for task $tid; $retry" >&2
+    return 0
+  fi
+  if "$GH" pr create --head "$branch" --base "$base" --title "$title" --body-file "$body"; then
+    ok "PR opened for task $tid ($branch -> $base)"
+  else
+    warn "gh pr create failed for task $tid; $retry" >&2
+  fi
+  rm -f "$body"
+  return 0
+}
+
+# After a close: open the task PR when that close finished the task.
+open_pr_if_due() {
+  local tid
+  tid="$(python3 "$PR_PY" pr-due "$1")" || return 0
+  open_pr "$tid"
+}
+
 case "$PHASE" in
   seal)    exec python3 "$HARNESS_DIR/_guard.py" seal "$@" ;;
-  close)   [ -n "${1:-}" ] || usage; close_commit "$1"; exit $? ;;
+  close)   [ -n "${1:-}" ] || usage; close_commit "$1" || exit 1; open_pr_if_due "$1"; exit 0 ;;
+  pr)      [ -n "${1:-}" ] || usage; open_pr "$1"; exit 0 ;;
   roadmap) ID="roadmap"; ROLE="$CODEX_DIR/reviewer.md" ;;
   phase|plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
   doc)     ID="${1:-}"; ROLE="$CODEX_DIR/documenter.md" ;;
@@ -115,6 +168,15 @@ if [ "$PHASE" = "doc" ]; then
   CLOSE_STEP="
 Close: do not commit. Write the commit message to progress/close_$ID.msg and
 stop; the harness then runs \`$CHECK_CMD\` and makes the commit."
+  # The close that finishes a task also writes the narrative of the task's PR.
+  if LAST_TASK="$(python3 "$PR_PY" last-of-task "$ID" 2>/dev/null)"; then
+    CLOSE_STEP="$CLOSE_STEP
+Task PR: this close finishes task $LAST_TASK. Before the commit message, also
+write progress/pr_$LAST_TASK.md as your role's \"Task PR narrative\" section
+describes. Sources: the specs and docs/reference/ notes of every subtask of
+task $LAST_TASK, progress/review_history/ (its subtasks, its phase and the
+roadmap) and \`git log\` of this branch. The harness opens the PR after the commit."
+  fi
 fi
 
 # Build the concrete instruction for Codex.
@@ -173,6 +235,13 @@ if [ "$MODE_EXEC" = "manual" ]; then
   if [ "$PHASE" = "doc" ]; then
     echo "--- after Codex writes progress/close_$ID.msg, check and commit ---"
     echo "./harness/review_with_codex.sh close $ID"
+    if [ -n "${LAST_TASK:-}" ]; then
+      echo "--- this close finishes task $LAST_TASK: the close opens its PR (or retry) ---"
+      echo "./harness/review_with_codex.sh pr $LAST_TASK"
+    fi
+  else
+    echo "--- after Codex writes the verdict, keep it in the review history ---"
+    echo "python3 harness/_pr.py record $PHASE $ID $VERDICT_FILE"
   fi
   exit 0
 fi
@@ -188,8 +257,15 @@ RC=$?
 
 if [ "$PHASE" = "doc" ]; then
   [ $RC -eq 0 ] || exit $RC
-  close_commit "$ID"
-  exit $?
+  close_commit "$ID" || exit 1
+  open_pr_if_due "$ID"
+  exit 0
+fi
+
+# Keep every round, rejected ones included: the next verdict overwrites the file.
+if [ $RC -eq 0 ] && [ -f "$VERDICT_FILE" ]; then
+  python3 "$PR_PY" record "$PHASE" "$ID" "$VERDICT_FILE" ||
+    warn "could not record $VERDICT_FILE in progress/review_history/" >&2
 fi
 
 # Seal what Codex just approved (roadmap, phase breakdown, or the subtask's

@@ -65,6 +65,8 @@ live in the project's `harness.toml`, so two projects can use different ones:
 branch = "feature/{ticket}-{slug}"     # default: "feat/{task}-{slug}"
 commit_prefix = "{ticket} "            # default: "" (no prefix)
 setup_branch = "chore/project-setup"   # default: "chore/project-setup"
+auto_pr = true                         # default: true (open the task PR at its last close)
+pr_template = ".github/harness_pr.md"  # default: the harness's lib/pr_template.md
 ```
 
 | Placeholder | Value | Example |
@@ -94,6 +96,25 @@ What uses it:
 Without a `[git]` section nothing is enforced and the defaults apply, so
 projects installed earlier keep working on the branches they already use.
 
+### Task pull request
+
+With `auto_pr` on (the default, also without a `[git]` section), the close of
+the last subtask of a task pushes the task branch and opens its PR with `gh`
+(details in [usage](usage.md), step 6). `pr_template` points to a Markdown file,
+relative to the project root, that replaces the default body. It may use these
+placeholders, each as many times as it likes, and leave out any of them:
+
+| Placeholder | Filled by | Content |
+|-------------|-----------|---------|
+| `{task}`, `{title}` | harness | task id and title |
+| `{overview}`, `{approach}`, `{decisions}` | Codex | from `progress/pr_<N.M>.md` |
+| `{issues_resolved}`, `{issues_open}`, `{follow_ups}`, `{review_order}` | Codex | from `progress/pr_<N.M>.md` |
+| `{subtasks}` | harness | table: subtask, commit, spec, Codex reviews, reference note |
+| `{files}` | harness | files added/modified/deleted on the branch, without harness bookkeeping |
+| `{branch}` | harness + Codex | head and base, task dependencies, Codex's branch notes |
+
+A missing `pr_template` file fails the PR step with a warning (never the close).
+
 ## Environment variables
 
 | Variable | Values | Default | Read by |
@@ -103,6 +124,8 @@ projects installed earlier keep working on the branches they already use.
 | `HARNESS_CODEX_NETWORK` | `1` | off | `review_with_codex.sh`: allows network inside `workspace-write` |
 | `HARNESS_CHECK_CMD` | a shell command | `make check` | `review_with_codex.sh`: the check it runs outside the sandbox before each gate and before the close commit |
 | `HARNESS_ALLOW_COMMIT` | `1` | unset | `guard_bash.sh`: lets Claude run `git commit` for a conscious manual commit |
+| `HARNESS_AUTO_PR` | `0` | on | `review_with_codex.sh`: `0` keeps the task branch local at its last close (no push, no PR) |
+| `HARNESS_GH` | a path | `gh` | `review_with_codex.sh`: the GitHub CLI used to open the task PR |
 
 Set them for the whole Claude Code session, not inline on one command. The
 guard reads the environment of the hook process, so `HARNESS_ALLOW_COMMIT=1 git commit`
