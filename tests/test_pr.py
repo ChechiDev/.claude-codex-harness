@@ -190,6 +190,7 @@ def test_body_renders_every_section_of_the_default_template(plan: Plan) -> None:
         "## Follow-ups",
         "## Subtasks",
         "## Files",
+        "## Documentation",
         "## Branch and merge",
         "## Where to start reviewing",
     ]
@@ -212,15 +213,72 @@ def test_body_lists_subtasks_with_their_commits(plan: Plan) -> None:
         assert f"progress/review_{sid}.md" in row
 
 
+def _section(body: str, heading: str, following: str) -> str:
+    return body[body.index(heading) : body.index(following)]
+
+
+def _files(plan: Plan) -> str:
+    body = plan.run_py("_pr.py", "body", "1.1", "main").stdout
+    return _section(body, "## Files", "## Documentation")
+
+
+def _commit_extra_files(plan: Plan, paths: list[str]) -> None:
+    for rel in paths:
+        path = plan.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("" if path.suffix == ".toml" else "x\n")  # the harness parses toml
+    _git(plan.root, "add", "-A")
+    _git(plan.root, "commit", "-qm", "chore: extra files [1.1.2]")
+
+
 def test_body_files_skip_harness_bookkeeping(plan: Plan) -> None:
     _task_branch(plan)
-    body = plan.run_py("_pr.py", "body", "1.1", "main").stdout
-    files = body[body.index("## Files") : body.index("## Branch and merge")]
+    files = _files(plan)
     assert "| Added | `src/app/m111.py` |" in files
-    assert "docs/reference/1.1.1-s.md" in files
     assert "progress/" not in files
     assert "feature_list.json" not in files
     assert ".sha256" not in files
+
+
+def test_body_files_skip_project_docs_and_harness_files(plan: Plan) -> None:
+    _task_branch(plan)
+    excluded = [
+        "docs/conventions.md",
+        "docs/plan/notes.md",
+        "harness/tool.sh",
+        ".claude/agents/x.md",
+        "harness.toml",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CHECKPOINTS.md",
+    ]
+    _commit_extra_files(plan, excluded)
+    files = _files(plan)
+    for rel in excluded:
+        assert f"`{rel}`" not in files, rel
+    assert "docs/reference/" not in files
+
+
+def test_body_files_keep_code_tests_ci_build_and_readme(plan: Plan) -> None:
+    _task_branch(plan)
+    kept = ["tests/unit/test_x.py", ".github/workflows/ci.yml", "Makefile", "README.md"]
+    _commit_extra_files(plan, kept)
+    files = _files(plan)
+    for rel in [*kept, "src/app/m111.py"]:
+        assert f"`{rel}`" in files, rel
+
+
+def test_body_documentation_points_to_the_task_spec_folder(plan: Plan) -> None:
+    _task_branch(plan)
+    body = plan.run_py("_pr.py", "body", "1.1", "main").stdout
+    docs = _section(body, "## Documentation", "## Branch and merge")
+    specs = (plan.root / "docs/plan").rglob("1.1.*.md")
+    folders = {p.parent.relative_to(plan.root).as_posix() for p in specs}
+    assert folders
+    for folder in folders:
+        assert f"`{folder}/`" in docs
+    assert "docs/reference" not in docs
+    assert "progress/" not in docs
 
 
 def test_body_branch_names_head_base_and_unblocked_tasks(plan: Plan) -> None:

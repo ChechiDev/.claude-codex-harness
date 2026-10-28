@@ -32,6 +32,10 @@
 
 {files}
 
+## Documentation
+
+{documentation}
+
 ## Branch and merge
 
 {branch}

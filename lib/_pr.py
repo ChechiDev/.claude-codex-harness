@@ -46,8 +46,13 @@ NARRATIVE = {
     "where to start reviewing": "review_order",
 }
 EMPTY = "Nothing recorded for this task."
-# Harness bookkeeping a reviewer does not need in the file list.
-RE_BOOKKEEPING = re.compile(r"^(progress/|feature_list\.json$)|\.sha256$")
+# Not listed under Files: harness bookkeeping, harness files and the project's own
+# docs (the task's spec folder goes under Documentation instead). README.md stays.
+RE_BOOKKEEPING = re.compile(
+    r"^(progress/|docs/|harness/|\.claude/"
+    r"|(feature_list\.json|harness\.toml|AGENTS\.md|CLAUDE\.md|CHECKPOINTS\.md)$)"
+    r"|\.sha256$"
+)
 STATUS = {"A": "Added", "M": "Modified", "D": "Deleted", "R": "Renamed", "C": "Copied"}
 
 
@@ -181,7 +186,15 @@ def files_table(merge_base: str) -> str:
             continue
         label = STATUS.get(status[:1], status)
         rows.append(f"| {label} | {' -> '.join(f'`{p}`' for p in paths)} |")
-    return "\n".join(rows) if len(rows) > 2 else "No files outside the harness bookkeeping."
+    return "\n".join(rows) if len(rows) > 2 else "No code, test or build files changed."
+
+
+def documentation_section(tid: str) -> str:
+    specs = [Path(str(leaf["spec"])) for leaf in _task_leaves(tid) if leaf.get("spec")]
+    folders = sorted({spec.parent.as_posix() for spec in specs})
+    if not folders:
+        return EMPTY
+    return "Specs of this task: " + ", ".join(f"`{folder}/`" for folder in folders)
 
 
 def _related_tasks(tid: str) -> tuple[list[str], list[str]]:
@@ -239,6 +252,7 @@ def body(tid: str, base: str) -> int:
         "title": str(task.get("title", "")),
         "subtasks": subtasks_table(tid, merge_base),
         "files": files_table(merge_base),
+        "documentation": documentation_section(tid),
         "branch": branch_section(tid, base, story.get("branch_notes", "")),
     }
     text = template
