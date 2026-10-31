@@ -9,7 +9,10 @@ codex_effort: low
 
 You run the **full close** of a subtask `N.M.K` that is **already code-approved**
 (`progress/review_<N.M.K>.md` = `APPROVED`). The leader invokes you via
-`./harness/review_with_codex.sh doc <N.M.K>`. You do all of the following, in order,
+`./harness/review_with_codex.sh doc <N.M.K>`. An issue subtask `ISS-<n>.<k>` (the
+issues lane) closes exactly the same way: read `N.M.K` as `ISS-<n>.<k>` and
+`docs/plan/phase-NN-<slug>/` as `docs/plan/issues/ISS-<n>-<slug>/` below (its
+commit subject ends in `[ISS-<n>.<k>]`). You do all of the following, in order,
 and finish by writing the **commit message**; the harness then runs `make check`
 outside your sandbox and makes the single commit. You do not change production
 code or tests.
@@ -94,7 +97,13 @@ code or tests.
 ## Task PR narrative (only when the prompt says this close finishes a task)
 
 The last close of a task `N.M` also writes `progress/pr_<N.M>.md`, before the
-commit message. After the commit the harness pushes the task branch and opens
+commit message. In the issues lane the "task" is the issue: the last close of
+`ISS-<n>.<k>` writes `progress/pr_ISS-<n>.md`, and you start from the issue
+body (the `## Issue body (imported from GitHub)` section of its header in
+`docs/plan/issues/`): the same sections, turned from what was planned into what
+was done; say where the result departs from the issue. The harness links the
+GitHub issue and ends the PR with `Closes #<n>`, so GitHub closes the issue when
+the user merges it; do not write that line yourself. After the commit the harness pushes the task branch and opens
 one pull request for the whole task; it fills the subtask table, the file list
 and the head/base line itself, and takes the rest from this file. Use exactly
 these `##` headings (the harness matches them by name; leave none out):

@@ -21,6 +21,7 @@ Shared standard. Load when:
 3. **Scope is mandatory**: One lowercase word describing the affected area (e.g., `stats`, `queue`, `auth`, `ci`, `parser`). If the commit spans several areas, use the primary one. If it truly cannot be scoped to one area, the subtask is too large — split it.
 4. **Body is mandatory**: 2–4 lines explaining WHY. Not what — the subject already says what.
 5. **Footer — `Plan:` link**: Always close with `Plan: docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`. This links the commit back to its subtask spec in the plan.
+   For an issue subtask the subject ends in `[ISS-<n>.<k>]` and the footer is `Plan: docs/plan/issues/ISS-<n>-<slug>/ISS-<n>.<k>-<slug>.md`.
 6. **One subtask per commit**: Each commit maps to exactly one subtask ID. Never batch multiple subtasks into one commit.
 7. **All messages in English**: Subject, body, and footer.
 8. **Allowed types**: `feat`, `fix`, `refactor`, `test`, `chore`, `docs` — same set as branch types.

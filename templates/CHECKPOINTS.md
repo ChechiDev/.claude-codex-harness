@@ -1,5 +1,8 @@
 # CHECKPOINTS — Final-state evaluation
 
+> Issues lane: an issue subtask `ISS-<n>.<k>` (spec in `docs/plan/issues/ISS-<n>-<slug>/`)
+> follows every rule here that names `N.M.K` (see `harness/WORKFLOW.md`).
+
 > Objective criteria that Codex walks through marking `[x]`/`[ ]` before closing
 > a subtask `N.M.K`. It rejects the close if any box in C1–C6 is left empty.
 

@@ -1,5 +1,8 @@
 # Verification (C)
 
+> Issues lane: an issue subtask `ISS-<n>.<k>` (spec in `docs/plan/issues/ISS-<n>-<slug>/`)
+> follows every rule here that names `N.M.K` (see `harness/WORKFLOW.md`).
+
 How to prove a subtask works, before declaring `done`.
 
 ## The gate: `make verify`

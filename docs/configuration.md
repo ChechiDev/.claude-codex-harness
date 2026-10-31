@@ -115,6 +115,24 @@ placeholders, each as many times as it likes, and leave out any of them:
 
 A missing `pr_template` file fails the PR step with a warning (never the close).
 
+### Issues lane (fixed conventions, not configurable)
+
+Issues follow the same conventions in every project, so these are not part of
+`[git]`:
+
+| What | Convention |
+|------|------------|
+| Branch | `<type>/ISS-<n>-<slug>` from `origin/main`, enforced while an issue subtask is in progress (with or without `[git]`) |
+| Type | from the issue's GitHub label only: `bug`→`fix`, `refactor`→`refactor`, `enhancement`→`feat`, `documentation`→`docs`; zero or several known labels → `make issue` refuses |
+| Queue labels | `priority:now`, `priority:next`, `priority:backlog`; set only by the harness |
+| Claim | assignee + label `status:in-progress` + annotated tag `claim/ISS-<n>` on `origin` |
+| Commit | subject ends in `[ISS-<n>.<k>]`, footer `Plan: docs/plan/issues/…`; no `commit_prefix` (no ticket) |
+| PR | same template as a task PR (`{task}` is `ISS-<n>`), titled with the issue type, ending with `Closes #<n>` |
+
+The labels are created on first use (`gh label create --force`). `gh` must be
+logged in for `make issue`, `make issue-start`, `harness/issue.sh`, the PR step
+and the queue block of `make status`; `make check` and the hooks never call it.
+
 ## Environment variables
 
 | Variable | Values | Default | Read by |
@@ -125,7 +143,7 @@ A missing `pr_template` file fails the PR step with a warning (never the close).
 | `HARNESS_CHECK_CMD` | a shell command | `make check` | `review_with_codex.sh`: the check it runs outside the sandbox before each gate and before the close commit |
 | `HARNESS_ALLOW_COMMIT` | `1` | unset | `guard_bash.sh`: lets Claude run `git commit` for a conscious manual commit |
 | `HARNESS_AUTO_PR` | `0` | on | `review_with_codex.sh`: `0` keeps the task branch local at its last close (no push, no PR) |
-| `HARNESS_GH` | a path | `gh` | `review_with_codex.sh`: the GitHub CLI used to open the task PR |
+| `HARNESS_GH` | a path | `gh` | `review_with_codex.sh`: the GitHub CLI used to open the task PR; also `_issue.py` and `plan_status.py` (issues lane) |
 
 Set them for the whole Claude Code session, not inline on one command. The
 guard reads the environment of the hook process, so `HARNESS_ALLOW_COMMIT=1 git commit`

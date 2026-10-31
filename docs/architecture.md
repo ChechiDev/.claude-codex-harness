@@ -30,7 +30,17 @@ installs it onto a project in a **hybrid** way:
 
 Because `harness/` is a symlink, a fix to `lib/` reaches installed projects
 immediately. Copied templates (for example `progress/history.md`) do not: a
-project keeps the version it was installed with.
+project keeps the version it was installed with. That is why what every
+project must share lives in `lib/` and the copies only point to it:
+
+| Shared file (`lib/`, reached as `harness/`) | Pointed to by the copied file |
+|---|---|
+| `harness.mk`: the harness Make targets (`plan`, `status`, `check`, `issue`, `issue-start`, `issue-new`) | `Makefile`: its own toolchain targets + `include harness/harness.mk` at the end |
+| `WORKFLOW.md`: leader role, rules, startup protocol, issues lane | `CLAUDE.md`: `@harness/WORKFLOW.md` + project context; `AGENTS.md`: a pointer |
+| `pr_template.md`, `issue_template.md` | (used by the harness scripts directly) |
+
+A project installed before this shape is moved to it once with
+`install.sh <project> --migrate` (`lib/_upgrade.py`, see [usage](usage.md)).
 
 ### Machine-level config (`link-global.sh`)
 
@@ -91,6 +101,42 @@ per subtask N.M.K (in order, respecting depends):
    → make status → you approve the next subtask
 phase done → break down the next phase …
 ```
+
+## Issues lane
+
+A GitHub issue (a bug, a refactor, a small enhancement) can appear at any point
+and often touches a phase that is already done. It is planned **apart from the
+phases and tasks**, with the same process, roles and gates; the full design,
+reviewed by Codex, is [design/issues-lane.md](design/issues-lane.md).
+
+```
+docs/plan/issues/
+  ISS-<n>-<slug>.md                   issue header: link, type, origin, priority, goal,
+                                      the imported issue body in its own section
+  ISS-<n>-<slug>/ISS-<n>.<k>-<slug>.md   one spec per issue subtask (same format as N.M.K,
+                                      plus an optional `migrates:` list)
+```
+
+- **Queue and claim on GitHub**, so every machine and teammate sees the same:
+  labels `priority:now|next|backlog` (`make issue N=<n>`), then `make issue-start
+  N=<n>` claims it (assignee, `status:in-progress`, and an exclusive annotated
+  tag `claim/ISS-<n>` pushed without force) and creates the branch
+  `<type>/ISS-<n>-<slug>` from `origin/main`. The type comes only from the label.
+- **Timing**: `next` waits until the task in progress is merged into `main`;
+  `now` interrupts a task between subtasks and `harness/issue.sh resume` returns
+  to it once the issue is merged; `backlog` waits for the user.
+- **Rules**: issues never count in phase progression; an issue subtask starts
+  once its issue is `ISSUE_APPROVED` (the issue gate, sealed) and its depends are
+  done; one `in_progress` leaf across both lanes; the issue branch is enforced.
+- **Sealed oracles of other subtasks** change only through `migrates:`: frozen
+  at the issue gate, checked before the plan gate (`migrates-ready`), re-sealed
+  atomically at `PLAN_APPROVED` (`lib/_migrate.py`).
+- **Close**: one commit per `ISS-<n>.<k>`; the last one opens one PR with
+  `Closes #<n>`; the claim is dropped once the PR is open.
+- **New issues**: a draft reviewed by Codex (`DRAFT_APPROVED`, sealed) is
+  published only with the user's OK, byte for byte.
+- Network (`gh`) only in explicit commands and `make status`'s queue block;
+  `make check` and the hooks never use it.
 
 ## Harness rules
 
@@ -175,6 +221,19 @@ progress/impl_<N.M.K>.md           # implementer report (Claude)
 progress/review_<N.M.K>.md         # APPROVED | CHANGES_REQUESTED (Codex)
 docs/reference/<N.M.K>-<slug>.md   # output documentation (Codex), same name as the spec
 progress/history.md                # append-only log (Codex, at close)
+
+# issues lane (every <N.M.K> file above also exists for an ISS-<n>.<k> subtask)
+docs/plan/issues/ISS-<n>-<slug>.md            # issue header (make issue-start)
+docs/plan/issues/ISS-<n>-<slug>/ISS-<n>.<k>-<slug>.md  # issue subtask spec + status
+progress/issue_review_ISS-<n>.md   # ISSUE_APPROVED | CHANGES_REQUESTED (Codex)
+progress/plan_issue_ISS-<n>.sha256 # seal of the approved issue breakdown
+progress/issue_migrations_ISS-<n>.json  # migrates: lists frozen at the issue gate
+progress/oracle_migrations/<leaf>.json  # complete record of one oracle migration
+progress/issue_draft.md            # draft of a new issue (leader, make issue-new)
+progress/issue_draft_review.md     # DRAFT_APPROVED | CHANGES_REQUESTED (Codex)
+progress/issue_draft.sha256        # seal of the approved draft (published byte for byte)
+progress/pr_ISS-<n>.md             # issue PR narrative (Codex, at the last close)
+$(git rev-parse --git-path harness-claim-ISS-<n>)  # local claim token (per working copy)
 ```
 
 The plan seals hash `PLAN.md` without its generated index and every spec

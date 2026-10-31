@@ -7,6 +7,8 @@ Layout (the leader writes it; Codex reviews it):
                                                   + a generated index (between markers)
   docs/plan/phase-NN-<slug>.md                    phase title + goal + its tasks (## N.M)
   docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md     one spec per subtask (micro-task)
+  docs/plan/issues/ISS-<n>-<slug>.md              issues lane: one header per GitHub issue
+  docs/plan/issues/ISS-<n>-<slug>/ISS-<n>.<k>-<slug>.md   one spec per issue subtask
 
 Status is written ONLY in the subtask specs. Task and phase status, feature_list.json
 and the PLAN.md index are derived here — never hand-edit them. `baseline` marks
@@ -39,6 +41,21 @@ Subtask spec (docs/plan/phase-01-users/1.1.1-email-value-object.md):
 
   ## Description
   <free text: not parsed>
+
+Issue header (docs/plan/issues/ISS-14-parse-config-flags.md); its specs use the
+subtask format above with ids ISS-14.1, ISS-14.2… and an optional `migrates:` list
+of sealed acceptance tests they rewrite:
+
+  # ISS-14 Replace parse_config bit mask
+  - issue: https://github.com/<owner>/<repo>/issues/14
+  - type: refactor                     (fix | refactor | feat | docs)
+  - origin: 2.3                        (informative)
+  - priority: next                     (now | next | backlog)
+  - interrupts: feat/2.4-x             (optional: task branch a `now` issue paused)
+  - goal: <one sentence>
+
+Issues never enter `phases`/`features`: they are listed under `issues`, and only
+when there is at least one, so plans without issues keep their previous output.
 """
 
 from __future__ import annotations
@@ -63,13 +80,20 @@ RE_PHASE_DIR = re.compile(r"^phase-\d{2}-[a-z0-9][a-z0-9-]*$")
 RE_SPEC_FILE = re.compile(r"^(\d+\.\d+\.\d+)-[a-z0-9][a-z0-9-]*\.md$")
 RE_PHASE_HEADING = re.compile(r"^#\s+Phase\s+(\d+)\s*[—-]\s*(.+?)\s*$")
 RE_TASK = re.compile(r"^##\s+(\d+)\.(\d+)\s+(.+?)\s*$")
-RE_SPEC_HEADING = re.compile(r"^#\s+(\d+\.\d+\.\d+)\s+(.+?)\s*$")
+RE_SPEC_HEADING = re.compile(r"^#\s+((?:\d+\.\d+|ISS-\d+)\.\d+)\s+(.+?)\s*$")
+RE_ISSUE_FILE = re.compile(r"^(ISS-(\d+))-[a-z0-9][a-z0-9-]*\.md$")
+RE_ISSUE_DIR = re.compile(r"^ISS-\d+-[a-z0-9][a-z0-9-]*$")
+RE_ISSUE_SPEC_FILE = re.compile(r"^(ISS-\d+)\.(\d+)-[a-z0-9][a-z0-9-]*\.md$")
+RE_ISSUE_HEADING = re.compile(r"^#\s+(ISS-\d+)\s+(.+?)\s*$")
+RE_ACCEPTANCE_PATH = re.compile(r"^tests/acceptance/test_[^/]+$")
 RE_META = re.compile(r"^-\s+(\w+):\s*(.*?)\s*$")
 RE_AC = re.compile(r"^\s+-\s+(AC\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*$")
 RE_ITEM = re.compile(r"^\s+-\s+(\S.*)$")
 VALID_STATUS = ("pending", "in_progress", "done", "blocked", "baseline")
 COMPLETE = ("done", "baseline")
-LIST_KEYS = ("files", "acceptance")
+LIST_KEYS = ("files", "acceptance", "migrates")
+ISSUE_TYPES = ("fix", "refactor", "feat", "docs")
+PRIORITIES = ("now", "next", "backlog")
 
 Item = dict[str, Any]
 
@@ -155,6 +179,7 @@ class PlanParser:
         self.errors: list[str] = []
         self.phases: list[Item] = []
         self.tasks: list[Item] = []
+        self.issues: list[Item] = []
 
     def parse(self) -> None:
         phase_files = []
@@ -172,6 +197,8 @@ class PlanParser:
                 )
         for pid, path in phase_files:
             self._phase(pid, path)
+        if (self.plan_dir / "issues").is_dir():
+            self._issues(self.plan_dir / "issues")
         self._check_ids()
 
     def _phase(self, pid: str, path: Path) -> None:
@@ -255,7 +282,7 @@ class PlanParser:
         status = str(meta.get("status", "pending")).strip().lower().replace(" ", "_")
         if status not in VALID_STATUS:
             self.errors.append(f"{sid}: invalid status '{meta.get('status')}'")
-        return {
+        sub: Item = {
             "id": sid,
             "title": head.group(2),
             "status": status,
@@ -265,9 +292,87 @@ class PlanParser:
             "acceptance": _acceptance(meta.get("acceptance", [])),
             "spec": str(path),
         }
+        migrates = _files(meta.get("migrates", []))
+        for rel in migrates:
+            if not RE_ACCEPTANCE_PATH.match(rel):
+                self.errors.append(f"{sid}: migrates '{rel}' is not an acceptance test path")
+        if migrates:  # only when declared: specs without it keep their previous output
+            sub["migrates"] = migrates
+        return sub
+
+    # ── issues lane ──────────────────────────────────────────────────────────
+
+    def _issues(self, root: Path) -> None:
+        headers = []
+        for path in sorted(root.iterdir()):
+            m = RE_ISSUE_FILE.match(path.name)
+            if m and path.is_file():
+                headers.append((int(m.group(2)), m.group(1), path))
+            elif (
+                path.is_dir()
+                and RE_ISSUE_DIR.match(path.name)
+                and not path.with_suffix(".md").is_file()
+            ):
+                self.errors.append(
+                    f"issues/{path.name}/: spec folder without {root}/{path.name}.md"
+                )
+        for _, iid, path in sorted(headers):
+            self._issue(iid, path)
+        ids = [i["id"] for i in self.issues]
+        for dup in sorted({i for i in ids if ids.count(i) > 1}):
+            self.errors.append(f"{dup}: duplicate issue id")
+
+    def _issue(self, iid: str, path: Path) -> None:
+        sections = _sections(path.read_text(encoding="utf-8"))
+        head = RE_ISSUE_HEADING.match(sections[0][0]) if sections else None
+        if head is None or head.group(1) != iid:
+            found = head.group(1) if head else "none"
+            self.errors.append(f"{path.name}: heading id {found} does not match the file name")
+            return
+        meta = _meta(sections[0][1])
+        issue: Item = {
+            "id": iid,
+            "number": int(iid.split("-", 1)[1]),
+            "title": head.group(2),
+            "issue": meta.get("issue", ""),
+            "type": meta.get("type", ""),
+            "origin": meta.get("origin", ""),
+            "priority": meta.get("priority", "next"),
+            "goal": meta.get("goal", ""),
+            "file": str(path),
+            "status": "pending",
+        }
+        if meta.get("interrupts"):
+            issue["interrupts"] = meta["interrupts"]
+        if issue["type"] not in ISSUE_TYPES:
+            self.errors.append(f"{iid}: invalid type '{issue['type']}' ({' | '.join(ISSUE_TYPES)})")
+        if issue["priority"] not in PRIORITIES:
+            self.errors.append(
+                f"{iid}: invalid priority '{issue['priority']}' ({' | '.join(PRIORITIES)})"
+            )
+        issue["subtasks"] = self._issue_specs(iid, path.with_suffix(""))
+        issue["status"] = _derive([s["status"] for s in issue["subtasks"]])
+        self.issues.append(issue)
+
+    def _issue_specs(self, iid: str, folder: Path) -> list[Item]:
+        if not folder.is_dir():
+            return []
+        specs = []
+        for path in folder.iterdir():
+            m = RE_ISSUE_SPEC_FILE.match(path.name)
+            if m is None:
+                self.errors.append(f"{folder.name}/{path.name}: not a <ISS-n.k>-<slug>.md spec")
+            elif m.group(1) != iid:
+                sid = f"{m.group(1)}.{m.group(2)}"
+                self.errors.append(f"{sid}: spec outside its issue folder ({folder.name}/)")
+            else:
+                specs.append((int(m.group(2)), f"{iid}.{m.group(2)}", path))
+        subs = [self._spec(sid, path) for _, sid, path in sorted(specs)]
+        return [s for s in subs if s is not None]
 
     def _check_ids(self) -> None:
         subs = [s for t in self.tasks for s in t["subtasks"]]
+        subs += [s for i in self.issues for s in i["subtasks"]]
         ids = [s["id"] for s in subs]
         for dup in sorted({i for i in ids if ids.count(i) > 1}):
             self.errors.append(f"{dup}: duplicate subtask id")
@@ -286,7 +391,7 @@ def _project_name() -> str:
 
 
 def build(parser: PlanParser) -> Item:
-    return {
+    data: Item = {
         "project": _project_name(),
         "generated_from": "docs/plan/ (do not hand-edit; run make plan)",
         "rules": {
@@ -302,6 +407,9 @@ def build(parser: PlanParser) -> Item:
         "phases": parser.phases,
         "features": parser.tasks,
     }
+    if parser.issues:  # only when there are any: plans without issues keep their output
+        data["issues"] = parser.issues
+    return data
 
 
 # ── PLAN.md index ────────────────────────────────────────────────────────────
@@ -340,6 +448,22 @@ def _phase_block(phase: Item, tasks: list[Item]) -> list[str]:
     return lines
 
 
+def _issues_block(issues: list[Item]) -> list[str]:
+    subs = [s for i in issues for s in i["subtasks"]]
+    done = sum(s["status"] in COMPLETE for s in subs)
+    lines = [f"### Issues · {done}/{len(subs)} done", ""]
+    for issue in issues:
+        head = f"- **{issue['id']} {issue['title']}**"
+        if not issue["subtasks"]:
+            lines.append(f"{head} · planning · {issue['type']} · priority {issue['priority']}")
+            continue
+        status = issue["status"].replace("_", " ")
+        lines.append(f"{head} — {status} · {issue['type']} · priority {issue['priority']}")
+        lines += [_subtask_line(s) for s in issue["subtasks"]]
+    lines.append("")
+    return lines
+
+
 def render_index(data: Item) -> str:
     lines = [
         INDEX_START,
@@ -362,6 +486,8 @@ def render_index(data: Item) -> str:
     for phase in data["phases"]:
         tasks = [t for t in data["features"] if t["phase"] == phase["id"]]
         lines += _phase_block(phase, tasks)
+    if data.get("issues"):
+        lines += _issues_block(data["issues"])
     lines.append(INDEX_END)
     return "\n".join(lines)
 
@@ -408,10 +534,15 @@ def main(argv: list[str]) -> int:
     for path, text in outputs.items():
         path.write_text(text, encoding="utf-8")
     subs = sum(len(t["subtasks"]) for t in data["features"])
+    issues = data.get("issues", [])
+    lane = ""
+    if issues:
+        isubs = sum(len(i["subtasks"]) for i in issues)
+        lane = f" · {len(issues)} issue{'s' * (len(issues) != 1)} · {isubs} issue subtasks"
     say(
         "OK",
         f"plan synced: {len(data['phases'])} phases · {len(data['features'])} tasks"
-        f" · {subs} subtasks",
+        f" · {subs} subtasks{lane}",
     )
     return 0
 

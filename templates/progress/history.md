@@ -1,5 +1,8 @@
 # Historical log (append-only)
 
+> Issues lane: an issue subtask `ISS-<n>.<k>` (spec in `docs/plan/issues/ISS-<n>-<slug>/`)
+> follows every rule here that names `N.M.K` (see `harness/WORKFLOW.md`).
+
 > When each subtask closes, Codex appends its summary here as part of the close.
 > Do not edit previous entries. Only append at the end.
 

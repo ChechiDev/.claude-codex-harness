@@ -19,7 +19,8 @@ def _project(tmp_path: Path, template: str, verify_red: bool) -> tuple[Path, dic
     root = tmp_path / "proj"
     (root / "harness").mkdir(parents=True)
     shutil.copy(TOOLKIT / template / "Makefile", root / "Makefile")
-    for helper in ("status.sh", "_colors.sh"):  # used by the Makefile recipes
+    # used by the Makefile recipes; harness.mk holds the shared check target
+    for helper in ("status.sh", "_colors.sh", "harness.mk"):
         (root / "harness" / helper).symlink_to(TOOLKIT / "lib" / helper)
     check = root / "harness" / "check.sh"
     check.write_text(CHECK_SH)

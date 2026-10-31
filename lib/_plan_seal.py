@@ -7,6 +7,7 @@ changes afterwards. Any change needs a new Codex approval (which re-seals).
   progress/plan_roadmap.sha256   PLAN.md (minus the generated index) + the header
                                  (title + goal) of every phase file
   progress/plan_phase_NN.sha256  the phase file (tasks) + every subtask spec
+  progress/plan_issue_ISS-n.sha256  the issue header + every issue subtask spec
 
 `- status:` lines are excluded: status moves through the cycle on its own.
 `- status: baseline` is the exception: it is part of what Codex approved, so a
@@ -26,6 +27,7 @@ import _harness
 PLAN_DIR = Path("docs/plan")
 INDEX_RE = re.compile(r"<!-- plan:index:start -->.*?<!-- plan:index:end -->", re.DOTALL)
 RE_PHASE_FILE = re.compile(r"^phase-(\d{2})-[a-z0-9][a-z0-9-]*\.md$")
+RE_ISSUE_FILE = re.compile(r"^(ISS-\d+)-[a-z0-9][a-z0-9-]*\.md$")
 RE_STATUS = re.compile(r"^- status:(?![ \t]*baseline[ \t]*$).*$\n?", re.MULTILINE | re.IGNORECASE)
 
 Entries = dict[str, str]
@@ -37,6 +39,10 @@ def roadmap_manifest(root: Path) -> Path:
 
 def phase_manifest(root: Path, pid: str) -> Path:
     return root / "progress" / f"plan_phase_{pid}.sha256"
+
+
+def issue_manifest(root: Path, iid: str) -> Path:
+    return root / "progress" / f"plan_issue_{iid}.sha256"
 
 
 def _digest(text: str) -> str:
@@ -81,8 +87,29 @@ def phase_entries(root: Path, pid: str) -> Entries:
 
 
 def _spec_key(path: Path) -> tuple[int, ...]:
-    head = path.name.split("-", 1)[0]
+    head = path.name.removeprefix("ISS-").split("-", 1)[0]
     return tuple(int(p) for p in head.split(".") if p.isdigit())
+
+
+def _issue_files(root: Path) -> dict[str, Path]:
+    found = {}
+    for path in sorted((root / PLAN_DIR / "issues").glob("ISS-*.md")):
+        m = RE_ISSUE_FILE.match(path.name)
+        if m:
+            found[m.group(1)] = path
+    return found
+
+
+def issue_entries(root: Path, iid: str) -> Entries:
+    path = _issue_files(root).get(iid)
+    if path is None:
+        return {}
+    files = [path, *sorted(path.with_suffix("").glob("*.md"), key=_spec_key)]
+    entries = {_rel(root, f): _digest(RE_STATUS.sub("", f.read_text("utf-8"))) for f in files}
+    snapshot = root / "progress" / f"issue_migrations_{iid}.json"  # see _migrate.py
+    if snapshot.is_file():
+        entries[_rel(root, snapshot)] = _digest(snapshot.read_text("utf-8"))
+    return entries
 
 
 def read(manifest: Path) -> Entries:
@@ -99,13 +126,15 @@ def write(manifest: Path, entries: Entries) -> None:
     manifest.write_text("".join(f"{d}  {rel}\n" for rel, d in entries.items()), "utf-8")
 
 
-def reseal_spec(root: Path, spec: str, pid: str) -> bool:
-    """Refresh one spec's digest in its phase seal (after its plan gate approved it)."""
-    manifest = phase_manifest(root, pid)
+def reseal_spec(root: Path, spec: str, owner: str) -> bool:
+    """Refresh one spec's digest in its phase (NN) or issue (ISS-n) seal, after its
+    plan gate approved it."""
+    is_issue = owner.startswith("ISS-")
+    manifest = issue_manifest(root, owner) if is_issue else phase_manifest(root, owner)
     if not manifest.is_file():
         return False
     entries = read(manifest)
-    current = phase_entries(root, pid)
+    current = issue_entries(root, owner) if is_issue else phase_entries(root, owner)
     if spec in current:
         entries[spec] = current[spec]
         write(manifest, entries)
@@ -162,4 +191,25 @@ def verify(root: Path) -> tuple[list[str], list[str]]:
                 warnings.append(f"{msg}: its subtask is still in its plan gate")
             else:
                 problems.append(msg + gate.format(f"phase {pid}"))
+    _verify_issues(root, open_spec, problems, warnings)
     return problems, warnings
+
+
+def _verify_issues(
+    root: Path, open_spec: str | None, problems: list[str], warnings: list[str]
+) -> None:
+    gate = " (re-run its Codex gate: ./harness/review_with_codex.sh issue {})"
+    for iid in _issue_files(root):
+        manifest = issue_manifest(root, iid)
+        if not manifest.is_file():
+            if _harness.read_verdict(root / _harness.issue_review(iid)) == "ISSUE_APPROVED":
+                warnings.append(
+                    f"issue {iid} is approved but not sealed "
+                    f"(human: review_with_codex.sh seal issue {iid})"
+                )
+            continue
+        for rel, msg in _diff(read(manifest), issue_entries(root, iid), f"issue {iid}"):
+            if rel == open_spec:
+                warnings.append(f"{msg}: its subtask is still in its plan gate")
+            else:
+                problems.append(msg + gate.format(iid))

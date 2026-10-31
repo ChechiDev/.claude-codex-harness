@@ -57,6 +57,12 @@ def slugify(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
 
 
+def issue_slug(title: str) -> str:
+    """The slug of an issue's branch and header file (a title with no letter or digit
+    still gets a valid one). The single source for _harness and _issue."""
+    return slugify(title) or "issue"
+
+
 def render(pattern: str, task: str, title: str, ticket: str) -> str:
     return pattern.format(task=task, slug=slugify(title), ticket=ticket)
 

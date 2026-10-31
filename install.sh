@@ -2,6 +2,7 @@
 # install.sh — installs the harness onto a target project (Model B).
 #
 #   install.sh <project-path> [--force] [--python <package-name>] [--src-dirs a,b]
+#   install.sh <project-path> --migrate   (once per existing project, see below)
 #
 # --python delegates to lib/scaffold_python.sh (minimal Python layer) so the
 # project runs `make check` green without manual pyproject editing. install.sh
@@ -19,6 +20,14 @@
 #
 # GENERATED (never copied): feature_list.json is produced from docs/plan/.
 #
+# SHARED through the harness/ symlink: the harness Make targets (lib/harness.mk,
+# included by the copied Makefile) and the workflow rules (lib/WORKFLOW.md,
+# imported by the copied CLAUDE.md), so a change there reaches every project.
+# --migrate moves a project installed before that to this shape: it (re)links the
+# symlinks on this machine, drops the harness targets copied into its Makefile
+# (only when unchanged), adds the include and the import, and verifies the result
+# (lib/_upgrade.py). Idempotent; a customised harness target stops it untouched.
+#
 # --src-dirs writes harness.toml ([scope] src_dirs) for code outside src/.
 # Inside an existing repo (history, or a monorepo subdir) nothing is committed
 # and the machine-local symlinks are excluded via .git/info/exclude.
@@ -28,6 +37,7 @@ TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DEST="${1:-}"; shift || true
 FORCE=0
+MIGRATE=0
 TPL_LANG="python"   # template set (python | c). Not LANG: that is the exported locale.
 PYPKG=""            # --python <pkg>: scaffold a Python layer (implies lang=python)
 CNAME=""            # --c <name>:     scaffold a C layer       (implies lang=c)
@@ -35,6 +45,7 @@ SRC_DIRS=""         # --src-dirs a,b: production-code dirs when they are not src
 while [ $# -gt 0 ]; do
   case "$1" in
     --force)  FORCE=1 ;;
+    --migrate) MIGRATE=1 ;;
     --lang)   shift; TPL_LANG="${1:-}" ;;
     --python) shift; PYPKG="${1:-}"; TPL_LANG="python" ;;
     --c)      shift; CNAME="${1:-}"; TPL_LANG="c" ;;
@@ -92,6 +103,11 @@ link skills        .claude/skills
 link settings.json .claude/settings.json
 link lib           harness
 row "$GREEN" "[symlink]" "${LINKED[*]}"
+
+# --- Migration of an existing project (nothing else of the install runs) ---
+if [ "$MIGRATE" -eq 1 ]; then
+  exec python3 "$TOOLKIT/lib/_upgrade.py" migrate "$DEST"
+fi
 
 # --- Copies (customizable) ---
 copy CLAUDE.md          CLAUDE.md

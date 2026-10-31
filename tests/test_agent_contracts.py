@@ -134,7 +134,9 @@ def test_implementer_reads_the_subtask_spec(doc: Path) -> None:
 @pytest.mark.parametrize("tpl", TEMPLATE_SETS)
 def test_plan_template_documents_the_new_layout(tpl: str) -> None:
     plan_dir = TOOLKIT / tpl / "docs" / "plan"
-    assert sorted(p.name for p in plan_dir.iterdir()) == ["PLAN.md"]
+    # PLAN.md, plus the issues lane folder (only its README: it turns the lane on)
+    assert sorted(p.name for p in plan_dir.iterdir()) == ["PLAN.md", "issues"]
+    assert [p.name for p in (plan_dir / "issues").iterdir()] == ["README.md"]
     text = (plan_dir / "PLAN.md").read_text()
     for needle in ("<!-- plan:index:start -->", "<!-- plan:index:end -->", SPEC_PATH, "- goal:"):
         assert needle in text, needle

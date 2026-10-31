@@ -2,6 +2,9 @@
 
 > Entry point for any agent (Claude or Codex). It is NOT a rulebook: it is a
 > **map**. Read only what you need, when you need it (progressive disclosure).
+>
+> Shared workflow, the same in every project (leader role, gates, issues lane):
+> `harness/WORKFLOW.md`.
 
 ## 1. Before starting (mandatory)
 

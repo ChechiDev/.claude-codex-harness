@@ -1,5 +1,8 @@
 # Reference documentation
 
+> Issues lane: an issue subtask `ISS-<n>.<k>` (spec in `docs/plan/issues/ISS-<n>-<slug>/`)
+> follows every rule here that names `N.M.K` (see `harness/WORKFLOW.md`).
+
 > Per-feature output documentation, **authored by Codex** at feature close
 > (after `APPROVED`). One file per task/subtask, named `<id>-<name>.md`, where
 > `<id>` matches the id in `docs/plan/` and `feature_list.json`.

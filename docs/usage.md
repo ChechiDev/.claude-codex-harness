@@ -165,6 +165,50 @@ The leader shows `make status` and waits. When a task's PR is merged, the next
 task starts from `main`. When a phase is done, the leader breaks down the next
 one (step 2).
 
+## 8. Issues lane (a GitHub issue at any point)
+
+An issue never becomes a task of a phase: it has its own lane, with the same
+gates (design: [design/issues-lane.md](design/issues-lane.md)).
+
+```bash
+make issue N=14                      # queue it (PRIORITY=now|next|backlog, default next)
+make status                          # the queue (from GitHub) and Next:
+make issue-start N=14                # claim it: assigned, status:in-progress,
+                                     # branch <type>/ISS-14-<slug>, header in docs/plan/issues/
+# the leader breaks it down with you: ISS-14.1, ISS-14.2… (one spec at a time)
+make plan && make check
+./harness/review_with_codex.sh issue ISS-14        # issue gate → ISSUE_APPROVED
+# per subtask, the usual cycle: plan ISS-14.1 → implementer → code ISS-14.1 → doc ISS-14.1
+# the last close opens one PR with "Closes #14"; you merge it
+harness/issue.sh resume              # after a `now` issue is merged: back to the task
+```
+
+- **Type** comes only from the issue's label (`bug`, `refactor`, `enhancement`,
+  `documentation`); fix the label if `make issue` refuses.
+- **`now`** may interrupt a task only between subtasks, and must be started
+  from that task's branch; **`next`** waits until the task is merged.
+- **Give it back** before any work: `harness/issue.sh release 14`.
+- **A new issue**: `make issue-new` (draft in `progress/issue_draft.md`) →
+  `./harness/review_with_codex.sh issue-draft` → `DRAFT_APPROVED` → your OK →
+  `harness/issue.sh publish`.
+
+## 9. Existing projects: move to the shared files (once)
+
+Projects installed before `lib/harness.mk` and `lib/WORKFLOW.md` existed have
+the harness targets and rules copied in. Move each one once (it can loop over
+many projects):
+
+```bash
+~/.claude-codex-harness/install.sh <project> --migrate
+```
+
+It relinks the symlinks on this machine, removes the harness targets copied
+into the `Makefile` only when they are unchanged (a customised one stops it with
+nothing changed), adds `include harness/harness.mk` and `@harness/WORKFLOW.md`,
+and verifies the result with `make -pn`. Running it again changes nothing. After
+that, new harness targets and rules reach the project with no edit. The old
+rules copied into `CLAUDE.md` stay; trim them by hand if you want.
+
 ## Checking that Codex really ran
 
 Every gate is a `codex exec` session with the project as its working dir. Its

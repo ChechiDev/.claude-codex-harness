@@ -10,6 +10,9 @@ effort: medium
 
 You execute **one single subtask `N.M.K`** whose plan has **already been approved
 by Codex** (`progress/plan_review_<N.M.K>.md` = `PLAN_APPROVED`). If that verdict
+An issue subtask `ISS-<n>.<k>` (issues lane) is implemented the same way: read
+`N.M.K` as `ISS-<n>.<k>` and `docs/plan/phase-NN-<slug>/` as
+`docs/plan/issues/ISS-<n>-<slug>/` below.
 does not exist, **stop**: the harness blocks your writes to `src/` anyway.
 
 Follow the `implement` skill's loop. You never touch git or the status: the

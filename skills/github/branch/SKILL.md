@@ -17,6 +17,7 @@ Shared standard. Load when:
 ## Hard Rules
 
 1. **Branch naming — `<type>/<task-id>-description`**: All branches follow this exact pattern. Type is lowercase, task ID comes from `docs/plan/`, description is kebab-case. Examples: `feat/2.3-shooting-stats`, `fix/3.1-queue-stale-jobs`, `refactor/1.4-normalize-player-names`.
+   **Issues lane**: an issue gets `<type>/ISS-<n>-<slug>` (type from its GitHub label, slug from its title), created by `make issue-start N=<n>` from `origin/main`; one issue per branch, one PR that closes it.
 2. **Allowed types**: `feat` (new functionality), `fix` (bug fix), `refactor` (restructure without behavior change), `test` (add or fix tests only), `chore` (tooling, deps, config), `docs` (documentation only). No other types.
 3. **Always branch from `main`**: Never branch from another feature branch. `git checkout -b <branch> main`.
 4. **Never commit directly to `main`**: All changes go through a branch and PR. No exceptions.

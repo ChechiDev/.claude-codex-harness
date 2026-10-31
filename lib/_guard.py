@@ -11,9 +11,13 @@ Commands:
                     re-seal its spec in the phase seal
   seal roadmap      record progress/plan_roadmap.sha256 (needs ROADMAP_APPROVED)
   seal phase <NN>   record progress/plan_phase_<NN>.sha256 (needs PHASE_APPROVED)
+  seal issue <ISS-n>  record progress/plan_issue_<ISS-n>.sha256 (needs ISSUE_APPROVED)
+  seal draft        record progress/issue_draft.sha256 (needs DRAFT_APPROVED)
   fingerprint  print a hash of the git working-tree state (Stop-hook cache key)
   setup-pending  exit 1 if the setup branch (harness.toml [git] setup_branch) has
                  changes main does not contain yet (squash merges count as merged)
+  migrates-ready <id>  exit 1 unless every oracle in <id>'s `migrates:` exists, is
+                 sealed and untouched, and the list is the one frozen at its issue gate
   commit-message <file> <N.M.K>  exit 1 unless <file> is a close-commit message for
                  subtask <N.M.K>: subject ending in [N.M.K], no agent attribution
 
@@ -41,6 +45,7 @@ from typing import Any
 
 import _config
 import _harness
+import _migrate
 import _plan_seal
 from _status import say
 
@@ -57,8 +62,10 @@ SKIP_DIRS = {"node_modules", "site-packages"}
 # Gate verdicts (roadmap, phase, plan, code), their history, the task PR
 # narrative and every seal under progress/.
 RE_CODEX_OWNED = re.compile(
-    r"^(progress/(plan_review|review|phase_review)_[^/]+\.md|progress/roadmap_review\.md"
+    r"^(progress/(plan_review|review|phase_review|issue_review)_[^/]+\.md"
+    r"|progress/(roadmap_review|issue_draft_review)\.md"
     r"|progress/review_history/[^/]+\.md|progress/pr_[^/]+\.md"
+    r"|progress/issue_migrations_[^/]+\.json|progress/oracle_migrations/[^/]+\.json"
     r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+)$"
 )
 RE_ATTRIBUTION = re.compile(r"co-authored-by|generated with|🤖|claude code|codex|anthropic", re.I)
@@ -664,32 +671,45 @@ def check_plan_seals() -> int:
     return 1 if problems else 0
 
 
-def check_branch() -> int:
-    """With [git] configured, the in_progress subtask must be on its task branch."""
+def _branch_to_check(leaf: str) -> str | None:
+    """The branch <leaf> must be on, or None when it is not enforced. Raises ValueError."""
     try:
         cfg = config()
     except ConfigError:
-        return 0  # check_scope already reports it
-    leaf = _current_leaf()
-    if not cfg.git_configured or not leaf:
-        return 0
+        return None  # check_scope already reports it
+    kind, owner = _harness.parse_id(leaf)
+    if kind == "task" and not cfg.git_configured:
+        return None
     if _git_out("rev-parse", "--git-dir") is None:
-        say("WARN", "task branch check skipped (not a git repo)")
+        say("WARN", f"{kind} branch check skipped (not a git repo)")
+        return None
+    return _harness.task_branch(owner, cfg)
+
+
+def check_branch() -> int:
+    """The in_progress subtask must be on its branch: an issue subtask always (its
+    branch is created by `make issue-start`), a task subtask only with [git]."""
+    leaf = _current_leaf()
+    if not leaf:
         return 0
+    kind = _harness.parse_id(leaf)[0]
     try:
-        expected = _harness.task_branch(leaf.rsplit(".", 1)[0], cfg)
+        expected = _branch_to_check(leaf)
     except ValueError as exc:
         say("FAIL", str(exc))
         return 1
+    if expected is None:
+        return 0
     current = (_git_out("branch", "--show-current") or "").strip() or "a detached HEAD"
+    rule = "<type>/ISS-<n>-<slug>" if kind == "issue" else "harness.toml [git] branch"
     if current != expected:
         say(
             "FAIL",
-            f"subtask {leaf} is in_progress on '{current}', but its task branch is "
-            f"'{expected}' (harness.toml [git] branch)",
+            f"subtask {leaf} is in_progress on '{current}', but its {kind} branch is "
+            f"'{expected}' ({rule})",
         )
         return 1
-    say("OK", f"subtask {leaf} is on its task branch {expected}")
+    say("OK", f"subtask {leaf} is on its {kind} branch {expected}")
     return 0
 
 
@@ -706,19 +726,8 @@ def setup_pending() -> int:
         return 1
     if _git_out("rev-parse", "-q", "--verify", f"refs/heads/{branch}") is None:
         return 0  # never created, or deleted after its merge
-    base = _git_out("merge-base", "main", branch)
-    changed = _git_out("diff", "--name-only", (base or "").strip(), branch) if base else None
-    files = [f":(top){f}" for f in (changed or "").splitlines() if f]
-    if base is not None and changed is not None and not files:
-        return 0  # merged (merge commit / fast-forward) or empty
-    same = subprocess.run(
-        ["git", "diff", "--quiet", branch, "main", "--", *files],
-        cwd=ROOT,
-        capture_output=True,
-        check=False,
-    )
-    if base is not None and files and same.returncode == 0:
-        return 0  # squash-merged: main already has the branch's version of every file
+    if _harness.branch_merged(branch, "main", ROOT):
+        return 0  # merged (merge commit, fast forward or squash) or empty
     say(
         "FAIL",
         f"the setup branch '{branch}' has changes main does not contain yet: merge it "
@@ -743,6 +752,11 @@ def seal(leaf: str) -> int:
     if not files:
         say("FAIL", f"cannot seal {leaf}: no tests/acceptance/test_{leaf}.*", sys.stderr)
         return 1
+    problems = _migrate.seal(ROOT, leaf, ROOT / _manifest_rel(leaf))
+    for problem in problems:
+        say("FAIL", f"cannot seal {leaf}: {problem}", sys.stderr)
+    if problems:
+        return 1
     lines = [f"{_sha256(f)}  {f.relative_to(ROOT).as_posix()}\n" for f in files]
     (ROOT / _manifest_rel(leaf)).write_text("".join(lines), encoding="utf-8")
     say("OK", f"sealed {len(files)} acceptance file(s) -> {_manifest_rel(leaf)}")
@@ -753,8 +767,11 @@ def seal(leaf: str) -> int:
 
 
 def _leaf_spec(leaf: str) -> tuple[str, str]:
+    """(spec, owner) of a leaf: the owner is its phase (NN) or its issue (ISS-n)."""
     item = next((s for s in _harness.leaves() if s["id"] == leaf), None)
-    return (str(item["spec"]), str(item["phase"])) if item else ("", "")
+    if item is None:
+        return ("", "")
+    return str(item["spec"]), str(item.get("issue") or item["phase"])
 
 
 def seal_roadmap() -> int:
@@ -780,14 +797,53 @@ def seal_phase(pid: str) -> int:
     return 0
 
 
+def seal_issue(iid: str) -> int:
+    if _harness.read_verdict(ROOT / _harness.issue_review(iid)) != "ISSUE_APPROVED":
+        say("FAIL", f"cannot seal issue {iid}: it is not ISSUE_APPROVED", sys.stderr)
+        return 1
+    if not _plan_seal.issue_entries(ROOT, iid):
+        say("FAIL", f"cannot seal issue {iid}: no docs/plan/issues/{iid}-*.md", sys.stderr)
+        return 1
+    _migrate.write_snapshot(ROOT, iid)  # freeze its migrates: lists with the breakdown
+    entries = _plan_seal.issue_entries(ROOT, iid)
+    _plan_seal.write(_plan_seal.issue_manifest(ROOT, iid), entries)
+    say("OK", f"sealed the approved issue {iid} ({len(entries)} file(s))")
+    return 0
+
+
+ISSUE_DRAFT = "progress/issue_draft.md"
+ISSUE_DRAFT_REVIEW = "progress/issue_draft_review.md"
+ISSUE_DRAFT_SEAL = "progress/issue_draft.sha256"
+
+
+def seal_draft() -> int:
+    if _harness.read_verdict(ROOT / ISSUE_DRAFT_REVIEW) != "DRAFT_APPROVED":
+        say("FAIL", "cannot seal the issue draft: it is not DRAFT_APPROVED", sys.stderr)
+        return 1
+    draft = ROOT / ISSUE_DRAFT
+    if not draft.is_file():
+        say("FAIL", f"cannot seal the issue draft: no {ISSUE_DRAFT}", sys.stderr)
+        return 1
+    (ROOT / ISSUE_DRAFT_SEAL).write_text(f"{_sha256(draft)}  {ISSUE_DRAFT}\n", encoding="utf-8")
+    say("OK", f"sealed the approved issue draft -> {ISSUE_DRAFT_SEAL}")
+    return 0
+
+
 def seal_command(args: list[str]) -> int:
     if args == ["roadmap"]:
         return seal_roadmap()
+    if args == ["draft"]:
+        return seal_draft()
     if len(args) == 2 and args[0] == "phase":
         return seal_phase(args[1])
+    if len(args) == 2 and args[0] == "issue":
+        return seal_issue(args[1])
     if len(args) == 1:
         return seal(args[0])
-    print("usage: _guard.py seal <N.M.K> | roadmap | phase <NN>", file=sys.stderr)
+    print(
+        "usage: _guard.py seal <N.M.K|ISS-n.k> | roadmap | phase <NN> | issue <ISS-n> | draft",
+        file=sys.stderr,
+    )
     return 2
 
 
@@ -837,6 +893,14 @@ def _run_guard(kind: str) -> int:
     return 0
 
 
+def migrates_ready(leaf: str) -> int:
+    """Plan-gate precondition of a subtask that declares `migrates:` (see _migrate.py)."""
+    problems = _migrate.ready_problems(ROOT, leaf)
+    for problem in problems:
+        say("FAIL", problem, sys.stderr)
+    return 1 if problems else 0
+
+
 def commit_message(path: str, leaf: str) -> int:
     """Validate the documenter's close message before the harness commits it."""
     try:
@@ -863,6 +927,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "fingerprint": lambda _: fingerprint(),
     "setup-pending": lambda _: setup_pending(),
     "commit-message": lambda rest: commit_message(*rest) if len(rest) == 2 else _usage(),
+    "migrates-ready": lambda rest: migrates_ready(rest[0]) if len(rest) == 1 else _usage(),
 }
 
 

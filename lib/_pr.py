@@ -15,8 +15,11 @@ Commands:
   record <gate> <id> <verdict-file>   append a gate round to the review history
   last-of-task <N.M.K>    print the task id if every other subtask of it is complete
   pr-due <N.M.K>          print the task id if the task is complete and auto_pr is on
-  title <N.M>             print the PR title
-  body <N.M> <base>       print the PR body against base branch <base>
+  title <N.M|ISS-n>       print the PR title
+  body <N.M|ISS-n> <base> print the PR body against base branch <base>
+
+An issue ISS-n (docs/plan/issues/) gets the same PR as a task, titled with its
+type, linking the GitHub issue, and ending with `Closes #n`.
 """
 
 from __future__ import annotations
@@ -60,7 +63,9 @@ STATUS = {"A": "Added", "M": "Modified", "D": "Deleted", "R": "Renamed", "C": "C
 
 
 def history_file(gate: str, fid: str) -> Path:
-    name = {"roadmap": "roadmap", "phase": f"phase-{fid}"}.get(gate, fid)
+    name = {"roadmap": "roadmap", "phase": f"phase-{fid}", "issue-draft": "issue-draft"}.get(
+        gate, fid
+    )
     return HISTORY_DIR / f"{name}.md"
 
 
@@ -123,11 +128,19 @@ def pr_due(sid: str) -> int:
 # ── title and body ───────────────────────────────────────────────────────────
 
 
+def _owner(tid: str) -> _harness.Item | None:
+    """The task N.M, or the issue ISS-n (the issues lane opens one PR per issue)."""
+    if _harness.RE_ISSUE_ID.match(tid):
+        return _harness._issue(tid)
+    return _harness._task(tid)
+
+
 def title(tid: str) -> int:
-    task = _harness._task(tid)
-    if task is None:
+    owner = _owner(tid)
+    if owner is None:
         return 1
-    print(f"feat: {str(task.get('title', '')).lower()} [{tid}]")
+    kind = str(owner.get("type") or "feat")  # an issue's type: fix | refactor | feat | docs
+    print(f"{kind}: {str(owner.get('title', '')).lower()} [{tid}]")
     return 0
 
 
@@ -192,6 +205,13 @@ def files_table(merge_base: str) -> str:
 def documentation_section(tid: str) -> str:
     specs = [Path(str(leaf["spec"])) for leaf in _task_leaves(tid) if leaf.get("spec")]
     folders = sorted({spec.parent.as_posix() for spec in specs})
+    issue = _harness._issue(tid) if tid.startswith("ISS-") else None
+    if issue is not None:
+        lines = [f"GitHub issue: {issue.get('issue') or '-'}"]
+        lines.append(f"Issue header: `{issue['file']}`")
+        if folders:
+            lines.append("Specs of this issue: " + ", ".join(f"`{f}/`" for f in folders))
+        return "\n\n".join(lines)
     if not folders:
         return EMPTY
     return "Specs of this task: " + ", ".join(f"`{folder}/`" for folder in folders)
@@ -222,6 +242,9 @@ def branch_section(tid: str, base: str, notes: str) -> str:
         lines.append(f"Merging it unblocks task {', '.join(unblocks)}.")
     if notes:
         lines.append(notes)
+    issue = _harness._issue(tid) if tid.startswith("ISS-") else None
+    if issue is not None:
+        lines.append(f"Closes #{issue['number']}")  # GitHub closes the issue on merge
     return "\n\n".join(lines)
 
 
@@ -234,9 +257,9 @@ def _template() -> str:
 
 
 def body(tid: str, base: str) -> int:
-    task = _harness._task(tid)
+    task = _owner(tid)
     if task is None:
-        say("FAIL", f"task {tid} does not exist in docs/plan/", sys.stderr)
+        say("FAIL", f"task or issue {tid} does not exist in docs/plan/", sys.stderr)
         return 1
     try:
         template = _template()

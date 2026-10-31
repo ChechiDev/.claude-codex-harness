@@ -19,6 +19,9 @@ per subtask:  [Codex] plan gate (writes acceptance tests, red)
               → [Codex] code gate → [Codex] close: docs + status done + ONE commit
               → you approve the next subtask
 per task:     the last close pushes the task branch and opens ONE PR → you merge
+per issue:    a GitHub issue, at any point, in its own issues lane (never a task):
+              queue → claim → [Codex] issue gate → the same per-subtask cycle
+              → ONE PR with "Closes #n" → you merge
 ```
 
 Claude cannot write `src/` before the plan gate, cannot touch files outside the
@@ -132,14 +135,24 @@ troubleshooting: [usage](docs/usage.md).
 
 ### Commands
 
-The project's `Makefile` is the single source of truth:
+The project's `Makefile` is the single source of truth. It holds the project's
+own toolchain targets and ends with `include harness/harness.mk`, the harness
+targets shared by every project through the `harness/` symlink:
 
 ```
 make plan    # regenerate feature_list.json + the PLAN.md index from docs/plan/
-make status  # the whole plan: done / in progress / pending, gate verdicts, next step
+make status  # the whole plan: done / in progress / pending, gate verdicts, issue queue, next step
 make verify  # lint + type + test (Python: ruff, strict mypy, pytest)
 make check   # verify + harness invariants (plan sync, gates, seals, src/ scope)
+make issue N=14 [PRIORITY=now|next|backlog]   # issues lane: queue a GitHub issue
+make issue-start N=14                         # claim it and create its branch
+make issue-new                                # draft a new issue (Codex reviews it)
 ```
+
+The workflow rules Claude follows are shared the same way: each project's
+`CLAUDE.md` imports `@harness/WORKFLOW.md`. A project installed before that
+moves to it once with `install.sh <project> --migrate` (see
+[usage](docs/usage.md)).
 
 ## Documentation
 

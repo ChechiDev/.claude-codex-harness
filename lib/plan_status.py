@@ -4,10 +4,18 @@ pending or blocked, every Codex gate verdict, and the next step to take.
 
 Read-only and live: it reads feature_list.json (run `make plan` after editing
 docs/plan/) and the verdict files in progress/ as they are now.
+
+Issues lane: the issues planned on this branch (docs/plan/issues/) get their own
+block, apart from the phases and their counters, and the shared queue is read
+from GitHub (open issues labelled priority:* and not status:in-progress). Without
+gh or network the queue line says so and the rest prints as usual.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +25,8 @@ from _status import Kind, paint
 
 Item = dict[str, Any]
 OUT = sys.stdout
+GH = os.environ.get("HARNESS_GH", "gh")
+PRIORITIES = ("now", "next", "backlog")
 TAGS: dict[str, tuple[str, Kind | None]] = {
     "done": ("[DONE]", "OK"),
     "baseline": ("[BASE]", "OK"),
@@ -95,6 +105,136 @@ def _summary(data: Item) -> str:
     )
 
 
+# ── issues lane ──────────────────────────────────────────────────────────────
+
+
+def _issue_line(issue: Item) -> str:
+    subs = issue["subtasks"]
+    head = f"{issue['id']} {issue['title']}"
+    tail = f"{issue['type']} · priority {issue['priority']}"
+    if not subs:
+        return f"{head} · planning · {tail}"
+    done = sum(s["status"] == "done" for s in subs)
+    if done == len(subs):
+        state = paint("done", "OK", OUT)
+    else:
+        state = _gate_state(_harness.issue_review(issue["id"]), "ISSUE_APPROVED")
+    return f"{head} · {state} · {done}/{len(subs)} done · {tail}"
+
+
+def _issues_tree(data: Item) -> list[str]:
+    issues: list[Item] = data.get("issues", [])
+    if not issues:
+        return []
+    lines = ["", "Issues"]
+    for issue in issues:
+        lines.append(f"  {_issue_line(issue)}")
+        lines += [_sub_line(s) for s in issue["subtasks"]]
+    subs = [s for i in issues for s in i["subtasks"]]
+    done = sum(s["status"] == "done" for s in subs)
+    plural = "s" * (len(issues) != 1)
+    lines.append(f"{len(issues)} issue{plural} · {done}/{len(subs)} issue subtasks done")
+    return lines
+
+
+def github_queue() -> list[Item] | None:
+    """Queued issues on GitHub (now, next, backlog), or None when gh is unreachable."""
+    cmd = [GH, "issue", "list", "--state", "open", "--limit", "200"]
+    cmd += ["--json", "number,title,labels,assignees"]
+    try:
+        res = subprocess.run(cmd, text=True, capture_output=True, check=False, timeout=15)
+        found = json.loads(res.stdout) if res.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    if not isinstance(found, list):
+        return None
+    queue = []
+    for issue in found:
+        labels = [lb["name"] for lb in issue.get("labels", [])]
+        prio = [lb.split(":", 1)[1] for lb in labels if lb.startswith("priority:")]
+        if prio and prio[0] in PRIORITIES and "status:in-progress" not in labels:
+            queue.append({"number": issue["number"], "title": issue["title"], "priority": prio[0]})
+    return sorted(queue, key=lambda i: (PRIORITIES.index(i["priority"]), i["number"]))
+
+
+def _queue_lines(data: Item, queue: list[Item] | None) -> list[str]:
+    if queue is None:
+        if not data.get("issues"):
+            return []  # a project that does not use issues: no noise
+        return ["", "Issue queue (GitHub) unavailable (gh not reachable)"]
+    if not queue and not data.get("issues"):
+        return []
+    lines = ["", "Issue queue (GitHub)"]
+    lines += [f"  #{i['number']} {i['title']} · {i['priority']}" for i in queue] or ["  empty"]
+    return lines
+
+
+def _git_line(*args: str) -> str | None:
+    try:
+        res = subprocess.run(["git", *args], text=True, capture_output=True, check=False)
+    except OSError:
+        return None
+    return res.stdout.strip() if res.returncode == 0 else None
+
+
+def _done_issue_next(issue: Item) -> str | None:
+    """A finished issue: merge its PR (on its branch), then resume an interrupted task."""
+    branch = _git_line("branch", "--show-current") or ""
+    on_issue = not branch or branch.split("/", 1)[-1].startswith(f"{issue['id']}-")
+    resume = issue.get("interrupts")
+    if on_issue:
+        step = f"issue {issue['id']} is done: merge its PR (Closes #{issue['number']})"
+        return f"{step}, then resume task {resume}: harness/issue.sh resume" if resume else step
+    if resume and _git_line("merge-base", "--is-ancestor", "HEAD", str(resume)) is None:
+        return f"resume task {resume}: harness/issue.sh resume"
+    return None
+
+
+def _issue_gate_next(iid: str) -> str | None:
+    verdict = _verdict(_harness.issue_review(iid))
+    if verdict == "CHANGES_REQUESTED":
+        return f"fix the breakdown of issue {iid} ({_harness.issue_review(iid)}), then issue gate"
+    if verdict != "ISSUE_APPROVED":
+        return f"issue gate: {GATE} issue {iid}"
+    return None
+
+
+def _issue_next(data: Item, issue: Item) -> str | None:
+    iid, subs = issue["id"], issue["subtasks"]
+    if not subs:
+        return f"break down issue {iid} into subtask specs"
+    current = next((s for s in subs if s["status"] == "in_progress"), None)
+    if current:
+        return _leaf_next(current["id"])
+    if all(s["status"] == "done" for s in subs):
+        return _done_issue_next(issue)
+    gate = _issue_gate_next(iid)
+    if gate:
+        return gate
+    finished = _complete_ids(data) | {s["id"] for s in subs if s["status"] == "done"}
+    ready = [s for s in subs if s["status"] == "pending" and set(s["depends"]) <= finished]
+    if ready:
+        return f"start subtask {ready[0]['id']} (leader: in_progress + make plan)"
+    return f"resolve blocked subtask(s) of issue {iid}"
+
+
+def _lane_next(data: Item, queue: list[Item] | None) -> str | None:
+    """Issue steps that come before the phase flow: an issue planned on this branch,
+    then a `now` issue waiting in the queue (it may interrupt a task, but only between
+    subtasks). A task subtask in progress is left to the phase flow, exactly as before."""
+    if any(s["status"] == "in_progress" for t in data["features"] for s in t["subtasks"]):
+        return None
+    for issue in data.get("issues", []):
+        step = _issue_next(data, issue)
+        if step:
+            return step
+    urgent = [i for i in queue or [] if i["priority"] == "now"]
+    if urgent:
+        n = urgent[0]["number"]
+        return f"start issue #{n} (now): make issue-start N={n}"
+    return None
+
+
 # ── next step ────────────────────────────────────────────────────────────────
 
 
@@ -158,8 +298,8 @@ def _breakdown_next(data: Item, pid: str) -> str:
     return _phase_next(data, pid)
 
 
-def next_step(data: Item) -> str:
-    early = _roadmap_next(data)
+def next_step(data: Item, queue: list[Item] | None = None) -> str:
+    early = _lane_next(data, queue) or _roadmap_next(data)
     if early:
         return early
     phase = _current_phase(data)
@@ -172,11 +312,17 @@ def main() -> int:
         return 1
     data = _harness.plan_data()
     data.setdefault("phases", [])
+    data.setdefault("features", [])
     if data["phases"]:
         lines = [*_tree(data), "─" * 60, _summary(data)]
     else:
         lines = ["No phases planned yet."]
-    lines += ["", paint(f"Next: {next_step(data)}", "SKIP", OUT)]
+    # Only a project that uses the issues lane (docs/plan/issues/, shipped with new
+    # projects and added by --migrate) asks GitHub: the others stay offline as before.
+    lane = (_harness.FEATURES_FILE.parent / "docs/plan/issues").is_dir()
+    queue = github_queue() if lane else None
+    lines += _issues_tree(data) + (_queue_lines(data, queue) if lane else [])
+    lines += ["", paint(f"Next: {next_step(data, queue)}", "SKIP", OUT)]
     print("\n".join(lines))
     return 0
 

@@ -15,6 +15,12 @@ progression and dependencies once its phase is PHASE_APPROVED, and needs no
 code review nor reference doc (it is not in done-ids). Its status line is part
 of the phase seal (_plan_seal.py), so nothing turns baseline after approval.
 
+Issues lane: GitHub issues are planned under docs/plan/issues/ (feature_list.json
+`issues`), with subtask ids ISS-<n>.<k>. They join the leaf list (one in_progress
+across both lanes) but never count in phase progression: an issue subtask starts
+once its issue is ISSUE_APPROVED and its dependencies are done. An issue lives on
+the branch <type>/ISS-<n>-<slug>, whatever the [git] task template says.
+
 Usage: python3 _harness.py <command> [args]
 Commands:
   in-progress-id         print the id of the single in_progress leaf (empty if none)
@@ -26,8 +32,12 @@ Commands:
   roadmap-ready          exit 0 if there are phases for the roadmap gate to review
   phase-ready <NN>       exit 0 if phase NN can go through the phase gate
   subtask-ready <id>     exit 0 if subtask <id> can go through the plan gate
+  issue-ready <ISS-n>    exit 0 if issue ISS-n can go through the issue gate
+  issue-of <id>          print the issue id of issue subtask <id> (exit 1 for a task leaf)
+  issue-field <ISS-n> <key>  print a field of issue ISS-n (type, priority, interrupts…)
   verdict <file>         print the verdict of a Codex review file (empty if none)
-  branch <N.M>           print the task branch (harness.toml [git] branch)
+  branch <N.M|ISS-n>     print the task branch (harness.toml [git] branch) or issue branch
+  branch-of <id>         print the branch of the task or issue that leaf <id> belongs to
   commit-prefix <N.M.K>  print the close-commit subject prefix (may be empty)
   validate               validate invariants; exit != 0 with [FAIL] messages on failure
 """
@@ -36,6 +46,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -52,15 +63,28 @@ STARTED = {"in_progress", "done"}
 # CHANGES_REQUESTED review that merely mentions "PLAN_APPROVED" open the gate.
 RE_VERDICT = re.compile(
     r"^\*\*Verdict:\*\*[ \t]*"
-    r"(ROADMAP_APPROVED|PHASE_APPROVED|PLAN_APPROVED|APPROVED|CHANGES_REQUESTED)[ \t]*$",
+    r"(ROADMAP_APPROVED|PHASE_APPROVED|ISSUE_APPROVED|DRAFT_APPROVED|PLAN_APPROVED|APPROVED"
+    r"|CHANGES_REQUESTED)[ \t]*$",
     re.MULTILINE,
 )
+
+RE_ISSUE_ID = re.compile(r"^ISS-\d+$")
 
 Item = dict[str, Any]
 
 
 def phase_review(pid: str) -> Path:
     return Path(f"progress/phase_review_{pid}.md")
+
+
+def issue_review(iid: str) -> Path:
+    return Path(f"progress/issue_review_{iid}.md")
+
+
+def parse_id(item_id: str) -> tuple[str, str]:
+    """The owner of a leaf: ("task", "2.3") for 2.3.1, ("issue", "ISS-14") for ISS-14.1."""
+    owner = item_id.rsplit(".", 1)[0]
+    return ("issue" if RE_ISSUE_ID.match(owner) else "task"), owner
 
 
 def plan_data() -> Item:
@@ -78,30 +102,43 @@ def phases() -> list[Item]:
     return found
 
 
+def issues(data: Item | None = None) -> list[Item]:
+    found: list[Item] = (plan_data() if data is None else data).get("issues", [])
+    return found
+
+
+def _leaf_item(sub: Item, phase: str, issue: str) -> Item:
+    return {
+        "id": sub["id"],
+        "status": sub.get("status", "pending"),
+        "name": sub.get("title", ""),
+        "files": sub.get("files", []),
+        "depends": sub.get("depends", []),
+        "phase": phase,
+        "issue": issue,
+        "spec": sub.get("spec", ""),
+        "migrates": sub.get("migrates", []),
+    }
+
+
 def leaves(data: Item | None = None) -> list[Item]:
-    """Return the atomic work units: every subtask of every task (of <data> if given)."""
-    tasks: list[Item] = _tasks() if data is None else data.get("features", [])
-    return [
-        {
-            "id": s["id"],
-            "status": s.get("status", "pending"),
-            "name": s.get("title", ""),
-            "files": s.get("files", []),
-            "depends": s.get("depends", []),
-            "phase": t.get("phase", ""),
-            "spec": s.get("spec", ""),
-        }
-        for t in tasks
+    """Return the atomic work units: every subtask of every task, then of every issue."""
+    source = plan_data() if data is None else data
+    out = [
+        _leaf_item(s, str(t.get("phase", "")), "")
+        for t in source.get("features", [])
         for s in t.get("subtasks") or []
     ]
+    out += [_leaf_item(s, "", str(i["id"])) for i in issues(source) for s in i["subtasks"]]
+    return out
 
 
 def _all_items() -> list[Item]:
-    """Every phase, task and subtask (for name lookup by any id)."""
+    """Every phase, task, issue and subtask (for name lookup by any id)."""
     out: list[Item] = [{"id": p["id"], "name": p.get("title", "")} for p in phases()]
-    for t in _tasks():
-        out.append({"id": t["id"], "name": t.get("title", "")})
-        for s in t.get("subtasks") or []:
+    for owner in [*_tasks(), *issues()]:
+        out.append({"id": owner["id"], "name": owner.get("title", "")})
+        for s in owner.get("subtasks") or []:
             out.append({"id": s["id"], "name": s.get("title", "")})
     return out
 
@@ -146,12 +183,50 @@ def _render(pattern: str, tid: str, cfg: _config.Config) -> str:
     return _config.render(pattern, tid, str(task.get("title", "")), ticket)
 
 
+def _issue(iid: str) -> Item | None:
+    return next((i for i in issues() if str(i["id"]) == str(iid)), None)
+
+
+def issue_branch(iid: str) -> str:
+    """The branch issue <iid> lives on: <type>/<iid>-<slug>. Raises ValueError."""
+    issue = _issue(iid)
+    if issue is None:
+        raise ValueError(f"issue {iid} does not exist in docs/plan/issues/")
+    name = f"{issue['type']}/{iid}-{_config.issue_slug(str(issue.get('title', '')))}"
+    if not _config.valid_branch(name):
+        raise ValueError(f"issue {iid}: '{name}' is not a valid branch name")
+    return name
+
+
 def task_branch(tid: str, cfg: _config.Config) -> str:
-    """The branch task <tid> lives on. Raises ValueError with the reason."""
+    """The branch task (or issue) <tid> lives on. Raises ValueError with the reason."""
+    if RE_ISSUE_ID.match(tid):
+        return issue_branch(tid)
     name = _render(cfg.branch, tid, cfg)
     if not _config.valid_branch(name):
         raise ValueError(f"task {tid}: '{name}' is not a valid branch name")
     return name
+
+
+def _git(cwd: Path | None, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=False)
+
+
+def branch_merged(tip: str, base: str, cwd: Path | None = None) -> bool:
+    """<tip> reached <base>: merge commit or fast forward (ancestor), squash (base has the
+    tip's version of every file the tip changed), or nothing to merge (no changed file)."""
+    if _git(cwd, "merge-base", "--is-ancestor", tip, base).returncode == 0:
+        return True
+    fork = _git(cwd, "merge-base", base, tip)
+    if fork.returncode != 0:
+        return False
+    changed = _git(cwd, "diff", "-z", "--name-only", fork.stdout.strip(), tip)
+    if changed.returncode != 0:
+        return False
+    files = [f":(top){f}" for f in changed.stdout.split("\0") if f]
+    if not files:
+        return True
+    return _git(cwd, "diff", "--quiet", tip, base, "--", *files).returncode == 0
 
 
 def read_verdict(path: Path) -> str:
@@ -176,6 +251,8 @@ def _broken_down(phase: Item) -> bool:
 
 def complete(leaf: Item) -> bool:
     """Done, or baseline in a phase Codex approved (unapproved baseline is a claim)."""
+    if leaf["status"] == "baseline" and leaf.get("issue"):
+        return False  # issues have no baseline: their work is new by definition
     if leaf["status"] == "baseline":
         return read_verdict(phase_review(str(leaf["phase"]))) == "PHASE_APPROVED"
     return bool(leaf["status"] == "done")
@@ -216,14 +293,27 @@ def _progression_problems() -> list[str]:
     return problems
 
 
-def _start_problems(leaf: Item, status: dict[str, str], finished: set[str]) -> list[str]:
-    problems = []
+def _gate_problems(leaf: Item) -> list[str]:
+    """The breakdown gate a started leaf needs: its phase's, or its issue's."""
+    if leaf.get("issue"):
+        iid = str(leaf["issue"])
+        if read_verdict(issue_review(iid)) == "ISSUE_APPROVED":
+            return []
+        return [
+            f"{leaf['id']} is {leaf['status']} but issue {iid} is not ISSUE_APPROVED "
+            f"({issue_review(iid)})"
+        ]
     pid = leaf["phase"]
-    if read_verdict(phase_review(pid)) != "PHASE_APPROVED":
-        problems.append(
-            f"{leaf['id']} is {leaf['status']} but phase {pid} is not PHASE_APPROVED "
-            f"({phase_review(pid)})"
-        )
+    if read_verdict(phase_review(pid)) == "PHASE_APPROVED":
+        return []
+    return [
+        f"{leaf['id']} is {leaf['status']} but phase {pid} is not PHASE_APPROVED "
+        f"({phase_review(pid)})"
+    ]
+
+
+def _start_problems(leaf: Item, status: dict[str, str], finished: set[str]) -> list[str]:
+    problems = _gate_problems(leaf)
     for dep in leaf.get("depends", []):
         if dep not in finished:
             problems.append(
@@ -278,6 +368,15 @@ def phase_ready_problems(pid: str) -> list[str]:
     if not _phase_leaves(pid):
         problems.append(f"phase {pid} has no subtasks yet: break it down first")
     return problems + [p for p in _progression_problems() if p.startswith(f"phase {pid} ")]
+
+
+def issue_ready_problems(iid: str) -> list[str]:
+    issue = _issue(iid)
+    if issue is None:
+        return [f"issue {iid} does not exist in docs/plan/issues/"]
+    if not issue.get("subtasks"):
+        return [f"issue {iid} has no subtasks yet: break it down first"]
+    return []
 
 
 def subtask_ready_problems(fid: str) -> list[str]:
@@ -354,8 +453,24 @@ def branch(tid: str) -> int:
     return _git_command(lambda cfg: task_branch(tid, cfg))
 
 
+def branch_of(fid: str) -> int:
+    return branch(parse_id(fid)[1])
+
+
+def issue_of(fid: str) -> int:
+    kind, owner = parse_id(fid)
+    return _print(owner if kind == "issue" and _leaf(fid) else None)
+
+
+def issue_field(iid: str, key: str) -> int:
+    issue = _issue(iid)
+    return _print(issue.get(key) if issue else None)
+
+
 def commit_prefix(sid: str) -> int:
-    tid = sid.rsplit(".", 1)[0]
+    kind, tid = parse_id(sid)
+    if kind == "issue":
+        return 0  # issues have no ticket: their id is already in the [ISS-n.k] subject tag
     return _git_command(lambda cfg: _render(cfg.commit_prefix, tid, cfg))
 
 
@@ -389,6 +504,7 @@ def main(argv: list[str]) -> int:
         return 1
     cmd, *rest = argv
     arg = rest[0] if rest else ""
+    arg2 = rest[1] if len(rest) > 1 else ""
     dispatch: dict[str, Callable[[], int]] = {
         "in-progress-id": in_progress_id,
         "feature-name": lambda: feature_name(arg),
@@ -399,6 +515,10 @@ def main(argv: list[str]) -> int:
         "roadmap-ready": lambda: _report(roadmap_ready_problems()),
         "phase-ready": lambda: _report(phase_ready_problems(arg)),
         "subtask-ready": lambda: _report(subtask_ready_problems(arg)),
+        "issue-ready": lambda: _report(issue_ready_problems(arg)),
+        "issue-of": lambda: issue_of(arg),
+        "issue-field": lambda: issue_field(arg, arg2),
+        "branch-of": lambda: branch_of(arg),
         "validate": validate,
         "branch": lambda: branch(arg),
         "commit-prefix": lambda: commit_prefix(arg),

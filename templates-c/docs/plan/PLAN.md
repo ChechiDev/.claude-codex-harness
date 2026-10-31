@@ -28,7 +28,12 @@ docs/plan/
   PLAN.md                                 this file (vision… + generated index)
   phase-NN-<slug>.md                      one per phase: title, goal, its tasks N.M
   phase-NN-<slug>/<N.M.K>-<slug>.md       one spec per subtask (micro-task)
+  issues/ISS-<n>-<slug>.md                issues lane: one header per GitHub issue (make issue-start)
+  issues/ISS-<n>-<slug>/ISS-<n>.<k>-<slug>.md   one spec per issue subtask (outside every phase)
 ```
+
+GitHub issues are planned under `docs/plan/issues/`, apart from the phases and
+their progression, with their own gate (`ISSUE_APPROVED`); see `harness/WORKFLOW.md`.
 
 - **Every phase exists from the start** with its title and goal, so the whole
   scope is visible and reviewed (roadmap gate).

@@ -2,10 +2,13 @@
 # The single entry point through which Claude (leader) invokes Codex.
 #   review_with_codex.sh roadmap              Codex reviews PLAN.md + every phase (scope)
 #   review_with_codex.sh phase <NN>           Codex reviews the breakdown of phase NN
-#   review_with_codex.sh <plan|code|doc> <N.M.K>   per-subtask gates and close
+#   review_with_codex.sh issue <ISS-n>        Codex reviews the breakdown of issue ISS-n
+#   review_with_codex.sh issue-draft          Codex reviews progress/issue_draft.md
+#   review_with_codex.sh <plan|code|doc> <N.M.K|ISS-n.k>   per-subtask gates and close
 #   review_with_codex.sh close <N.M.K>        check + commit a close (after manual `doc`)
-#   review_with_codex.sh pr <N.M>             push the task branch and open its PR
-#   review_with_codex.sh seal <N.M.K|roadmap|phase NN>   (human, manual mode: seal)
+#   review_with_codex.sh pr <N.M|ISS-n>       push the task/issue branch and open its PR
+#   review_with_codex.sh seal <N.M.K|roadmap|phase NN|issue ISS-n|draft>
+#                                             (human, manual mode: seal)
 #
 # Each gate checks its preconditions first (roadmap approved before a phase gate,
 # phase approved before a subtask plan gate) and, when Codex approves, seals what
@@ -45,8 +48,9 @@ MODE_EXEC="${HARNESS_CODEX_MODE:-auto}"
 cd "$PROJECT_DIR" || exit 1
 
 usage() {
-  echo "usage: review_with_codex.sh roadmap | phase <NN> | <plan|code|doc> <N.M.K>" \
-       "| close <N.M.K> | pr <N.M> | seal <N.M.K|roadmap|phase NN>" >&2
+  echo "usage: review_with_codex.sh roadmap | phase <NN> | issue <ISS-n> | issue-draft" \
+       "| <plan|code|doc> <N.M.K|ISS-n.k> | close <N.M.K> | pr <N.M> | pr <ISS-n>" \
+       "| seal <N.M.K|roadmap|phase NN|issue ISS-n|draft>" >&2
   exit 2
 }
 PHASE="${1:-}"; shift || true
@@ -75,6 +79,14 @@ close_commit() {
   ok "closed -> $id ; commit $(git rev-parse --short HEAD)"
 }
 
+# An issue (ISS-n) is claimed with a tag until its PR is open: drop the claim then.
+# A failure only warns: retrying `pr ISS-n` runs it again.
+cleanup_claim() {
+  case "$1" in ISS-*) ;; *) return 0 ;; esac
+  HARNESS_GH="$GH" python3 "$HARNESS_DIR/_issue.py" cleanup "$1" ||
+    warn "could not drop the claim of $1; $2" >&2
+}
+
 # Push the current (task) branch and open the PR of task $1. Never fails the
 # caller: the close is already committed, so problems become a warning.
 open_pr() {
@@ -93,6 +105,7 @@ open_pr() {
   fi
   if "$GH" pr view "$branch" --json url >/dev/null 2>&1; then
     ok "PR already open for $branch (pushed the new commits)"
+    cleanup_claim "$tid" "$retry"
     return 0
   fi
   title="$(python3 "$PR_PY" title "$tid")"
@@ -103,6 +116,7 @@ open_pr() {
   fi
   if "$GH" pr create --head "$branch" --base "$base" --title "$title" --body-file "$body"; then
     ok "PR opened for task $tid ($branch -> $base)"
+    cleanup_claim "$tid" "$retry"
   else
     warn "gh pr create failed for task $tid; $retry" >&2
   fi
@@ -123,6 +137,8 @@ case "$PHASE" in
   pr)      [ -n "${1:-}" ] || usage; open_pr "$1"; exit 0 ;;
   roadmap) ID="roadmap"; ROLE="$CODEX_DIR/reviewer.md" ;;
   phase|plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
+  issue)   ID="${1:-}"; [[ "$ID" =~ ^[0-9]+$ ]] && ID="ISS-$ID"; ROLE="$CODEX_DIR/reviewer.md" ;;
+  issue-draft) ID="draft"; ROLE="$CODEX_DIR/reviewer.md" ;;
   doc)     ID="${1:-}"; ROLE="$CODEX_DIR/documenter.md" ;;
   *) usage ;;
 esac
@@ -134,7 +150,12 @@ CODEX_PHASE="$PHASE"
 case "$PHASE" in
   roadmap) python3 "$HARNESS_PY" roadmap-ready || exit 1 ;;
   phase)   python3 "$HARNESS_PY" phase-ready "$ID" || exit 1 ;;
-  plan)    python3 "$HARNESS_PY" subtask-ready "$ID" || exit 1 ;;
+  issue)   python3 "$HARNESS_PY" issue-ready "$ID" || exit 1 ;;
+  plan)    python3 "$HARNESS_PY" subtask-ready "$ID" || exit 1
+           python3 "$HARNESS_DIR/_guard.py" migrates-ready "$ID" || exit 1 ;;
+  issue-draft)
+    [ -f progress/issue_draft.md ] || {
+      fail "no progress/issue_draft.md: the leader writes the draft first" >&2; exit 1; } ;;
 esac
 
 # Read config from the role prompt's YAML header.
@@ -153,6 +174,13 @@ case "$PHASE" in
     PHASE_FILE="$(ls docs/plan/phase-"$ID"-*.md 2>/dev/null | head -1)"
     TARGET="the breakdown of phase $ID: ${PHASE_FILE:-docs/plan/phase-$ID-<slug>.md} (tasks) and every subtask spec in ${PHASE_FILE%.md}/"
     VERDICT_FILE="progress/phase_review_$ID.md"; SEAL_ARGS=(phase "$ID"); SEAL_ON="PHASE_APPROVED" ;;
+  issue)
+    ISSUE_FILE="$(ls docs/plan/issues/"$ID"-*.md 2>/dev/null | head -1)"
+    TARGET="the breakdown of issue $ID: ${ISSUE_FILE:-docs/plan/issues/$ID-<slug>.md} (header) and every subtask spec in ${ISSUE_FILE%.md}/"
+    VERDICT_FILE="progress/issue_review_$ID.md"; SEAL_ARGS=(issue "$ID"); SEAL_ON="ISSUE_APPROVED" ;;
+  issue-draft)
+    TARGET="the draft of a new GitHub issue: progress/issue_draft.md (front matter + body)"
+    VERDICT_FILE="progress/issue_draft_review.md"; SEAL_ARGS=(draft); SEAL_ON="DRAFT_APPROVED" ;;
   *)
     TARGET="subtask $ID, spec: $(python3 "$HARNESS_PY" spec "$ID" 2>/dev/null)"
     VERDICT_FILE="progress/plan_review_$ID.md"; SEAL_ARGS=("$ID"); SEAL_ON="PLAN_APPROVED"

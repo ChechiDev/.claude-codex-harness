@@ -117,6 +117,10 @@ SPEC = (
     "- files:\n  - src/app/m{slug}.py\n"
     "- acceptance:\n  - AC1 | works | tests/acceptance/test_{sid}.py::test_ac1_works\n"
 )
+ISSUE = (
+    "# {iid} Issue {n}\n- issue: https://github.com/acme/app/issues/{n}\n"
+    "- type: {type}\n- origin: 1.1\n- priority: {priority}\n{extra}- goal: g.\n"
+)
 
 
 class Plan:
@@ -130,6 +134,8 @@ class Plan:
         self.phases: dict[str, list[str]] = {}
         self.specs: dict[str, tuple[str, str]] = {}
         self.tickets: dict[str, str] = {}
+        self.issues: dict[str, tuple[str, str, str]] = {}
+        self.isubs: dict[str, tuple[str, str]] = {}
 
     def phase(self, n: str, *tasks: str) -> Plan:
         self.phases[n] = list(tasks)
@@ -138,6 +144,17 @@ class Plan:
     def sub(self, sid: str, status: str = "pending", depends: str = "none") -> Plan:
         self.specs[sid] = (status, depends)
         return self
+
+    def issue(self, n: int, type_: str = "fix", priority: str = "next", extra: str = "") -> Plan:
+        self.issues[f"ISS-{n}"] = (type_, priority, extra)
+        return self
+
+    def isub(self, sid: str, status: str = "pending", depends: str = "none") -> Plan:
+        self.isubs[sid] = (status, depends)
+        return self
+
+    def approve_issue(self, n: int) -> Plan:
+        return self.verdict(f"issue_review_ISS-{n}.md", "ISSUE_APPROVED")
 
     def ticket(self, tid: str, value: str) -> Plan:
         self.tickets[tid] = value
@@ -171,9 +188,24 @@ class Plan:
             folder.mkdir(exist_ok=True)
             text = SPEC.format(sid=sid, status=status, depends=depends, slug=sid.replace(".", ""))
             (folder / f"{sid}-s.md").write_text(text)
+        self._sync_issues(plan)
         res = self.run_py("sync_plan.py")
         assert res.returncode == 0, res.stdout + res.stderr
         return self
+
+    def _sync_issues(self, plan: Path) -> None:
+        root = plan / "issues"
+        for iid, (type_, priority, extra) in self.issues.items():
+            root.mkdir(exist_ok=True)
+            n = iid.split("-", 1)[1]
+            header = ISSUE.format(iid=iid, n=n, type=type_, priority=priority, extra=extra)
+            (root / f"{iid}-i{n}.md").write_text(header)
+        for sid, (status, depends) in self.isubs.items():
+            iid = sid.rsplit(".", 1)[0]
+            folder = root / f"{iid}-i{iid.split('-', 1)[1]}"
+            folder.mkdir(parents=True, exist_ok=True)
+            text = SPEC.format(sid=sid, status=status, depends=depends, slug=sid.replace(".", ""))
+            (folder / f"{sid}-s.md").write_text(text)
 
     def run_py(self, script: str, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(

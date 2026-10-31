@@ -1,5 +1,8 @@
 # Current session
 
+> Issues lane: an issue subtask `ISS-<n>.<k>` (spec in `docs/plan/issues/ISS-<n>-<slug>/`)
+> follows every rule here that names `N.M.K` (see `harness/WORKFLOW.md`).
+
 > This file is emptied when each session closes and its summary is moved to
 > `history.md`. Keep it updated **in real time**, not at the end.
 

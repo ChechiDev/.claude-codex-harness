@@ -10,6 +10,8 @@ metadata:
 ## Activation Contract
 
 Claude only. Load when receiving a subtask `N.M.K` to implement from the leader.
+An issue subtask `ISS-<n>.<k>` (issues lane) follows the same loop: read `N.M.K` as
+`ISS-<n>.<k>` and `docs/plan/phase-NN-<slug>/` as `docs/plan/issues/ISS-<n>-<slug>/`.
 
 Standards: the project's `docs/conventions.md` and `docs/architecture.md` (authoritative).
 Python projects also load `py-pytest`, `py-style`, `py-pydantic`, `py-typing`;

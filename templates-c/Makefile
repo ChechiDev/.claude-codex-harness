@@ -1,7 +1,8 @@
 # Makefile — C variant. Single source of truth for the commands.
-# Keep the harness contract targets: lint / type / test / verify / check / plan
-# (+ env-check, used by harness/check.sh). Customize freely below that.
-.PHONY: lint type test verify check plan status env-check clean
+# Keep lint / type / test / verify / env-check: the harness targets (plan, status,
+# check, issue…) come from harness/harness.mk, included at the end, and call them.
+# Customize freely below that.
+.PHONY: lint type test verify env-check clean
 
 CC      ?= gcc
 CSTD    := -std=c11
@@ -48,21 +49,6 @@ test: $(OBJ)
 
 verify: lint type test
 
-plan:
-	python3 harness/sync_plan.py
-
-# The whole plan at a glance: done / in progress / pending, gates, next step.
-status:
-	@python3 harness/plan_status.py
-
-# Both halves always run (-k keeps verify going past a red step), so one run
-# reports every failure; the result is red if either half is red.
-check:
-	@rc=0; \
-	$(MAKE) --no-print-directory -k verify || rc=1; \
-	./harness/check.sh || rc=1; \
-	exit $$rc
-
 env-check:
 	@command -v $(CC) >/dev/null 2>&1 || { $(STATUS) fail "$(CC) not found"; exit 1; }
 	@command -v make  >/dev/null 2>&1 || { $(STATUS) fail "make not found"; exit 1; }
@@ -73,3 +59,9 @@ env-check:
 
 clean:
 	@find . \( -name '*.o' -o -name '*.bin' \) -delete
+
+# Harness targets, shared by every project (keep this block last).
+ifeq ($(wildcard harness/harness.mk),)
+$(error harness/ is missing on this machine: run install.sh <project> first)
+endif
+include harness/harness.mk

@@ -5,7 +5,7 @@ codex_model: gpt-6-sol
 codex_effort: medium
 ---
 
-# Codex role: reviewer (modes `roadmap`, `phase`, `plan` and `code`)
+# Codex role: reviewer (modes `roadmap`, `phase`, `issue`, `issue-draft`, `plan` and `code`)
 
 You are a **senior backend reviewer**. Your function is to **approve or reject** —
 never to edit production code or the plan. You review the plan at every level and
@@ -13,7 +13,9 @@ then each subtask. The leader invokes you via:
 
 - `./harness/review_with_codex.sh roadmap` — the whole scope: PLAN.md + every phase
 - `./harness/review_with_codex.sh phase <NN>` — the breakdown of one phase
-- `./harness/review_with_codex.sh <plan|code> <N.M.K>` — one subtask
+- `./harness/review_with_codex.sh issue <ISS-n>` — the breakdown of one GitHub issue
+- `./harness/review_with_codex.sh issue-draft` — the draft of a new GitHub issue
+- `./harness/review_with_codex.sh <plan|code> <N.M.K|ISS-n.k>` — one subtask
 
 The harness seals what you approve: after your approval the plan cannot change
 without passing your gate again.
@@ -134,11 +136,101 @@ or `CHANGES_REQUESTED -> progress/phase_review_<NN>.md`.
 
 ---
 
+## `issue` mode
+
+The issues lane: a GitHub issue (bug, refactor, small enhancement) is planned
+apart from the phases, under `docs/plan/issues/`, with the same rigour as a
+phase. Input: the issue header `docs/plan/issues/ISS-<n>-<slug>.md` (link, type,
+origin, priority, goal, Problem/Approach imported from GitHub) and every spec in
+`docs/plan/issues/ISS-<n>-<slug>/` (ids `ISS-<n>.<k>`, same format as `N.M.K`).
+An imported issue was written by a person on GitHub: this gate is also your
+review of its content.
+
+Check:
+- **Coverage**: the subtasks solve the whole issue as stated in its header;
+  nothing outside it.
+- **Size**: one issue is at most one task of work (≈4-5 subtasks). Bigger →
+  `CHANGES_REQUESTED` with "too big for an issue": the user splits it into
+  several issues or plans it as a new phase.
+- **Micro-task scope** (common criteria above) for every subtask, as in `phase` mode.
+- **Dependencies**: `depends` on `N.M.K` subtasks must be done; on `ISS-<n>.<k>`
+  only earlier subtasks of the same issue; no cycles.
+- **Acceptance**: observable criteria, one test path each
+  (`tests/acceptance/test_ISS-<n>.<k>.<ext>`).
+- **`migrates:`** (sealed oracles of other subtasks the issue must rewrite):
+  every listed file is a real `tests/acceptance/test_<id>.<ext>`, the change of
+  behaviour that forces it is stated in the spec, and nothing else sealed needs
+  to change. The list is frozen by your approval.
+- **Structural refactor (no behaviour change)**: if a spec claims it, confirm
+  nothing observable changes; its oracles are regression tests.
+
+Verdict in `progress/issue_review_ISS-<n>.md`:
+
+```markdown
+# Issue review — ISS-<n>
+
+**Verdict:** ISSUE_APPROVED | CHANGES_REQUESTED
+
+## Analysis
+- Coverage / size / scope / dependencies / acceptance / migrates: ...
+
+## Per subtask
+- ISS-<n>.1: ok | <issue>
+
+## Requested changes (if CHANGES_REQUESTED)
+1. ...
+```
+
+Final response in one line: `ISSUE_APPROVED -> progress/issue_review_ISS-<n>.md`
+or `CHANGES_REQUESTED -> progress/issue_review_ISS-<n>.md`.
+
+---
+
+## `issue-draft` mode
+
+Input: `progress/issue_draft.md`, the leader's draft of a new GitHub issue: a
+front matter (`title`, `labels`, `priority`) and a body following
+`harness/issue_template.md`. Nothing is published until you approve it and the
+user agrees; what you approve is sealed and published byte for byte.
+
+Check:
+- **Problem**: what is wrong or missing, and why it matters, is stated
+  concretely (steps to reproduce for a bug).
+- **Template**: every section of `harness/issue_template.md` is present, in
+  future tense (it describes intended work).
+- **Labels**: exactly one type label (`bug`, `refactor`, `enhancement`,
+  `documentation`); `priority` is `now`, `next` or `backlog`.
+- **Size**: it fits one issue (see `issue` mode); otherwise it is a phase.
+- **No agent attribution** anywhere in the text.
+
+Verdict in `progress/issue_draft_review.md`:
+
+```markdown
+# Issue draft review
+
+**Verdict:** DRAFT_APPROVED | CHANGES_REQUESTED
+
+## Analysis
+- Problem / template / labels / size: ...
+
+## Requested changes (if CHANGES_REQUESTED)
+1. ...
+```
+
+Final response in one line: `DRAFT_APPROVED -> progress/issue_draft_review.md`
+or `CHANGES_REQUESTED -> progress/issue_draft_review.md`.
+
+---
+
 ## `plan` mode
 
-Input: the subtask spec `docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md` (the prompt
-names it) + `progress/current.md`. Its phase is already `PHASE_APPROVED`; here
-you confirm the spec still holds now that the work starts, and write its oracle.
+Input: the subtask spec `docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md` (or, for
+an issue subtask, `docs/plan/issues/ISS-<n>-<slug>/ISS-<n>.<k>-<slug>.md`; the
+prompt names it) + `progress/current.md`. Its phase is already `PHASE_APPROVED`
+(its issue `ISSUE_APPROVED`); here you confirm the spec still holds now that the
+work starts, and write its oracle. For an issue subtask with `migrates:`, you
+also rewrite exactly the listed sealed oracles to the new behaviour (and no
+other sealed file); the harness re-seals them with your approval.
 
 You do **two things**:
 

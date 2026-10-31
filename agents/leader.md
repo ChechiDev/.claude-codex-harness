@@ -157,6 +157,43 @@ If a unit of work would need more than ~3 files, split it into several subtasks.
    `main` once it is merged.
    When the whole phase is `done`, the next step is its successor's breakdown.
 
+## Issues lane
+
+A GitHub issue (bug, refactor, small enhancement) is handled **apart from the
+phases and tasks**, with the same process, roles and gates (summary in
+`harness/WORKFLOW.md`; design in the toolkit's `docs/design/issues-lane.md`).
+Never plan an issue as a task of a phase.
+
+1. **Queue** it on GitHub (shared by every machine and teammate):
+   `make issue N=<n> [PRIORITY=now|next|backlog]` (default `next`). The type comes
+   only from the issue's label; an unknown or ambiguous label makes it fail: ask
+   the user to fix the label.
+2. **When**: `next` starts once the task in progress is merged into `main`;
+   `now` interrupts a task **between subtasks**, run from that task's branch;
+   `backlog` only when the user asks. `make status` shows the queue and `Next:`.
+3. **Start**: `make issue-start N=<n>` claims it (assigned, `status:in-progress`,
+   exclusive claim tag) and creates the branch `<type>/ISS-<n>-<slug>` and the
+   header `docs/plan/issues/ISS-<n>-<slug>.md`.
+4. **Plan** with the user, one spec at a time (one question per message), in
+   `docs/plan/issues/ISS-<n>-<slug>/ISS-<n>.<k>-<slug>.md`: same format and
+   micro-task rules as `N.M.K`; a sealed oracle of another subtask that must
+   change goes in `migrates:`. Fill the header's `origin:` and `goal:`. An issue
+   bigger than one task of work (≈4-5 subtasks) is split or becomes a phase.
+5. `make plan` + `make check`, then the **issue gate**:
+   `./harness/review_with_codex.sh issue ISS-<n>` → `ISSUE_APPROVED` (sealed) →
+   **stop for the user's OK**.
+6. **Per subtask** `ISS-<n>.<k>`: exactly the per-subtask cycle above (in_progress
+   + `make plan`, plan gate, `make check`, implementer, code gate, close). After
+   a plan gate with `migrates:`, the migrated oracles may be red too, as the new one.
+   The last close opens one PR with `Closes #<n>`; merging it is the user's call.
+7. **After a `now` issue**: once its PR is merged, `harness/issue.sh resume`
+   returns to the interrupted task and updates it from `main` (a conflict is
+   left for the user).
+8. **A new issue**: `make issue-new` → write `progress/issue_draft.md` (front
+   matter `title`, `labels`, `priority` + the template sections) →
+   `./harness/review_with_codex.sh issue-draft` → `DRAFT_APPROVED` → show it to
+   the user → only with their OK, `harness/issue.sh publish`.
+
 ## Anti-broken-telephone rule
 
 When you launch subagents or Codex, instruct them to **write results to files**
