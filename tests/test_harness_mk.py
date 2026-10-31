@@ -200,3 +200,49 @@ def test_migrate_turns_the_issues_lane_on(tmp_path: Path) -> None:
     root = _project(tmp_path, _old_template("templates"))
     assert _migrate(root).returncode == 0
     assert (root / "docs/plan/issues/README.md").is_file()
+
+
+# ── CI: harness/ is per machine, a checkout elsewhere has it dangling ────────
+
+OLD_GUARD = (
+    "\n# Harness targets, shared by every project (keep this block last).\n"
+    "ifeq ($(wildcard harness/harness.mk),)\n"
+    "$(error harness/ is missing on this machine: run install.sh <project> first)\n"
+    "endif\n"
+    "include harness/harness.mk\n"
+)
+
+
+@pytest.mark.parametrize("template", TEMPLATES)
+def test_project_targets_work_without_the_harness_link(tmp_path: Path, template: str) -> None:
+    root = _project(tmp_path, (TOOLKIT / template / "Makefile").read_text(), link=False)
+    (root / "harness").symlink_to("/nonexistent/lib")  # as in a CI checkout
+    res = subprocess.run(["make", "-n", "verify"], cwd=root, text=True, capture_output=True)
+    assert "harness/ is missing" not in res.stdout + res.stderr
+    assert "uv run" in res.stdout or "cc " in res.stdout or res.returncode == 0
+    res = subprocess.run(["make", "check"], cwd=root, text=True, capture_output=True)
+    assert res.returncode != 0
+    assert "harness/ is missing on this machine: run install.sh" in res.stderr
+
+
+def test_migrate_replaces_the_first_guard_block(tmp_path: Path) -> None:
+    first = _old_template("templates")
+    for target in ("plan", "status", "check"):  # drop the copied targets, as --migrate did
+        first = re.sub(rf"(# [^\n]*\n)*{target}:\n(\t[^\n]*\n)+\n?", "", first)
+    root = _project(tmp_path, first + OLD_GUARD)
+    res = _migrate(root)
+    assert res.returncode == 0, res.stdout + res.stderr
+    text = (root / "Makefile").read_text()
+    assert "$(error" not in text
+    assert text.count("harness/harness.mk") >= 2
+    assert _migrate(root).returncode == 0  # idempotent
+    assert (root / "Makefile").read_text() == text
+
+
+def test_the_fallback_still_fails_when_a_file_has_a_target_name(tmp_path: Path) -> None:
+    root = _project(tmp_path, (TOOLKIT / "templates/Makefile").read_text(), link=False)
+    (root / "harness").symlink_to("/nonexistent/lib")
+    (root / "check").write_text("not a target\n")
+    res = subprocess.run(["make", "check"], cwd=root, text=True, capture_output=True)
+    assert res.returncode != 0
+    assert "harness/ is missing on this machine" in res.stderr

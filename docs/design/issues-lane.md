@@ -408,21 +408,28 @@ imported and Codex judges its content at the issue gate.
 | PR / issue templates | `lib/pr_template.md` | `lib/pr_template.md`, `lib/issue_template.md` |
 
 **Target ownership.** `harness.mk` owns the harness targets (`plan`, `status`,
-`check`, `env-check`, `issue`, `issue-start`, `issue-new`); the project
+`check`, `issue`, `issue-start`, `issue-new`); the project
 `Makefile` owns the toolchain targets that `harness.mk` calls (`verify`,
 `lint`, `type`, `test`, `build`, `clean`, plus any extras such as `memcheck`).
 A target is defined in exactly one of the two files, so there is never a
-duplicate recipe. The guard lives in the project `Makefile`, before the
+duplicate recipe. The guard lives in the project `Makefile`, around the
 include, because a missing included file stops make while parsing:
 
 ```make
-ifeq ($(wildcard harness/harness.mk),)
-$(error harness/ is missing on this machine: run install.sh <project> first)
-endif
+ifneq ($(wildcard harness/harness.mk),)
 include harness/harness.mk
+else
+.PHONY: plan status check issue issue-start issue-new
+plan status check issue issue-start issue-new:
+	@echo "harness/ is missing on this machine: run install.sh <project> first" >&2; exit 1
+endif
 ```
 
-(the `harness/` symlink is per machine, created by `install.sh`).
+The `harness/` symlink is per machine (created by `install.sh`), so a CI checkout
+or a new machine does not have it: there only the harness targets fail with that
+message, and the project's own targets (`verify`, `memcheck`…) still run. A first
+version stopped every target with `$(error …)` and broke a CI that runs
+`make verify`; `--migrate` replaces that block.
 
 **Migration of existing projects, once:** `install.sh --migrate <project>`
 (loopable over many projects):

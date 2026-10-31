@@ -33,7 +33,22 @@ HARNESS_MK = Path(__file__).resolve().parent / "harness.mk"
 ISSUES_README = Path(__file__).resolve().parents[1] / "templates/docs/plan/issues/README.md"
 ISSUES_DIR = Path("docs/plan/issues/README.md")
 INCLUDE = "include harness/harness.mk"
+# Where harness/ is missing (a CI checkout, a new machine) only the harness targets
+# fail; the project's own targets still run (an $(error) here would stop them all).
 GUARD = (
+    "\n# Harness targets, shared by every project (keep this block last). harness/ is a\n"
+    "# per-machine symlink: where it is missing (a CI checkout, a new machine) only these\n"
+    "# targets fail; the project's own targets above still run.\n"
+    "ifneq ($(wildcard harness/harness.mk),)\n"
+    f"{INCLUDE}\n"
+    "else\n"
+    ".PHONY: plan status check issue issue-start issue-new\n"
+    "plan status check issue issue-start issue-new:\n"
+    '\t@echo "harness/ is missing on this machine: run install.sh <project> first" >&2; exit 1\n'
+    "endif\n"
+)
+# The first shape of that block: it stopped every target, so it is replaced.
+LEGACY_GUARD = (
     "\n# Harness targets, shared by every project (keep this block last).\n"
     "ifeq ($(wildcard harness/harness.mk),)\n"
     "$(error harness/ is missing on this machine: run install.sh <project> first)\n"
@@ -80,6 +95,12 @@ def _harness_recipes() -> dict[str, list[str]]:
 
 def migrated_makefile(text: str) -> str | None:
     """The migrated Makefile text, or None when it is already migrated. Raises."""
+    if LEGACY_GUARD in text:
+        text = text.replace(LEGACY_GUARD, GUARD)
+        if text.splitlines() and not any(
+            name in _harness_recipes() for name in _blocks(text.splitlines())
+        ):
+            return text
     lines = text.splitlines()
     shared = _harness_recipes()
     blocks = {name: b for name, b in _blocks(lines).items() if name in shared}
