@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import Plan
 
 
@@ -38,6 +39,44 @@ def test_title_follows_the_issue_type(plan: Plan) -> None:
     plan.issue(14, "refactor").isub("ISS-14.1").sync()
     assert plan.run_py("_pr.py", "title", "ISS-14").stdout.strip() == (
         "refactor: issue 14 [ISS-14]"
+    )
+
+
+def _retitle_issue(plan: Plan, n: int, title: str) -> None:
+    """Give issue n a GitHub-style title and re-sync the plan."""
+    header = plan.root / f"docs/plan/issues/ISS-{n}-i{n}.md"
+    header.write_text(header.read_text().replace(f"# ISS-{n} Issue {n}", f"# ISS-{n} {title}"))
+    res = plan.run_py("sync_plan.py")
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "refactor: Replace parse_config bit mask [2.3]",
+        "feat: Replace parse_config bit mask [2.3]",  # the label wins over the title's type
+        "fix(parsing): Replace parse_config bit mask [2.3]",
+        "chore!: Replace parse_config bit mask [2.3]",
+        "Refactor: Replace parse_config bit mask [2.3]",
+    ],
+    ids=["same-type", "other-type", "scoped", "breaking", "capitalised"],
+)
+def test_title_drops_a_type_prefix_already_in_the_issue_title(plan: Plan, title: str) -> None:
+    plan.issue(14, "refactor").isub("ISS-14.1").sync()
+    _retitle_issue(plan, 14, title)
+    assert plan.run_py("_pr.py", "title", "ISS-14").stdout.strip() == (
+        "refactor: replace parse_config bit mask [2.3] [ISS-14]"
+    )
+
+
+@pytest.mark.parametrize(
+    "title", ["note: not a commit type", "Crash when the config has a colon: here"]
+)
+def test_title_keeps_text_that_is_not_a_type_prefix(plan: Plan, title: str) -> None:
+    plan.issue(14, "fix").isub("ISS-14.1").sync()
+    _retitle_issue(plan, 14, title)
+    assert plan.run_py("_pr.py", "title", "ISS-14").stdout.strip() == (
+        f"fix: {title.lower()} [ISS-14]"
     )
 
 
