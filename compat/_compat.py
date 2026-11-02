@@ -36,7 +36,7 @@ import shutil
 import subprocess
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +68,11 @@ def copy_repo(install_root: Path, dest_dir: Path) -> Path:
     """Copy the whole repo (with .git, links kept as links); return the copied install root."""
     install_root = install_root.resolve()
     top = git_toplevel(install_root).resolve()
+    if (top / ".git").is_file():
+        raise CompatError(
+            f"{top} is a git worktree or submodule (.git is a file pointing at another "
+            "repository): a copy would still write into the original; refusing"
+        )
     target = dest_dir / top.name
     if target.exists():
         raise CompatError(f"destination exists: {target}")
@@ -85,8 +90,12 @@ def _clear_stop_cache(repo: Path) -> None:
         capture_output=True,
         check=False,
     )
-    if res.returncode == 0 and res.stdout.strip():
-        (repo / res.stdout.strip()).unlink(missing_ok=True)
+    if res.returncode != 0 or not res.stdout.strip():
+        return
+    marker = (repo / res.stdout.strip()).resolve()
+    if not marker.is_relative_to(repo.resolve()):
+        raise CompatError(f"stop cache {marker} is outside the copy {repo}; refusing")
+    marker.unlink(missing_ok=True)
 
 
 # ── relink ───────────────────────────────────────────────────────────────────
@@ -439,20 +448,47 @@ def _run_phase(spec: DepsSpec) -> None:
         raise CompatError(f"deps phase {spec.phase} failed:\n{tail}")
 
 
-def prepare_deps(base: DepsSpec, scratch: Path) -> str | None:
-    """Create the run's volume and run init, fetch, install; None if no Python deps."""
+def prepare_deps(base: DepsSpec, scratch: Path, created: list[str] | None = None) -> str | None:
+    """Create the run's volume and run init, fetch, install; None if no Python deps.
+
+    The volume must not exist beforehand (docker would silently reuse it) and must
+    carry this run's labels after creation; its name is appended to `created`.
+    """
     if base.repo is None:
         raise CompatError("prepare-deps needs --repo")
     lock_dir = scratch / f"lock-{base.run_id}"
     if not prepare_lock(base.repo / base.workdir, lock_dir):
         return None
-    labels = _run_labels(base.session or base.run_id)
-    res = _docker(base.docker_config, "volume", "create", *labels, base.volume)
+    run_label = base.session or base.run_id
+    if _owned(base.docker_config, "volume", base.volume, run_label) is not None:
+        raise CompatError(
+            f"volume {base.volume} already exists: refusing to reuse a volume this run "
+            "did not create"
+        )
+    res = _docker(base.docker_config, "volume", "create", *_run_labels(run_label), base.volume)
     if res.returncode != 0:
         raise CompatError(f"cannot create volume {base.volume}: {res.stderr.strip()}")
+    if not _owned(base.docker_config, "volume", base.volume, run_label):
+        raise CompatError(f"volume {base.volume} does not carry this run's labels; refusing")
+    if created is not None:
+        created.append(base.volume)
     for phase in PHASES:
         _run_phase(_replace(base, phase=phase, lock_dir=lock_dir))
     return base.volume
+
+
+def _labels_of(data: dict[str, Any]) -> dict[str, str]:
+    labels: dict[str, str] = data.get("Labels") or (data.get("Config") or {}).get("Labels") or {}
+    return labels
+
+
+def _owned(docker_config: Path, kind: str, name: str, run_label: str) -> bool | None:
+    """None if the resource does not exist; else whether it carries this run's labels."""
+    res = _docker(docker_config, kind, "inspect", name)
+    if res.returncode != 0:
+        return None
+    labels = _labels_of(json.loads(res.stdout)[0])
+    return labels.get(LABEL) == "1" and labels.get(f"{LABEL}.run") == run_label
 
 
 def _replace(spec: DepsSpec, **changes: Any) -> DepsSpec:
@@ -503,9 +539,36 @@ def preflight(image: str, docker_config: Path) -> None:
     info = _docker(docker_config, "info", "--format", "{{json .}}")
     if info.returncode != 0:
         raise CompatError(f"docker engine not reachable at {DOCKER_SOCKET}: {info.stderr.strip()}")
-    if json.loads(info.stdout).get("OSType") != "linux":
+    data = json.loads(info.stdout)
+    if data.get("OSType") != "linux":
         raise CompatError("docker engine is not a local linux engine")
+    system = str(data.get("OperatingSystem", ""))
+    if "docker desktop" in system.lower():
+        raise CompatError(f"docker engine is not the native engine (OperatingSystem={system})")
     _check_image(_image_config(docker_config, image), image)
+    _check_tools(image, docker_config)
+
+
+REQUIRED_TOOLS = ("bash", "make", "git", "gcc", "python3", "uv", "norminette", "valgrind")
+
+
+def _check_tools(image: str, docker_config: Path) -> None:
+    """Run a locked-down throwaway container that checks every required tool exists."""
+    run_label = "p" + uuid.uuid4().hex[:10]
+    probe = (
+        'm=""; for t in ' + " ".join(REQUIRED_TOOLS) + '; do command -v "$t" >/dev/null'
+        ' || m="$m $t"; done; [ -z "$m" ] || { echo "missing:$m"; exit 1; }'
+    )
+    argv = ["run", "--rm", "--read-only", "--network", "none", "--cap-drop", "ALL"]
+    argv += ["--security-opt", "no-new-privileges", "--pids-limit", "64"]
+    argv += ["--user", f"{os.getuid()}:{os.getgid()}"]
+    argv += ["--tmpfs", TMPFS_TMP, "--tmpfs", TMPFS_HOME, *_run_labels(run_label)]
+    argv += ["--name", f"{LABEL}-{run_label}-preflight", "-e", "LANG=C.UTF-8"]
+    argv += ["-e", f"HOME={HOME_IN}", image, "bash", "-c", probe]
+    res = _docker(docker_config, *argv)
+    if res.returncode != 0:
+        detail = (res.stdout + res.stderr).strip()
+        raise CompatError(f"image {image} lacks required tools: {detail}")
 
 
 def _record_image(state: Path, image_id: str, tag: str) -> None:
@@ -542,20 +605,35 @@ FAIL_LINE = re.compile(r"\[FAIL\]|\bFAIL(?:ED)?\b")
 OUTPUT_KEEP = 20000
 
 
-def _new_lines(base: str, cand: str, pattern: re.Pattern[str]) -> list[str]:
-    seen = {ln.strip() for ln in base.splitlines() if pattern.search(ln)}
+def matching_lines(output: str, pattern: re.Pattern[str]) -> list[str]:
     out: list[str] = []
-    for line in (ln.strip() for ln in cand.splitlines()):
-        if pattern.search(line) and line not in seen and line not in out:
+    for line in (ln.strip() for ln in output.splitlines()):
+        if pattern.search(line) and line not in out:
             out.append(line)
     return out
 
 
-def _verdict(base_ok: bool, cand_ok: bool, new_failures: list[str]) -> str:
+def _side_lines(side: dict[str, Any], key: str, pattern: re.Pattern[str]) -> list[str]:
+    """Lines scanned from the FULL output at run time; raw results fall back to output."""
+    lines: list[str] = side.get(key) or matching_lines(side["output"], pattern)
+    return lines
+
+
+def _new_lines(base: list[str], cand: list[str]) -> list[str]:
+    seen = set(base)
+    return [line for line in cand if line not in seen]
+
+
+def _verdict(base: dict[str, Any], cand: dict[str, Any], new_failures: list[str]) -> str:
+    """error: C0 itself failed on a side (no make check ran), never a pass.
+    inconclusive: the baseline is already red, so a regression could not be seen."""
+    if base.get("error") or cand.get("error"):
+        return "error"
+    base_ok, cand_ok = base["exit"] == 0, cand["exit"] == 0
     if (base_ok and not cand_ok) or new_failures:
         return "regression"
     if not base_ok:
-        return "fixed" if cand_ok else "still-failing"
+        return "fixed" if cand_ok else "inconclusive"
     return "same"
 
 
@@ -563,16 +641,36 @@ def build_report(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
     projects: dict[str, Any] = {}
     for name, sides in results.items():
         base, cand = sides["baseline"], sides["candidate"]
-        new_failures = _new_lines(base["output"], cand["output"], FAIL_LINE)
+        new_failures = _new_lines(
+            _side_lines(base, "fail_lines", FAIL_LINE), _side_lines(cand, "fail_lines", FAIL_LINE)
+        )
+        new_warnings = _new_lines(
+            _side_lines(base, "warn_lines", WARN_LINE), _side_lines(cand, "warn_lines", WARN_LINE)
+        )
         projects[name] = {
-            "verdict": _verdict(base["exit"] == 0, cand["exit"] == 0, new_failures),
-            "new_warnings": _new_lines(base["output"], cand["output"], WARN_LINE),
+            "verdict": _verdict(base, cand, new_failures),
+            "new_warnings": new_warnings,
             "new_failures": new_failures,
             "baseline": base,
             "candidate": cand,
         }
-    regressions = [n for n, p in projects.items() if p["verdict"] == "regression"]
-    return {"projects": projects, "regressions": regressions}
+    by = {v: [n for n, p in projects.items() if p["verdict"] == v] for v in VERDICTS}
+    return {
+        "projects": projects,
+        "regressions": by["regression"],
+        "errors": by["error"],
+        "inconclusive": by["inconclusive"],
+    }
+
+
+VERDICTS = ("same", "fixed", "regression", "error", "inconclusive")
+
+
+def report_exit_code(report: dict[str, Any]) -> int:
+    """1: regression or C0 error; 2: inconclusive (baseline already red); 0: clean."""
+    if report["regressions"] or report["errors"]:
+        return 1
+    return 2 if report["inconclusive"] else 0
 
 
 # ── cleanup: only what a run created ─────────────────────────────────────────
@@ -644,6 +742,7 @@ class RunPlan:
     docker_config: Path
     scratch: Path
     session: str
+    created_volumes: list[str] = field(default_factory=list)
 
 
 def _side(plan: RunPlan, index: int, project: Path, side: str) -> dict[str, Any]:
@@ -660,7 +759,7 @@ def _side(plan: RunPlan, index: int, project: Path, side: str) -> dict[str, Any]
         volume=deps_volume(sub), repo=repo_top, workdir=workdir, session=plan.session,
         uid=uid, gid=gid,
     )  # fmt: skip
-    volume = prepare_deps(deps, dest)
+    volume = prepare_deps(deps, dest, plan.created_volumes)
     toolkit = plan.baseline if side == "baseline" else plan.candidate
     spec = RunSpec(
         repo=repo_top, workdir=workdir, toolkit=toolkit, image=plan.image, run_id=sub,
@@ -671,7 +770,18 @@ def _side(plan: RunPlan, index: int, project: Path, side: str) -> dict[str, Any]
     res = subprocess.run(
         docker_argv(spec), env=env, text=True, capture_output=True, check=False, timeout=1800
     )
-    return {"exit": res.returncode, "output": (res.stdout + res.stderr)[-OUTPUT_KEEP:]}
+    full = res.stdout + res.stderr
+    return {
+        "exit": res.returncode,
+        "output": full[-OUTPUT_KEEP:],
+        "warn_lines": matching_lines(full, WARN_LINE),
+        "fail_lines": matching_lines(full, FAIL_LINE),
+    }
+
+
+def _error_side(stage: str, exc: CompatError) -> dict[str, Any]:
+    line = f"[FAIL] compat {stage}: {exc}"
+    return {"exit": 99, "output": line, "error": True, "fail_lines": [line.splitlines()[0]]}
 
 
 def _run_project(plan: RunPlan, index: int, project: Path) -> dict[str, Any]:
@@ -680,15 +790,30 @@ def _run_project(plan: RunPlan, index: int, project: Path) -> dict[str, Any]:
     try:
         snapshot = copy_repo(project, plan.scratch / plan.session / f"{index}-src")
     except CompatError as exc:
-        failed = {"exit": 99, "output": f"[FAIL] compat snapshot: {exc}"}
+        failed = _error_side("snapshot", exc)
         return {"baseline": failed, "candidate": failed}
     sides: dict[str, Any] = {}
     for side in ("baseline", "candidate"):
         try:
             sides[side] = _side(plan, index, snapshot, side)
         except CompatError as exc:
-            sides[side] = {"exit": 99, "output": f"[FAIL] compat {side}: {exc}"}
+            sides[side] = _error_side(side, exc)
     return sides
+
+
+def _cleanup_created(plan: RunPlan) -> None:
+    """Remove ONLY what this run created: its named containers (normally already gone,
+    --rm) and the volumes it recorded, each re-verified by this run's labels."""
+    for index in range(len(plan.projects)):
+        for side in ("b", "c"):
+            sub = f"{plan.session}-{index}{side}"
+            names = [f"{LABEL}-{sub}-check", *(f"{LABEL}-{sub}-deps-{p}" for p in PHASES)]
+            for name in names:
+                if _owned(plan.docker_config, "container", name, plan.session):
+                    _docker(plan.docker_config, "rm", "-f", name)
+    for volume in plan.created_volumes:
+        if _owned(plan.docker_config, "volume", volume, plan.session):
+            _docker(plan.docker_config, "volume", "rm", "-f", volume)
 
 
 def run(plan: RunPlan) -> dict[str, Any]:
@@ -700,10 +825,10 @@ def run(plan: RunPlan) -> dict[str, Any]:
         for index, project in enumerate(plan.projects):
             results[str(project)] = _run_project(plan, index, project)
     finally:
-        cleanup(plan.session, plan.docker_config)
+        _cleanup_created(plan)
     report = build_report(results)
     session_dir = plan.scratch / plan.session
-    if report["regressions"]:
+    if report["regressions"] or report["errors"]:
         report["kept"] = [str(session_dir)]
     else:
         shutil.rmtree(session_dir, ignore_errors=True)
@@ -831,7 +956,7 @@ def _run_main(args: argparse.Namespace) -> int:
         )  # fmt: skip
         report = run(plan)
     print(json.dumps(report, indent=2))
-    return 1 if report["regressions"] else 0
+    return report_exit_code(report)
 
 
 def main(argv: list[str] | None = None) -> int:

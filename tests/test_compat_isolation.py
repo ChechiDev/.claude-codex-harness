@@ -165,3 +165,12 @@ def test_valgrind_is_available(run: dict[str, Any]) -> None:
     res = _exec(run, _with_command(run, "valgrind", "--version"))
     assert res.returncode == 0, res.stdout + res.stderr
     assert res.stdout.startswith("valgrind-")
+
+
+def test_self_check_fails_with_an_unexpected_mount(run: dict[str, Any], tmp_path: Path) -> None:
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    argv = _before_image(run["argv"], "--mount", f"type=bind,src={extra},dst=/extra,readonly")
+    res = _exec(run, argv)
+    assert res.returncode != 0
+    assert "unexpected mount" in (res.stdout + res.stderr).lower()

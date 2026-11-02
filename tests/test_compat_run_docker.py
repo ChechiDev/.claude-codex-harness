@@ -199,3 +199,57 @@ def test_both_sides_see_the_same_state_even_if_the_original_changes_mid_run(
     assert "v1" in side["baseline"]["output"]
     assert "v1" in side["candidate"]["output"], side["candidate"]["output"]
     assert "v2" not in side["candidate"]["output"]
+
+
+def test_an_early_fail_line_is_never_lost_to_output_truncation(
+    tmp_path: Path, config: Path
+) -> None:
+    """Only the stored output is truncated; WARN/FAIL lines come from the full output."""
+    noisy = "echo '[FAIL] early failure'; head -c 60000 /dev/zero | tr '\\0' 'x'; echo\n"
+    env = _setup(tmp_path, noisy)
+    rc, report = _compat_run(env, config)
+    proj = report["projects"][str(env["proj"])]
+    assert proj["new_failures"] == ["[FAIL] early failure"]
+    assert proj["verdict"] == "regression"
+    assert rc == 1
+
+
+def test_a_compat_failure_is_an_error_and_keeps_the_copies(tmp_path: Path, config: Path) -> None:
+    env = _setup(tmp_path, "echo baseline-toolkit\n")
+    (env["proj"] / "harness").unlink()  # relink fails on both sides: no make check runs
+    rc, report = _compat_run(env, config)
+    assert report["projects"][str(env["proj"])]["verdict"] == "error"
+    assert report["errors"] == [str(env["proj"])]
+    assert report["kept"]
+    assert rc == 1
+
+
+def test_run_never_touches_a_foreign_resource_carrying_the_session_label(
+    tmp_path: Path, config: Path
+) -> None:
+    """Cleanup of a run removes only what that run created, verified by name and label."""
+    env = _setup(tmp_path, "echo baseline-toolkit\n")
+    session = "cfixed" + os.urandom(3).hex()
+    foreign = f"foreign-{session}"
+    subprocess.run(
+        ["docker", "--host", SOCKET, "volume", "create",
+         "--label", "harness-compat=1", "--label", f"harness-compat.run={session}", foreign],
+        capture_output=True, check=True,
+    )  # fmt: skip
+    try:
+        res = _compat(
+            "run", "--project", str(env["proj"]), "--run-id", session,
+            "--baseline", str(env["A"]), "--candidate", str(env["B"]), "--origin", str(env["A"]),
+            "--image", IMAGE, "--docker-config", str(config), "--scratch", str(env["scratch"]),
+        )  # fmt: skip
+        assert res.returncode == 0, res.stdout + res.stderr
+        still = subprocess.run(
+            ["docker", "--host", SOCKET, "volume", "inspect", foreign],
+            capture_output=True, check=False,
+        )  # fmt: skip
+        assert still.returncode == 0, "a foreign volume was removed by the run's cleanup"
+    finally:
+        subprocess.run(
+            ["docker", "--host", SOCKET, "volume", "rm", "-f", foreign],
+            capture_output=True, check=False,
+        )  # fmt: skip

@@ -42,6 +42,20 @@ require_ro / "root filesystem (read-only)"
 if [ -d /toolkit ]; then require_ro /toolkit "/toolkit mount"; fi
 if [ -d /deps ] && [ "$rw_deps" -eq 0 ]; then require_ro /deps "/deps mount"; fi
 
+# Mount inventory: nothing but the expected mount points (no extra host path).
+while read -r _ mp _; do
+  case "$mp" in
+    / | /proc | /proc/* | /dev | /dev/* | /sys | /sys/* | /tmp | /home | /work | /toolkit | \
+      /deps | /lock | /etc/hosts | /etc/hostname | /etc/resolv.conf) ;;
+    *) fail "unexpected mount: $mp" ;;
+  esac
+done </proc/mounts
+
+# DNS: without network no name may resolve (except via /etc/hosts entries for localhost).
+if [ "$allow_network" -eq 0 ] && getent hosts example.com >/dev/null 2>&1; then
+  fail "DNS resolves names (expected no resolver)"
+fi
+
 # No Unix socket may be reachable through any mount (PostgreSQL, docker, ssh-agent...).
 for m in /work /toolkit /deps /lock; do
   [ -d "$m" ] || continue
