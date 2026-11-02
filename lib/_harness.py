@@ -33,6 +33,7 @@ Commands:
   phase-ready <NN>       exit 0 if phase NN can go through the phase gate
   subtask-ready <id>     exit 0 if subtask <id> can go through the plan gate
   issue-ready <ISS-n>    exit 0 if issue ISS-n can go through the issue gate
+  close-ready <N.M.K>    exit 0 if subtask N.M.K can be closed (not done, code APPROVED)
   issue-of <id>          print the issue id of issue subtask <id> (exit 1 for a task leaf)
   issue-field <ISS-n> <key>  print a field of issue ISS-n (type, priority, interrupts…)
   verdict <file>         print the verdict of a Codex review file (empty if none)
@@ -387,6 +388,23 @@ def subtask_ready_problems(fid: str) -> list[str]:
     return _start_problems({**leaf, "status": "starting"}, status, _complete_ids())
 
 
+def close_ready_problems(fid: str) -> list[str]:
+    """The close (doc gate) runs once, after an APPROVED code review."""
+    leaf = _leaf(fid)
+    if leaf is None:
+        return [f"subtask {fid} does not exist in docs/plan/"]
+    if leaf["status"] == "done":
+        owner = fid.rsplit(".", 1)[0]  # task N.M or issue ISS-n
+        return [
+            f"{fid} is already closed (status: done): nothing to document or commit. "
+            f"If only its PR is missing, retry with: ./harness/review_with_codex.sh pr {owner}"
+        ]
+    review = Path(f"progress/review_{fid}.md")
+    if read_verdict(review) != "APPROVED":
+        return [f"{fid} has no APPROVED code review ({review}): run the code gate first"]
+    return []
+
+
 # ── commands ─────────────────────────────────────────────────────────────────
 
 
@@ -516,6 +534,7 @@ def main(argv: list[str]) -> int:
         "phase-ready": lambda: _report(phase_ready_problems(arg)),
         "subtask-ready": lambda: _report(subtask_ready_problems(arg)),
         "issue-ready": lambda: _report(issue_ready_problems(arg)),
+        "close-ready": lambda: _report(close_ready_problems(arg)),
         "issue-of": lambda: issue_of(arg),
         "issue-field": lambda: issue_field(arg, arg2),
         "branch-of": lambda: branch_of(arg),

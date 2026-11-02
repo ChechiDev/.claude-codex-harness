@@ -45,6 +45,7 @@ def test_review_phases_use_workspace_write_without_git_or_network(
 
 def test_doc_phase_cannot_write_git(project: Project) -> None:
     # The harness commits the close outside the sandbox, so Codex never needs .git.
+    project.set_verdict("code", "APPROVED")
     out = _manual(project, "doc")
     assert "--sandbox workspace-write" in out
     assert f"{project.root}/.git" not in out
@@ -219,8 +220,9 @@ def test_default_check_is_make_check(project: Project) -> None:
     assert "The harness ran `make check`" in out
 
 
-def _codex_closing(tmp: Path, message: str | None) -> dict[str, str]:
-    """A fake documenter: marks the change and leaves its commit message."""
+def _codex_closing(project: Project, tmp: Path, message: str | None) -> dict[str, str]:
+    """A fake documenter (code review APPROVED): marks the change, leaves its message."""
+    project.set_verdict("code", "APPROVED")
     bin_dir = tmp / "fakebin"
     bin_dir.mkdir()
     write_msg = f"printf '%b\\n' {message!r} > progress/close_{LEAF_ID}.msg\n" if message else ""
@@ -242,7 +244,7 @@ SUBJECT = f"feat(domain): add user entity [{LEAF_ID}]"
 
 
 def test_close_commits_codex_message_after_a_green_check(project: Project, tmp_path: Path) -> None:
-    env = _codex_closing(tmp_path, SUBJECT + "\n\nWhy it matters.")
+    env = _codex_closing(project, tmp_path, SUBJECT + "\n\nWhy it matters.")
     res = project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
     assert res.returncode == 0, res.stdout + res.stderr
     assert _git_out(project, "log", "-1", "--format=%s") == SUBJECT + "\n"
@@ -254,7 +256,7 @@ def test_close_commits_codex_message_after_a_green_check(project: Project, tmp_p
 
 def test_close_does_not_commit_with_a_red_check(project: Project, tmp_path: Path) -> None:
     head = _git_out(project, "rev-parse", "HEAD")
-    env = {**_codex_closing(tmp_path, SUBJECT), "HARNESS_CHECK_CMD": "echo RED; exit 1"}
+    env = {**_codex_closing(project, tmp_path, SUBJECT), "HARNESS_CHECK_CMD": "echo RED; exit 1"}
     res = project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
     assert res.returncode == 1
     assert "nothing committed" in res.stderr
@@ -275,16 +277,56 @@ def test_close_refuses_a_bad_or_missing_message(
 ) -> None:
     head = _git_out(project, "rev-parse", "HEAD")
     res = project.run(
-        "review_with_codex.sh", None, "doc", LEAF_ID, env=_codex_closing(tmp_path, message)
+        "review_with_codex.sh", None, "doc", LEAF_ID, env=_codex_closing(project, tmp_path, message)
     )
     assert res.returncode == 1
     assert _git_out(project, "rev-parse", "HEAD") == head
 
 
 def test_manual_close_prints_the_commit_step(project: Project) -> None:
+    project.set_verdict("code", "APPROVED")
     out = _manual(project, "doc")
     assert f"./harness/review_with_codex.sh close {LEAF_ID}" in out
     assert f"progress/close_{LEAF_ID}.msg" in out
+
+
+def test_close_refuses_a_subtask_already_closed(project: Project, tmp_path: Path) -> None:
+    # A close that finished but looked interrupted must not run again: no Codex,
+    # no second commit; the message points at the PR retry instead.
+    env = _codex_closing(project, tmp_path, SUBJECT)
+    project.set_leaf("done")
+    project.commit_all("close")
+    head = _git_out(project, "rev-parse", "HEAD")
+    res = project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
+    assert res.returncode == 1
+    assert f"{LEAF_ID} is already closed" in res.stdout
+    assert "./harness/review_with_codex.sh pr 1.1" in res.stdout
+    assert not (project.root / "docs_ref.md").exists()
+    assert _git_out(project, "rev-parse", "HEAD") == head
+
+
+@pytest.mark.parametrize("verdict", [None, "CHANGES_REQUESTED"], ids=["no-review", "rejected"])
+def test_close_refuses_without_an_approved_code_review(
+    project: Project, tmp_path: Path, verdict: str | None
+) -> None:
+    env = _codex_closing(project, tmp_path, SUBJECT)
+    review = project.root / f"progress/review_{LEAF_ID}.md"
+    if verdict is None:
+        review.unlink()
+    else:
+        project.set_verdict("code", verdict)
+    head = _git_out(project, "rev-parse", "HEAD")
+    res = project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
+    assert res.returncode == 1
+    assert f"progress/review_{LEAF_ID}.md" in res.stdout
+    assert not (project.root / "docs_ref.md").exists()
+    assert _git_out(project, "rev-parse", "HEAD") == head
+
+
+def test_close_refuses_an_unknown_subtask(project: Project) -> None:
+    res = _manual_run(project, "doc", "9.9.9")
+    assert res.returncode == 1
+    assert "9.9.9 does not exist" in res.stdout
 
 
 def test_claude_cannot_write_the_close_message(project: Project) -> None:

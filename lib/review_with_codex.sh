@@ -151,6 +151,7 @@ case "$PHASE" in
   roadmap) python3 "$HARNESS_PY" roadmap-ready || exit 1 ;;
   phase)   python3 "$HARNESS_PY" phase-ready "$ID" || exit 1 ;;
   issue)   python3 "$HARNESS_PY" issue-ready "$ID" || exit 1 ;;
+  doc)     python3 "$HARNESS_PY" close-ready "$ID" || exit 1 ;;
   plan)    python3 "$HARNESS_PY" subtask-ready "$ID" || exit 1
            python3 "$HARNESS_DIR/_guard.py" migrates-ready "$ID" || exit 1 ;;
   issue-draft)

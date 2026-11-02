@@ -57,6 +57,12 @@ RE_BOOKKEEPING = re.compile(
     r"|\.sha256$"
 )
 STATUS = {"A": "Added", "M": "Modified", "D": "Deleted", "R": "Renamed", "C": "Copied"}
+# A conventional-commit type already at the start of an issue's GitHub title
+# ("refactor: ...", "fix(parsing): ...", "chore!: ..."): the PR title adds its own.
+RE_TYPE_PREFIX = re.compile(
+    r"^(feat|fix|docs|refactor|test|chore|perf|build|ci|style|revert)(\([^)]*\))?!?:\s*",
+    re.IGNORECASE,
+)
 
 
 # ── review history ───────────────────────────────────────────────────────────
@@ -140,7 +146,8 @@ def title(tid: str) -> int:
     if owner is None:
         return 1
     kind = str(owner.get("type") or "feat")  # an issue's type: fix | refactor | feat | docs
-    print(f"{kind}: {str(owner.get('title', '')).lower()} [{tid}]")
+    text = RE_TYPE_PREFIX.sub("", str(owner.get("title", "")), count=1)
+    print(f"{kind}: {text.lower()} [{tid}]")
     return 0
 
 
