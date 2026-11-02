@@ -17,6 +17,13 @@ Subcommands:
   prepare-lock INSTALL_ROOT OUT          copy ONLY pyproject.toml + uv.lock into OUT
   prepare-deps ...                       create the run's deps volume and run the three
                                          prep phases; print the volume name
+  run --project P ... --baseline B --candidate C --origin O
+                                         full compatibility run: baseline vs candidate on
+                                         isolated copies; prints the JSON report; exit 1
+                                         on any regression
+  report RESULTS.json                    verdicts from raw baseline/candidate results
+  cleanup --run-id ID                    remove ONLY containers/volumes labelled with ID
+  purge-images --state DIR               remove ONLY recorded ids still labelled
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -65,7 +73,20 @@ def copy_repo(install_root: Path, dest_dir: Path) -> Path:
         raise CompatError(f"destination exists: {target}")
     dest_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(top, target, symlinks=True)
+    _clear_stop_cache(target)
     return target / install_root.relative_to(top)
+
+
+def _clear_stop_cache(repo: Path) -> None:
+    """The Stop hook's 'already green' marker must never carry over into a copy."""
+    res = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--git-path", "harness-check.ok"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if res.returncode == 0 and res.stdout.strip():
+        (repo / res.stdout.strip()).unlink(missing_ok=True)
 
 
 # ── relink ───────────────────────────────────────────────────────────────────
@@ -161,6 +182,13 @@ class RunSpec:
     docker_config: Path
     command: list[str]
     deps_volume: str | None = None
+    session: str | None = None
+
+
+def _run_labels(run_label: str) -> list[str]:
+    """Every resource of a run carries these labels; cleanup filters on the second one."""
+    _check_run_id(run_label)
+    return ["--label", f"{LABEL}=1", "--label", f"{LABEL}.run={run_label}"]
 
 
 def _check_run_id(run_id: str) -> None:
@@ -246,7 +274,7 @@ def docker_argv(spec: RunSpec) -> list[str]:
     argv += ["--user", f"{spec.uid}:{spec.gid}"]
     argv += ["--tmpfs", "/tmp:rw,nosuid,nodev,size=512m"]
     argv += ["--tmpfs", f"{HOME_IN}:rw,nosuid,nodev,size=256m"]
-    argv += ["--label", f"{LABEL}=1", "--label", f"{LABEL}.run={spec.run_id}"]
+    argv += _run_labels(spec.session or spec.run_id)
     argv += ["--name", f"{LABEL}-{spec.run_id}-check"]
     argv += _mount_args(spec) + ["--workdir", workdir]
     for key, value in container_env(spec).items():
@@ -310,6 +338,7 @@ class DepsSpec:
     lock_dir: Path | None = None
     repo: Path | None = None
     workdir: str = "."
+    session: str | None = None
 
 
 def deps_volume(run_id: str) -> str:
@@ -373,7 +402,7 @@ def deps_argv(spec: DepsSpec) -> list[str]:
     argv += ["--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512"]
     argv += ["--tmpfs", "/tmp:rw,nosuid,nodev,size=512m"]
     argv += ["--tmpfs", f"{HOME_IN}:rw,nosuid,nodev,size=256m"]
-    argv += ["--label", f"{LABEL}=1", "--label", f"{LABEL}.run={spec.run_id}"]
+    argv += _run_labels(spec.session or spec.run_id)
     argv += ["--name", f"{LABEL}-{spec.run_id}-deps-{spec.phase}"]
     argv += ["--entrypoint", PREP_ENTRYPOINT, *opts]
     for key, value in _deps_env(spec.phase).items():
@@ -413,7 +442,7 @@ def prepare_deps(base: DepsSpec, scratch: Path) -> str | None:
     lock_dir = scratch / f"lock-{base.run_id}"
     if not prepare_lock(base.repo / base.workdir, lock_dir):
         return None
-    labels = ["--label", f"{LABEL}=1", "--label", f"{LABEL}.run={base.run_id}"]
+    labels = _run_labels(base.session or base.run_id)
     res = _docker(base.docker_config, "volume", "create", *labels, base.volume)
     if res.returncode != 0:
         raise CompatError(f"cannot create volume {base.volume}: {res.stderr.strip()}")
@@ -502,6 +531,176 @@ def build_image(tag: str, state: Path, docker_config: Path) -> str:
     return image_id
 
 
+# ── report: baseline vs candidate ────────────────────────────────────────────
+
+WARN_LINE = re.compile(r"\bWARN\b")
+FAIL_LINE = re.compile(r"\[FAIL\]|\bFAIL(?:ED)?\b")
+OUTPUT_KEEP = 20000
+
+
+def _new_lines(base: str, cand: str, pattern: re.Pattern[str]) -> list[str]:
+    seen = {ln.strip() for ln in base.splitlines() if pattern.search(ln)}
+    out: list[str] = []
+    for line in (ln.strip() for ln in cand.splitlines()):
+        if pattern.search(line) and line not in seen and line not in out:
+            out.append(line)
+    return out
+
+
+def _verdict(base_ok: bool, cand_ok: bool, new_failures: list[str]) -> str:
+    if (base_ok and not cand_ok) or new_failures:
+        return "regression"
+    if not base_ok:
+        return "fixed" if cand_ok else "still-failing"
+    return "same"
+
+
+def build_report(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    projects: dict[str, Any] = {}
+    for name, sides in results.items():
+        base, cand = sides["baseline"], sides["candidate"]
+        new_failures = _new_lines(base["output"], cand["output"], FAIL_LINE)
+        projects[name] = {
+            "verdict": _verdict(base["exit"] == 0, cand["exit"] == 0, new_failures),
+            "new_warnings": _new_lines(base["output"], cand["output"], WARN_LINE),
+            "new_failures": new_failures,
+            "baseline": base,
+            "candidate": cand,
+        }
+    regressions = [n for n, p in projects.items() if p["verdict"] == "regression"]
+    return {"projects": projects, "regressions": regressions}
+
+
+# ── cleanup: only what a run created ─────────────────────────────────────────
+
+
+def _ids(docker_config: Path, *args: str) -> list[str]:
+    res = _docker(docker_config, *args)
+    if res.returncode != 0:
+        raise CompatError(f"docker {' '.join(args[:2])} failed: {res.stderr.strip()}")
+    return res.stdout.split()
+
+
+def cleanup(run_id: str, docker_config: Path) -> list[str]:
+    """Remove the containers and volumes labelled with this run; never anything else."""
+    _check_run_id(run_id)
+    label = f"label={LABEL}.run={run_id}"
+    removed: list[str] = []
+    containers = _ids(docker_config, "ps", "-aq", "--filter", label)
+    if containers:
+        _ids(docker_config, "rm", "-f", *containers)
+        removed += containers
+    volumes = _ids(docker_config, "volume", "ls", "-q", "--filter", label)
+    if volumes:
+        _ids(docker_config, "volume", "rm", "-f", *volumes)
+        removed += volumes
+    return removed
+
+
+def _purge_one(docker_config: Path, image_id: str) -> tuple[bool, str]:
+    """(keep the record?, message) for one recorded image id."""
+    res = _docker(docker_config, "image", "inspect", image_id)
+    if res.returncode != 0:
+        return False, f"{image_id}: not found (already removed)"
+    config = (json.loads(res.stdout)[0].get("Config") or {}).get("Labels") or {}
+    if config.get(LABEL) != "1":
+        return True, f"{image_id}: not labelled {LABEL}=1, kept"
+    rm = _docker(docker_config, "image", "rm", image_id)
+    if rm.returncode != 0:
+        return True, f"{image_id}: could not be removed: {rm.stderr.strip()}"
+    return False, f"{image_id}: removed"
+
+
+def purge_images(state: Path, docker_config: Path) -> list[str]:
+    """Remove the image ids C0 recorded, only if they still carry the label."""
+    path = state / "images.json"
+    records: list[dict[str, str]] = json.loads(path.read_text()) if path.exists() else []
+    kept: list[dict[str, str]] = []
+    messages: list[str] = []
+    for record in records:
+        keep, message = _purge_one(docker_config, record["id"])
+        messages.append(message)
+        if keep:
+            kept.append(record)
+    if path.exists():
+        path.write_text(json.dumps(kept, indent=2) + "\n")
+    return messages
+
+
+# ── run: the whole compatibility check ───────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RunPlan:
+    projects: list[Path]
+    baseline: Path
+    candidate: Path
+    origin: Path
+    image: str
+    docker_config: Path
+    scratch: Path
+    session: str
+
+
+def _side(plan: RunPlan, index: int, project: Path, side: str) -> dict[str, Any]:
+    """Copy, relink, prepare deps and run make check for one project on one side."""
+    sub = f"{plan.session}-{index}{side[0]}"
+    dest = plan.scratch / plan.session / sub
+    install_root = copy_repo(project, dest)
+    repo_top = dest / git_toplevel(project.resolve()).resolve().name
+    workdir = install_root.relative_to(repo_top).as_posix() or "."
+    relink(install_root, plan.origin, "/toolkit")
+    uid, gid = os.getuid(), os.getgid()
+    deps = DepsSpec(
+        phase="init", run_id=sub, image=plan.image, docker_config=plan.docker_config,
+        volume=deps_volume(sub), repo=repo_top, workdir=workdir, session=plan.session,
+        uid=uid, gid=gid,
+    )  # fmt: skip
+    volume = prepare_deps(deps, dest)
+    toolkit = plan.baseline if side == "baseline" else plan.candidate
+    spec = RunSpec(
+        repo=repo_top, workdir=workdir, toolkit=toolkit, image=plan.image, run_id=sub,
+        docker_config=plan.docker_config, command=["make", "check"], deps_volume=volume,
+        session=plan.session, uid=uid, gid=gid,
+    )  # fmt: skip
+    env = client_env(plan.docker_config, dict(os.environ))
+    res = subprocess.run(
+        docker_argv(spec), env=env, text=True, capture_output=True, check=False, timeout=1800
+    )
+    return {"exit": res.returncode, "output": (res.stdout + res.stderr)[-OUTPUT_KEEP:]}
+
+
+def _run_project(plan: RunPlan, index: int, project: Path) -> dict[str, Any]:
+    sides: dict[str, Any] = {}
+    for side in ("baseline", "candidate"):
+        try:
+            sides[side] = _side(plan, index, project, side)
+        except CompatError as exc:
+            sides[side] = {"exit": 99, "output": f"[FAIL] compat {side}: {exc}"}
+    return sides
+
+
+def run(plan: RunPlan) -> dict[str, Any]:
+    """Baseline vs candidate on isolated copies; run-scoped cleanup always happens."""
+    _check_run_id(plan.session)
+    preflight(plan.image, plan.docker_config)
+    results: dict[str, Any] = {}
+    try:
+        for index, project in enumerate(plan.projects):
+            results[str(project)] = _run_project(plan, index, project)
+    finally:
+        cleanup(plan.session, plan.docker_config)
+    report = build_report(results)
+    session_dir = plan.scratch / plan.session
+    if report["regressions"]:
+        report["kept"] = [str(session_dir)]
+    else:
+        shutil.rmtree(session_dir, ignore_errors=True)
+        report["kept"] = []
+    report["run_id"] = plan.session
+    return report
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -550,10 +749,28 @@ def _parser() -> argparse.ArgumentParser:
         dp.add_argument("--gid", type=int, required=True)
         dp.add_argument("--image", required=True)
         dp.add_argument("--docker-config", type=Path, required=True)
+    _add_run_parsers(sub)
+    return parser
+
+
+def _add_run_parsers(sub: Any) -> None:
+    rn = sub.add_parser("run")
+    rn.add_argument("--project", type=Path, action="append", required=True)
+    for name in ("--baseline", "--candidate", "--origin", "--scratch", "--docker-config"):
+        rn.add_argument(name, type=Path, required=True)
+    rn.add_argument("--image", required=True)
+    rn.add_argument("--run-id")
+    rp = sub.add_parser("report")
+    rp.add_argument("results", type=Path)
+    cl = sub.add_parser("cleanup")
+    cl.add_argument("--run-id", required=True)
+    cl.add_argument("--docker-config", type=Path, required=True)
+    pi = sub.add_parser("purge-images")
+    pi.add_argument("--state", type=Path, required=True)
+    pi.add_argument("--docker-config", type=Path, required=True)
     pl = sub.add_parser("prepare-lock")
     pl.add_argument("install_root", type=Path)
     pl.add_argument("out", type=Path)
-    return parser
 
 
 def _deps_spec(args: argparse.Namespace) -> DepsSpec:
@@ -585,6 +802,27 @@ def _deps_main(args: argparse.Namespace) -> None:
     print(volume if volume else "no python deps to prepare (no pyproject.toml)")
 
 
+def _run_main(args: argparse.Namespace) -> int:
+    if args.cmd == "report":
+        report = build_report(json.loads(args.results.read_text()))
+    elif args.cmd == "cleanup":
+        for item in cleanup(args.run_id, args.docker_config):
+            print(f"removed {item}")
+        return 0
+    elif args.cmd == "purge-images":
+        print("\n".join(purge_images(args.state, args.docker_config)))
+        return 0
+    else:
+        plan = RunPlan(
+            projects=args.project, baseline=args.baseline, candidate=args.candidate,
+            origin=args.origin, image=args.image, docker_config=args.docker_config,
+            scratch=args.scratch, session=args.run_id or "c" + uuid.uuid4().hex[:10],
+        )  # fmt: skip
+        report = run(plan)
+    print(json.dumps(report, indent=2))
+    return 1 if report["regressions"] else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -600,6 +838,8 @@ def main(argv: list[str] | None = None) -> int:
             preflight(args.image, args.docker_config)
         elif args.cmd == "build-image":
             print(build_image(args.tag, args.state, args.docker_config))
+        elif args.cmd in ("run", "report", "cleanup", "purge-images"):
+            return _run_main(args)
         else:
             _deps_main(args)
     except CompatError as exc:
