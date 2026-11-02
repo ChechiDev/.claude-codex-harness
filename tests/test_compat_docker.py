@@ -192,10 +192,13 @@ def test_container_env_is_the_allowlist_only(paths: dict[str, Path]) -> None:
         assert secret not in joined
 
 
-def test_uv_paths_point_into_the_deps_volume(paths: dict[str, Path]) -> None:
+def test_venv_comes_from_the_deps_volume_and_the_cache_is_throwaway(
+    paths: dict[str, Path],
+) -> None:
+    """/deps is read-only in the check container: uv must not use it as its cache."""
     env = _env(_ok(paths, "--deps-volume", "harness-compat-deps-r1a2b3")["argv"])
-    assert env["UV_CACHE_DIR"].startswith("/deps/")
-    assert env["UV_PROJECT_ENVIRONMENT"].startswith("/deps/")
+    assert env["UV_PROJECT_ENVIRONMENT"] == "/deps/venv"
+    assert env["UV_CACHE_DIR"].startswith("/tmp/")
 
 
 # ── docker client hardening ──────────────────────────────────────────────────

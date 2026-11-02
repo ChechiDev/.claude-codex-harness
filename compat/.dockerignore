@@ -1,5 +1,6 @@
 *
 !Dockerfile
 !entrypoint.sh
+!entrypoint_prep.sh
 !guard_env.sh
 !selfcheck.sh

@@ -15,5 +15,6 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.24@sha256:1d31be550ff927957472b2a491dc3de1e
 
 COPY --chmod=0555 guard_env.sh selfcheck.sh /usr/local/lib/compat/
 COPY --chmod=0555 entrypoint.sh /usr/local/bin/compat-entrypoint
+COPY --chmod=0555 entrypoint_prep.sh /usr/local/bin/compat-entrypoint-prep
 
 ENTRYPOINT ["/usr/local/bin/compat-entrypoint"]

@@ -13,6 +13,10 @@ Subcommands:
   preflight --image REF                  check (on the host) the local Engine and the image
   build-image --tag T --state DIR        build the image from compat/ (needs network once)
                                          and record its id in DIR/images.json
+  deps-cmd --phase init|fetch|install    print (JSON) one dependency-prep container
+  prepare-lock INSTALL_ROOT OUT          copy ONLY pyproject.toml + uv.lock into OUT
+  prepare-deps ...                       create the run's deps volume and run the three
+                                         prep phases; print the volume name
 """
 
 from __future__ import annotations
@@ -210,7 +214,9 @@ def container_env(spec: RunSpec) -> dict[str, str]:
         "UV_NO_SYNC": "1",
     }
     if spec.deps_volume:
-        env["UV_CACHE_DIR"] = "/deps/cache"
+        # The venv comes from the read-only deps volume; uv still writes to its cache on
+        # start-up, so the cache is throwaway (tmpfs) and never the volume.
+        env["UV_CACHE_DIR"] = "/tmp/uv-cache"
         env["UV_PROJECT_ENVIRONMENT"] = "/deps/venv"
     return env
 
@@ -278,6 +284,146 @@ def _docker_cmd(args: argparse.Namespace) -> None:
     env = client_env(spec.docker_config, dict(os.environ))
     out = {"argv": docker_argv(spec), "client_env": env}
     print(json.dumps(out, indent=2))
+
+
+# ── dependency prep (Python projects): init, fetch, install ──────────────────
+
+PREP_ENTRYPOINT = "/usr/local/bin/compat-entrypoint-prep"
+LOCK_FILES = ("pyproject.toml", "uv.lock")
+FETCH_SYNC = [
+    "uv", "sync", "--frozen", "--no-build",
+    "--no-install-project", "--no-install-workspace", "--no-install-local",
+]  # fmt: skip
+INSTALL_SYNC = ["uv", "sync", "--frozen", "--offline"]
+PHASES = ("init", "fetch", "install")
+
+
+@dataclass(frozen=True)
+class DepsSpec:
+    phase: str
+    run_id: str
+    uid: int
+    gid: int
+    image: str
+    docker_config: Path
+    volume: str
+    lock_dir: Path | None = None
+    repo: Path | None = None
+    workdir: str = "."
+
+
+def deps_volume(run_id: str) -> str:
+    return f"{LABEL}-deps-{run_id}"
+
+
+def _check_lock_dir(lock_dir: Path | None) -> Path:
+    if lock_dir is None:
+        raise CompatError("phase fetch needs --lock-dir")
+    _check_mount_source(lock_dir)
+    names = sorted(p.name for p in lock_dir.iterdir())
+    if names != sorted(LOCK_FILES):
+        raise CompatError(f"lock dir must hold only {', '.join(LOCK_FILES)}; found {names}")
+    return lock_dir
+
+
+def _deps_env(phase: str) -> dict[str, str]:
+    env = {"LANG": "C.UTF-8", "HOME": HOME_IN}
+    if phase != "init":
+        env |= {
+            "UV_CACHE_DIR": "/deps/cache",
+            "UV_PROJECT_ENVIRONMENT": "/deps/venv",
+            "UV_PYTHON_DOWNLOADS": "never",
+        }
+    if phase == "install":
+        env["UV_OFFLINE"] = "1"
+    return env
+
+
+def _deps_phase(spec: DepsSpec) -> tuple[list[str], list[str]]:
+    """(phase-specific docker options, entrypoint args + command) of one prep phase."""
+    volume = f"type=volume,src={spec.volume},dst=/deps"
+    if spec.phase == "init":
+        opts = ["--network", "none", "--user", "0:0", "--cap-add", "CHOWN", "--mount", volume]
+        return opts, ["--rw", "/deps", "--", "chown", f"{spec.uid}:{spec.gid}", "/deps"]
+    user = ["--user", f"{spec.uid}:{spec.gid}"]
+    if spec.phase == "fetch":
+        lock = _check_lock_dir(spec.lock_dir)
+        mounts = ["--mount", f"type=bind,src={lock},dst=/lock,readonly", "--mount", volume]
+        opts = ["--network", "bridge", *user, *mounts, "--workdir", "/lock"]
+        return opts, ["--allow-network", "--rw", "/deps", "--", *FETCH_SYNC]
+    if spec.repo is None:
+        raise CompatError("phase install needs --repo")
+    _check_mount_source(spec.repo)
+    workdir = _check_workdir(spec.workdir)
+    mounts = ["--mount", f"type=bind,src={spec.repo},dst=/work,readonly", "--mount", volume]
+    opts = ["--network", "none", *user, *mounts, "--workdir", workdir]
+    return opts, ["--rw", "/deps", "--", *INSTALL_SYNC]
+
+
+def deps_argv(spec: DepsSpec) -> list[str]:
+    """Validate, then build one dependency-prep container (never run here)."""
+    if spec.phase not in PHASES:
+        raise CompatError(f"unknown phase {spec.phase!r}: use {', '.join(PHASES)}")
+    _check_run_id(spec.run_id)
+    if spec.volume != deps_volume(spec.run_id):
+        raise CompatError(f"deps volume must be the run's own: {deps_volume(spec.run_id)}")
+    _check_docker_config(spec.docker_config)
+    opts, tail = _deps_phase(spec)
+    argv = ["docker", "--host", DOCKER_SOCKET, "run", "--rm", "--read-only"]
+    argv += ["--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512"]
+    argv += ["--tmpfs", "/tmp:rw,nosuid,nodev,size=512m"]
+    argv += ["--tmpfs", f"{HOME_IN}:rw,nosuid,nodev,size=256m"]
+    argv += ["--label", f"{LABEL}=1", "--label", f"{LABEL}.run={spec.run_id}"]
+    argv += ["--name", f"{LABEL}-{spec.run_id}-deps-{spec.phase}"]
+    argv += ["--entrypoint", PREP_ENTRYPOINT, *opts]
+    for key, value in _deps_env(spec.phase).items():
+        argv += ["-e", f"{key}={value}"]
+    return [*argv, spec.image, *tail]
+
+
+def prepare_lock(install_root: Path, out: Path) -> bool:
+    """Copy only pyproject.toml + uv.lock; False when the project has no Python deps."""
+    if not (install_root / "pyproject.toml").is_file():
+        return False
+    if not (install_root / "uv.lock").is_file():
+        raise CompatError(f"uv.lock missing in {install_root}: lock the project first")
+    out.mkdir(parents=True)
+    for name in LOCK_FILES:
+        shutil.copyfile(install_root / name, out / name)
+    return True
+
+
+def _run_phase(spec: DepsSpec) -> None:
+    res = subprocess.run(
+        deps_argv(spec),
+        env=client_env(spec.docker_config, dict(os.environ)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        tail = (res.stdout + res.stderr).strip()[-2000:]
+        raise CompatError(f"deps phase {spec.phase} failed:\n{tail}")
+
+
+def prepare_deps(base: DepsSpec, scratch: Path) -> str | None:
+    """Create the run's volume and run init, fetch, install; None if no Python deps."""
+    if base.repo is None:
+        raise CompatError("prepare-deps needs --repo")
+    lock_dir = scratch / f"lock-{base.run_id}"
+    if not prepare_lock(base.repo / base.workdir, lock_dir):
+        return None
+    labels = ["--label", f"{LABEL}=1", "--label", f"{LABEL}.run={base.run_id}"]
+    res = _docker(base.docker_config, "volume", "create", *labels, base.volume)
+    if res.returncode != 0:
+        raise CompatError(f"cannot create volume {base.volume}: {res.stderr.strip()}")
+    for phase in PHASES:
+        _run_phase(_replace(base, phase=phase, lock_dir=lock_dir))
+    return base.volume
+
+
+def _replace(spec: DepsSpec, **changes: Any) -> DepsSpec:
+    return DepsSpec(**{**spec.__dict__, **changes})
 
 
 # ── host side: preflight and image build ─────────────────────────────────────
@@ -389,7 +535,54 @@ def _parser() -> argparse.ArgumentParser:
     bi.add_argument("--tag", required=True)
     bi.add_argument("--state", type=Path, required=True)
     bi.add_argument("--docker-config", type=Path, required=True)
+    for name in ("deps-cmd", "prepare-deps"):
+        dp = sub.add_parser(name)
+        if name == "deps-cmd":
+            dp.add_argument("--phase", required=True)
+            dp.add_argument("--volume", required=True)
+            dp.add_argument("--lock-dir", type=Path)
+        else:
+            dp.add_argument("--scratch", type=Path, required=True)
+        dp.add_argument("--repo", type=Path)
+        dp.add_argument("--workdir", default=".")
+        dp.add_argument("--run-id", required=True)
+        dp.add_argument("--uid", type=int, required=True)
+        dp.add_argument("--gid", type=int, required=True)
+        dp.add_argument("--image", required=True)
+        dp.add_argument("--docker-config", type=Path, required=True)
+    pl = sub.add_parser("prepare-lock")
+    pl.add_argument("install_root", type=Path)
+    pl.add_argument("out", type=Path)
     return parser
+
+
+def _deps_spec(args: argparse.Namespace) -> DepsSpec:
+    return DepsSpec(
+        phase=getattr(args, "phase", "init"),
+        run_id=args.run_id,
+        uid=args.uid,
+        gid=args.gid,
+        image=args.image,
+        docker_config=args.docker_config,
+        volume=getattr(args, "volume", None) or deps_volume(args.run_id),
+        lock_dir=getattr(args, "lock_dir", None),
+        repo=args.repo,
+        workdir=args.workdir,
+    )
+
+
+def _deps_main(args: argparse.Namespace) -> None:
+    if args.cmd == "prepare-lock":
+        if not prepare_lock(args.install_root, args.out):
+            print("no python deps to prepare (no pyproject.toml)")
+        return
+    spec = _deps_spec(args)
+    if args.cmd == "deps-cmd":
+        env = client_env(spec.docker_config, dict(os.environ))
+        print(json.dumps({"argv": deps_argv(spec), "client_env": env}, indent=2))
+        return
+    volume = prepare_deps(spec, args.scratch)
+    print(volume if volume else "no python deps to prepare (no pyproject.toml)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -405,8 +598,10 @@ def main(argv: list[str] | None = None) -> int:
             _docker_cmd(args)
         elif args.cmd == "preflight":
             preflight(args.image, args.docker_config)
-        else:
+        elif args.cmd == "build-image":
             print(build_image(args.tag, args.state, args.docker_config))
+        else:
+            _deps_main(args)
     except CompatError as exc:
         print(f"compat: error: {exc}", file=sys.stderr)
         return 1
