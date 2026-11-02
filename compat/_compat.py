@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import uuid
@@ -472,8 +473,13 @@ def prepare_deps(base: DepsSpec, scratch: Path, created: list[str] | None = None
         raise CompatError(f"volume {base.volume} does not carry this run's labels; refusing")
     if created is not None:
         created.append(base.volume)
-    for phase in PHASES:
-        _run_phase(_replace(base, phase=phase, lock_dir=lock_dir))
+    try:
+        for phase in PHASES:
+            _run_phase(_replace(base, phase=phase, lock_dir=lock_dir))
+    except CompatError:
+        if _owned(base.docker_config, "volume", base.volume, run_label):
+            _docker(base.docker_config, "volume", "rm", "-f", base.volume)
+        raise
     return base.volume
 
 
@@ -543,8 +549,14 @@ def preflight(image: str, docker_config: Path) -> None:
     if data.get("OSType") != "linux":
         raise CompatError("docker engine is not a local linux engine")
     system = str(data.get("OperatingSystem", ""))
-    if "docker desktop" in system.lower():
-        raise CompatError(f"docker engine is not the native engine (OperatingSystem={system})")
+    name, host = str(data.get("Name", "")), socket.gethostname()
+    if "docker desktop" in system.lower() or name != host:
+        raise CompatError(
+            f"docker engine is not the native engine of this host "
+            f"(Name={name!r}, hostname={host!r}, OperatingSystem={system!r})"
+        )
+    if not data.get("ServerVersion"):
+        raise CompatError("docker engine reports no server version")
     _check_image(_image_config(docker_config, image), image)
     _check_tools(image, docker_config)
 
@@ -667,8 +679,8 @@ VERDICTS = ("same", "fixed", "regression", "error", "inconclusive")
 
 
 def report_exit_code(report: dict[str, Any]) -> int:
-    """1: regression or C0 error; 2: inconclusive (baseline already red); 0: clean."""
-    if report["regressions"] or report["errors"]:
+    """1: regression, C0 error or failed cleanup; 2: inconclusive (baseline already red)."""
+    if report["regressions"] or report["errors"] or report.get("cleanup_errors"):
         return 1
     return 2 if report["inconclusive"] else 0
 
@@ -683,19 +695,31 @@ def _ids(docker_config: Path, *args: str) -> list[str]:
     return res.stdout.split()
 
 
+def _c0_names(run_id: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """Exact names C0 gives to a run's containers and deps volumes."""
+    rid = re.escape(run_id)
+    phases = "|".join(PHASES)
+    container = re.compile(rf"^{LABEL}-{rid}-\d+[bc]-(?:check|deps-(?:{phases}))$")
+    volume = re.compile(rf"^{LABEL}-deps-{rid}-\d+[bc]$")
+    return container, volume
+
+
 def cleanup(run_id: str, docker_config: Path) -> list[str]:
-    """Remove the containers and volumes labelled with this run; never anything else."""
+    """Remove a run's leftovers: only resources that BOTH follow C0's naming for that run
+    and carry its labels. A resource that merely shares the label is never touched."""
     _check_run_id(run_id)
     label = f"label={LABEL}.run={run_id}"
+    container_name, volume_name = _c0_names(run_id)
     removed: list[str] = []
-    containers = _ids(docker_config, "ps", "-aq", "--filter", label)
-    if containers:
-        _ids(docker_config, "rm", "-f", *containers)
-        removed += containers
-    volumes = _ids(docker_config, "volume", "ls", "-q", "--filter", label)
-    if volumes:
-        _ids(docker_config, "volume", "rm", "-f", *volumes)
-        removed += volumes
+    names = _ids(docker_config, "ps", "-a", "--format", "{{.Names}}", "--filter", label)
+    for name in names:
+        if container_name.match(name) and _owned(docker_config, "container", name, run_id):
+            _ids(docker_config, "rm", "-f", name)
+            removed.append(name)
+    for name in _ids(docker_config, "volume", "ls", "-q", "--filter", label):
+        if volume_name.match(name) and _owned(docker_config, "volume", name, run_id):
+            _ids(docker_config, "volume", "rm", "-f", name)
+            removed.append(name)
     return removed
 
 
@@ -801,19 +825,27 @@ def _run_project(plan: RunPlan, index: int, project: Path) -> dict[str, Any]:
     return sides
 
 
-def _cleanup_created(plan: RunPlan) -> None:
+def _remove_owned(plan: RunPlan, kind: str, name: str) -> str | None:
+    """Remove one resource if it is this run's; an error message if removal failed."""
+    if not _owned(plan.docker_config, kind, name, plan.session):
+        return None
+    args = ("rm", "-f", name) if kind == "container" else ("volume", "rm", "-f", name)
+    res = _docker(plan.docker_config, *args)
+    return None if res.returncode == 0 else f"{kind} {name}: {res.stderr.strip()}"
+
+
+def _cleanup_created(plan: RunPlan) -> list[str]:
     """Remove ONLY what this run created: its named containers (normally already gone,
-    --rm) and the volumes it recorded, each re-verified by this run's labels."""
+    --rm) and the volumes it recorded, each re-verified by this run's labels. Returns
+    the failures, which turn the run into an error."""
+    targets: list[tuple[str, str]] = []
     for index in range(len(plan.projects)):
         for side in ("b", "c"):
             sub = f"{plan.session}-{index}{side}"
             names = [f"{LABEL}-{sub}-check", *(f"{LABEL}-{sub}-deps-{p}" for p in PHASES)]
-            for name in names:
-                if _owned(plan.docker_config, "container", name, plan.session):
-                    _docker(plan.docker_config, "rm", "-f", name)
-    for volume in plan.created_volumes:
-        if _owned(plan.docker_config, "volume", volume, plan.session):
-            _docker(plan.docker_config, "volume", "rm", "-f", volume)
+            targets += [("container", name) for name in names]
+    targets += [("volume", volume) for volume in plan.created_volumes]
+    return [err for kind, name in targets if (err := _remove_owned(plan, kind, name))]
 
 
 def run(plan: RunPlan) -> dict[str, Any]:
@@ -825,10 +857,11 @@ def run(plan: RunPlan) -> dict[str, Any]:
         for index, project in enumerate(plan.projects):
             results[str(project)] = _run_project(plan, index, project)
     finally:
-        _cleanup_created(plan)
+        cleanup_errors = _cleanup_created(plan)
     report = build_report(results)
+    report["cleanup_errors"] = cleanup_errors
     session_dir = plan.scratch / plan.session
-    if report["regressions"] or report["errors"]:
+    if report["regressions"] or report["errors"] or cleanup_errors:
         report["kept"] = [str(session_dir)]
     else:
         shutil.rmtree(session_dir, ignore_errors=True)

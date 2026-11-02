@@ -42,12 +42,22 @@ require_ro / "root filesystem (read-only)"
 if [ -d /toolkit ]; then require_ro /toolkit "/toolkit mount"; fi
 if [ -d /deps ] && [ "$rw_deps" -eq 0 ]; then require_ro /deps "/deps mount"; fi
 
-# Mount inventory: nothing but the expected mount points (no extra host path).
-while read -r _ mp _; do
-  case "$mp" in
-    / | /proc | /proc/* | /dev | /dev/* | /sys | /sys/* | /tmp | /home | /work | /toolkit | \
-      /deps | /lock | /etc/hosts | /etc/hostname | /etc/resolv.conf) ;;
-    *) fail "unexpected mount: $mp" ;;
+# Mount inventory: only the exact mount points Docker creates plus the declared ones,
+# each with its expected filesystem type (no wildcard: a host path bound under /dev,
+# /proc or /sys, or over a masked /proc file, is rejected).
+while read -r _ mp fstype _; do
+  case "$mp:$fstype" in
+    /:overlay | /proc:proc | /dev:tmpfs | /dev/pts:devpts | /dev/mqueue:mqueue | \
+      /dev/shm:tmpfs | /sys:sysfs | /sys/fs/cgroup:cgroup2 | /tmp:tmpfs | /home:tmpfs) ;;
+    /proc/bus:proc | /proc/fs:proc | /proc/irq:proc | /proc/sys:proc | \
+      /proc/sysrq-trigger:proc) ;;
+    /proc/acpi:tmpfs | /proc/asound:tmpfs | /proc/interrupts:tmpfs | /proc/kcore:tmpfs | \
+      /proc/keys:tmpfs | /proc/latency_stats:tmpfs | /proc/sched_debug:tmpfs | \
+      /proc/scsi:tmpfs | /proc/timer_list:tmpfs | /proc/timer_stats:tmpfs | \
+      /sys/firmware:tmpfs | /sys/devices/virtual/powercap:tmpfs) ;;
+    /work:* | /toolkit:* | /deps:* | /lock:* | /etc/hosts:* | /etc/hostname:* | \
+      /etc/resolv.conf:*) ;;
+    *) fail "unexpected mount: $mp ($fstype)" ;;
   esac
 done </proc/mounts
 

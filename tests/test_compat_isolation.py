@@ -174,3 +174,15 @@ def test_self_check_fails_with_an_unexpected_mount(run: dict[str, Any], tmp_path
     res = _exec(run, argv)
     assert res.returncode != 0
     assert "unexpected mount" in (res.stdout + res.stderr).lower()
+
+
+def test_self_check_fails_with_an_extra_mount_under_dev(
+    run: dict[str, Any], tmp_path: Path
+) -> None:
+    """Wildcards under /dev, /proc or /sys would hide e.g. a host socket at /dev/host."""
+    extra = tmp_path / "hostdir"
+    extra.mkdir()
+    argv = _before_image(run["argv"], "--mount", f"type=bind,src={extra},dst=/dev/host,readonly")
+    res = _exec(run, argv)
+    assert res.returncode != 0
+    assert "unexpected mount" in (res.stdout + res.stderr).lower()

@@ -12,6 +12,7 @@ State: {"engine": "linux" | null, "images": {"<ref or id>": {inspect Config...}}
 from __future__ import annotations
 
 import json
+import socket
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ def _info(state: dict[str, Any]) -> int:
         return 1
     info = {"OSType": state["engine"], "ServerVersion": "29.9.2"}
     info["OperatingSystem"] = state.get("os", "Ubuntu 24.04.4 LTS")
+    info["Name"] = state.get("name", socket.gethostname())
+    info["ServerVersion"] = state.get("server_version", "29.9.2")
     print(json.dumps(info))
     return 0
 
@@ -108,6 +111,13 @@ def _named(state: dict[str, Any], args: list[str]) -> int | None:
     return None
 
 
+def _rm(state: dict[str, Any], containers: dict[str, Any], args: list[str]) -> int:
+    if state.get("rm_fails"):
+        print("Error: removal failed", file=sys.stderr)
+        return 1
+    return _remove(containers, [a for a in args[1:] if not a.startswith("-")])
+
+
 def _resources(state: dict[str, Any], args: list[str]) -> int | None:
     containers = state.setdefault("containers", {})
     volumes = state.setdefault("volumes", {})
@@ -116,7 +126,7 @@ def _resources(state: dict[str, Any], args: list[str]) -> int | None:
     if args[:1] == ["ps"]:
         return _list(containers, args)
     if args[:1] == ["rm"]:
-        return _remove(containers, [a for a in args[1:] if not a.startswith("-")])
+        return _rm(state, containers, args)
     if args[:2] == ["volume", "ls"]:
         return _list(volumes, args)
     if args[:2] == ["volume", "rm"]:

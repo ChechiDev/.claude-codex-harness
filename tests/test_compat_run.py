@@ -176,10 +176,17 @@ def fake(tmp_path: Path) -> dict[str, Path]:
         json.dumps(
             {
                 "engine": "linux",
-                "containers": {"ca1": run_a, "cb1": run_b, "mine": {"app": "postgres"}},
+                "containers": {
+                    "harness-compat-runa-0b-check": run_a,
+                    "harness-compat-runa-1c-deps-fetch": run_a,
+                    "ca1": run_a,  # carries the label but is not a C0 name: never touched
+                    "harness-compat-runb-0b-check": run_b,
+                    "mine": {"app": "postgres"},
+                },
                 "volumes": {
-                    "harness-compat-deps-runa": run_a,
-                    "harness-compat-deps-runb": run_b,
+                    "harness-compat-deps-runa-0b": run_a,
+                    "x-runa": run_a,  # label only, foreign name: never touched
+                    "harness-compat-deps-runb-0b": run_b,
                     "pgdata": {},
                 },
                 "images": {
@@ -213,8 +220,17 @@ def test_cleanup_removes_only_the_runs_own_containers_and_volumes(
     res = _run(*args, env=_fake_env(fake))
     assert res.returncode == 0, res.stderr
     state = _state(fake)
-    assert set(state["containers"]) == {"cb1", "mine"}
-    assert set(state["volumes"]) == {"harness-compat-deps-runb", "pgdata"}
+    assert set(state["containers"]) == {"ca1", "harness-compat-runb-0b-check", "mine"}
+    assert set(state["volumes"]) == {"x-runa", "harness-compat-deps-runb-0b", "pgdata"}
+
+
+def test_cleanup_skips_a_c0_name_without_the_runs_labels(fake: dict[str, Path]) -> None:
+    state = _state(fake)
+    state["volumes"]["harness-compat-deps-runa-2c"] = {"owner": "someone-else"}
+    fake["state"].write_text(json.dumps(state))
+    args = ["cleanup", "--run-id", "runa", "--docker-config", str(fake["config"])]
+    _run(*args, env=_fake_env(fake))
+    assert "harness-compat-deps-runa-2c" in _state(fake)["volumes"]
 
 
 def test_cleanup_always_filters_by_the_run_label_and_never_prunes(
@@ -352,3 +368,62 @@ def test_preflight_refuses_a_non_native_engine(fake: dict[str, Path]) -> None:
     res = _preflight(fake)
     assert res.returncode != 0
     assert "native" in res.stderr.lower()
+
+
+def test_preflight_refuses_an_engine_named_after_another_host(fake: dict[str, Path]) -> None:
+    """A daemon served through the local socket must be this machine's own engine."""
+    _set(fake, name="docker-desktop")
+    res = _preflight(fake)
+    assert res.returncode != 0
+    assert "native" in res.stderr.lower()
+
+
+def test_preflight_requires_a_server_version(fake: dict[str, Path]) -> None:
+    _set(fake, server_version="")
+    res = _preflight(fake)
+    assert res.returncode != 0
+    assert "version" in res.stderr.lower()
+
+
+def test_prepare_deps_removes_its_own_volume_when_a_phase_fails(fake: dict[str, Path]) -> None:
+    _set(fake, run_exit=1)
+    res = _prepare_deps(fake, "runx")
+    assert res.returncode != 0
+    assert "harness-compat-deps-runx" not in _state(fake)["volumes"]
+
+
+def _toy_repo(fake: dict[str, Path]) -> tuple[Path, Path]:
+    toolkit = fake["tmp"] / "toolkit"
+    for rel in ("lib", "agents", "codex", "skills"):
+        (toolkit / rel).mkdir(parents=True)
+    (toolkit / "settings.json").write_text("{}")
+    repo = fake["tmp"] / "proj"
+    (repo / ".claude").mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "harness").symlink_to(toolkit / "lib")
+    for name in ("agents", "codex", "skills"):
+        (repo / ".claude" / name).symlink_to(toolkit / name)
+    (repo / ".claude" / "settings.json").symlink_to(toolkit / "settings.json")
+    return repo, toolkit
+
+
+def test_a_failed_cleanup_turns_the_run_into_an_error(fake: dict[str, Path]) -> None:
+    """If removing what the run created fails, the run must not report success."""
+    repo, toolkit = _toy_repo(fake)
+    run_labels = {"harness-compat": "1", "harness-compat.run": "cfail1"}
+    state = _state(fake)
+    state["containers"]["harness-compat-cfail1-0b-check"] = run_labels  # left behind
+    state["rm_fails"] = True
+    fake["state"].write_text(json.dumps(state))
+    _preflight(fake)  # registers the image in the fake
+    args = [
+        "run", "--project", str(repo), "--run-id", "cfail1",
+        "--baseline", str(toolkit), "--candidate", str(toolkit), "--origin", str(toolkit),
+        "--image", "harness-compat:t", "--docker-config", str(fake["config"]),
+        "--scratch", str(fake["tmp"] / "scratch"),
+    ]  # fmt: skip
+    res = _run(*args, env=_fake_env(fake))
+    assert res.returncode == 1, res.stdout + res.stderr
+    report = json.loads(res.stdout)
+    assert report["cleanup_errors"], report
+    assert report["kept"]
