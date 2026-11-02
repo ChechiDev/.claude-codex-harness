@@ -4,4 +4,5 @@
 set -euo pipefail
 /usr/local/lib/compat/guard_env.sh
 /usr/local/lib/compat/selfcheck.sh
+mkdir -p "$HOME"
 exec "$@"

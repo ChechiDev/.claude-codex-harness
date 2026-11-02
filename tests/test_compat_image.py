@@ -112,10 +112,23 @@ def test_selfcheck_fails_on_a_host_with_network() -> None:
     assert "network" in res.stderr.lower()
 
 
-def test_entrypoint_runs_both_guards_before_the_command() -> None:
-    text = (COMPAT / "entrypoint.sh").read_text()
-    guard, check, run = (text.find(s) for s in ("guard_env", "selfcheck", 'exec "$@"'))
-    assert -1 < guard < check < run
+@pytest.mark.parametrize("script", ["entrypoint.sh", "entrypoint_prep.sh"])
+def test_entrypoint_runs_guards_then_creates_home_then_the_command(script: str) -> None:
+    text = (COMPAT / script).read_text()
+    marks = ("/guard_env.sh", "/selfcheck.sh", 'mkdir -p "$HOME"', 'exec "$@"')
+    positions = [text.find(s) for s in marks]
+    assert -1 < positions[0] < positions[1] < positions[2] < positions[3], positions
+
+
+def test_image_ships_valgrind_for_c_projects() -> None:
+    text = (COMPAT / "Dockerfile").read_text()
+    assert re.search(r"\bvalgrind\b", text)
+
+
+def test_image_pins_norminette_for_42_c_projects() -> None:
+    text = (COMPAT / "Dockerfile").read_text()
+    assert "norminette==3.3.60" in text
+    assert "--exclude-newer" in text  # transitive deps frozen in time too
 
 
 # ── host preflight and build, with a fake docker ─────────────────────────────

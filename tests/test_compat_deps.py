@@ -112,6 +112,9 @@ def test_every_phase_is_locked_down_and_labelled(paths: dict[str, Path], phase: 
     assert _values(argv, "--name") == [f"harness-compat-{RUN_ID}-deps-{phase}"]
     assert _values(argv, "--entrypoint") == [PREP]
     assert "--env-file" not in argv
+    tmpfs = {v.split(":")[0]: v.split(":")[1].split(",") for v in _values(argv, "--tmpfs")}
+    assert sorted(tmpfs) == ["/home", "/tmp"]
+    assert all("exec" in o and "nosuid" in o and "nodev" in o for o in tmpfs.values())
 
 
 @pytest.mark.parametrize("phase", ["init", "fetch", "install"])

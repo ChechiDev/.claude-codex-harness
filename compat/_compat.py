@@ -167,6 +167,10 @@ SOCKET_PATHS = ("/var/run/docker.sock", "/run/docker.sock")
 RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 LABEL = "harness-compat"
 HOME_IN = "/home/compat"
+# exec: projects compile and run probes in /tmp (Docker defaults tmpfs to noexec).
+# /home as a whole: tools that ignore $HOME and use the uid's passwd home can write.
+TMPFS_TMP = "/tmp:rw,exec,nosuid,nodev,size=512m"
+TMPFS_HOME = "/home:rw,exec,nosuid,nodev,size=256m,mode=1777"
 CLIENT_ENV_KEYS = ("PATH",)
 
 
@@ -272,8 +276,8 @@ def docker_argv(spec: RunSpec) -> list[str]:
     argv += ["--network", "none", "--cap-drop", "ALL"]
     argv += ["--security-opt", "no-new-privileges", "--pids-limit", "512"]
     argv += ["--user", f"{spec.uid}:{spec.gid}"]
-    argv += ["--tmpfs", "/tmp:rw,nosuid,nodev,size=512m"]
-    argv += ["--tmpfs", f"{HOME_IN}:rw,nosuid,nodev,size=256m"]
+    argv += ["--tmpfs", TMPFS_TMP]
+    argv += ["--tmpfs", TMPFS_HOME]
     argv += _run_labels(spec.session or spec.run_id)
     argv += ["--name", f"{LABEL}-{spec.run_id}-check"]
     argv += _mount_args(spec) + ["--workdir", workdir]
@@ -400,8 +404,8 @@ def deps_argv(spec: DepsSpec) -> list[str]:
     opts, tail = _deps_phase(spec)
     argv = ["docker", "--host", DOCKER_SOCKET, "run", "--rm", "--read-only"]
     argv += ["--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512"]
-    argv += ["--tmpfs", "/tmp:rw,nosuid,nodev,size=512m"]
-    argv += ["--tmpfs", f"{HOME_IN}:rw,nosuid,nodev,size=256m"]
+    argv += ["--tmpfs", TMPFS_TMP]
+    argv += ["--tmpfs", TMPFS_HOME]
     argv += _run_labels(spec.session or spec.run_id)
     argv += ["--name", f"{LABEL}-{spec.run_id}-deps-{spec.phase}"]
     argv += ["--entrypoint", PREP_ENTRYPOINT, *opts]

@@ -136,3 +136,32 @@ def test_container_is_removed_after_the_run(run: dict[str, Any]) -> None:
     )  # fmt: skip
     assert ps.returncode == 0, ps.stderr
     assert ps.stdout.strip() == ""
+
+
+def _with_command(run: dict[str, Any], *command: str) -> list[str]:
+    argv: list[str] = run["argv"]
+    return [*argv[: argv.index(IMAGE) + 1], *command]
+
+
+def test_tmp_allows_running_a_compiled_probe(run: dict[str, Any]) -> None:
+    script = "cp /usr/bin/true /tmp/probe && /tmp/probe"
+    res = _exec(run, _with_command(run, "bash", "-c", script))
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_home_exists_and_the_passwd_home_is_writable(run: dict[str, Any]) -> None:
+    script = 'test -d "$HOME" && mkdir -p /home/ubuntu/.cache/uv && touch "$HOME/x"'
+    res = _exec(run, _with_command(run, "bash", "-c", script))
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_norminette_is_available(run: dict[str, Any]) -> None:
+    res = _exec(run, _with_command(run, "norminette", "--version"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "3.3.60" in res.stdout
+
+
+def test_valgrind_is_available(run: dict[str, Any]) -> None:
+    res = _exec(run, _with_command(run, "valgrind", "--version"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert res.stdout.startswith("valgrind-")

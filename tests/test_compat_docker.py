@@ -100,8 +100,15 @@ def test_container_is_locked_down(paths: dict[str, Path]) -> None:
 
 
 def test_tmp_and_home_are_tmpfs(paths: dict[str, Path]) -> None:
-    tmpfs = [v.split(":")[0] for v in _values(_ok(paths)["argv"], "--tmpfs")]
-    assert sorted(tmpfs) == ["/home/compat", "/tmp"]
+    """/home is a whole tmpfs: tools that ignore $HOME and use the passwd home of the
+    uid (e.g. /home/ubuntu in the image) can still write, always in throwaway memory."""
+    argv = _ok(paths)["argv"]
+    tmpfs = {v.split(":")[0]: v.split(":")[1].split(",") for v in _values(argv, "--tmpfs")}
+    assert sorted(tmpfs) == ["/home", "/tmp"]
+    for opts in tmpfs.values():
+        assert "exec" in opts and "noexec" not in opts  # projects compile and run probes
+        assert "nosuid" in opts and "nodev" in opts
+    assert _env(argv)["HOME"].startswith("/home/")
 
 
 # ── mounts ───────────────────────────────────────────────────────────────────

@@ -15,4 +15,5 @@ fi
 shift
 /usr/local/lib/compat/guard_env.sh
 /usr/local/lib/compat/selfcheck.sh "${opts[@]}"
+mkdir -p "$HOME"
 exec "$@"
