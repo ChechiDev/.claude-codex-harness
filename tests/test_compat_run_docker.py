@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -162,3 +163,39 @@ def test_original_project_and_toolkits_are_untouched(tmp_path: Path, config: Pat
     before = {k: _tree(env[k]) for k in ("A", "B", "proj")}
     _compat_run(env, config)
     assert {k: _tree(env[k]) for k in ("A", "B", "proj")} == before
+
+
+def test_both_sides_see_the_same_state_even_if_the_original_changes_mid_run(
+    tmp_path: Path, config: Path
+) -> None:
+    """Another session may edit the real project during a run (seen in C0.6): both sides
+    must come from ONE point-in-time snapshot, so the edit cannot create a fake delta."""
+    a = _toolkit(tmp_path / "A", "sleep 4; echo baseline-done\n")
+    b = _toolkit(tmp_path / "B", "echo candidate-done\n")
+    proj = _project(tmp_path, a)
+    (proj / "state.txt").write_text("v1\n")
+    (proj / "Makefile").write_text("check:\n\t@cat state.txt\n\t@bash harness/check.sh\n")
+    _git(proj, "add", "-A")
+    _git(proj, "commit", "-qm", "state")
+    scratch = tmp_path / "scratch"
+    proc = subprocess.Popen(
+        [
+            sys.executable, str(RUNNER), "run", "--project", str(proj),
+            "--baseline", str(a), "--candidate", str(b), "--origin", str(a),
+            "--image", IMAGE, "--docker-config", str(config), "--scratch", str(scratch),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )  # fmt: skip
+    deadline = time.monotonic() + 60
+    while not list(scratch.glob("*/*-0b")) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert list(scratch.glob("*/*-0b")), "baseline side never started"
+    (proj / "state.txt").write_text("v2 edited by another session\n")
+    stdout, stderr = proc.communicate(timeout=300)
+    report: dict[str, Any] = json.loads(stdout)
+    side = report["projects"][str(proj)]
+    assert "v1" in side["baseline"]["output"]
+    assert "v1" in side["candidate"]["output"], side["candidate"]["output"]
+    assert "v2" not in side["candidate"]["output"]

@@ -675,10 +675,17 @@ def _side(plan: RunPlan, index: int, project: Path, side: str) -> dict[str, Any]
 
 
 def _run_project(plan: RunPlan, index: int, project: Path) -> dict[str, Any]:
+    """Both sides start from ONE point-in-time snapshot of the project, so another
+    session editing the real project during the run cannot create a fake delta."""
+    try:
+        snapshot = copy_repo(project, plan.scratch / plan.session / f"{index}-src")
+    except CompatError as exc:
+        failed = {"exit": 99, "output": f"[FAIL] compat snapshot: {exc}"}
+        return {"baseline": failed, "candidate": failed}
     sides: dict[str, Any] = {}
     for side in ("baseline", "candidate"):
         try:
-            sides[side] = _side(plan, index, project, side)
+            sides[side] = _side(plan, index, snapshot, side)
         except CompatError as exc:
             sides[side] = {"exit": 99, "output": f"[FAIL] compat {side}: {exc}"}
     return sides
