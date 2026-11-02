@@ -7,6 +7,9 @@ Subcommands:
                                          DEST_DIR/<repo>; print the install root in the copy
   relink ROOT --toolkit DIR --mount PATH re-point the harness links of a COPY to PATH
   snapshot ROOT                          print every symlink under ROOT as JSON
+  docker-cmd ... -- CMD...               print (JSON) the locked-down docker invocation
+                                         of a check container and its client env;
+                                         never runs docker
 """
 
 from __future__ import annotations
@@ -14,9 +17,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 HARNESS_LINKS = ("harness", ".claude/agents", ".claude/codex", ".claude/settings.json")
@@ -126,6 +131,138 @@ def snapshot(root: Path) -> dict[str, str]:
     return dict(sorted(out.items()))
 
 
+# ── docker command (built, never executed here) ──────────────────────────────
+
+DOCKER_SOCKET = "unix:///var/run/docker.sock"
+SOCKET_PATHS = ("/var/run/docker.sock", "/run/docker.sock")
+RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+LABEL = "harness-compat"
+HOME_IN = "/home/compat"
+CLIENT_ENV_KEYS = ("PATH",)
+
+
+@dataclass(frozen=True)
+class RunSpec:
+    repo: Path
+    workdir: str
+    toolkit: Path
+    image: str
+    run_id: str
+    uid: int
+    gid: int
+    docker_config: Path
+    command: list[str]
+    deps_volume: str | None = None
+
+
+def _check_run_id(run_id: str) -> None:
+    if not RUN_ID.match(run_id):
+        raise CompatError(f"invalid run-id {run_id!r}: use [a-z0-9-], max 32, no leading dash")
+
+
+def _check_mount_source(path: Path) -> None:
+    """Refuse host paths that would expose the host: root, HOME (or above), ~/.claude, sockets."""
+    real = Path(os.path.realpath(path))
+    home = Path(os.path.realpath(Path.home()))
+    claude = home / ".claude"
+    if str(path) in SOCKET_PATHS or str(real) in SOCKET_PATHS:
+        raise CompatError(f"refusing to mount the docker socket: {path}")
+    if real == Path("/") or home.is_relative_to(real) or real.is_relative_to(claude):
+        raise CompatError(f"refusing to mount a host path that exposes the host: {path}")
+    if not real.is_dir():
+        raise CompatError(f"mount source must be an existing directory: {path}")
+
+
+def _check_workdir(workdir: str) -> str:
+    rel = Path(workdir)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise CompatError(f"workdir must be relative and stay inside the copy: {workdir}")
+    return "/work" if workdir in ("", ".") else f"/work/{rel.as_posix()}"
+
+
+def _check_docker_config(path: Path) -> None:
+    if not path.is_dir() or any(path.iterdir()):
+        raise CompatError(f"docker-config must be an existing EMPTY directory: {path}")
+
+
+def container_env(spec: RunSpec) -> dict[str, str]:
+    env = {
+        "LANG": "C.UTF-8",
+        "HOME": HOME_IN,
+        "UV_PYTHON_DOWNLOADS": "never",
+        "UV_OFFLINE": "1",
+        "UV_NO_SYNC": "1",
+    }
+    if spec.deps_volume:
+        env["UV_CACHE_DIR"] = "/deps/cache"
+        env["UV_PROJECT_ENVIRONMENT"] = "/deps/venv"
+    return env
+
+
+def _mount_args(spec: RunSpec) -> list[str]:
+    mounts = [
+        f"type=bind,src={spec.repo},dst=/work",
+        f"type=bind,src={spec.toolkit},dst=/toolkit,readonly",
+    ]
+    if spec.deps_volume:
+        mounts.append(f"type=volume,src={spec.deps_volume},dst=/deps,readonly")
+    return [arg for m in mounts for arg in ("--mount", m)]
+
+
+def docker_argv(spec: RunSpec) -> list[str]:
+    """Validate the spec, then build the full docker invocation for the check container."""
+    _check_run_id(spec.run_id)
+    for source in (spec.repo, spec.toolkit):
+        _check_mount_source(source)
+    workdir = _check_workdir(spec.workdir)
+    _check_docker_config(spec.docker_config)
+    if not spec.command:
+        raise CompatError("a command to run in the container is required (after --)")
+    argv = ["docker", "--host", DOCKER_SOCKET, "run", "--rm", "--read-only"]
+    argv += ["--network", "none", "--cap-drop", "ALL"]
+    argv += ["--security-opt", "no-new-privileges", "--pids-limit", "512"]
+    argv += ["--user", f"{spec.uid}:{spec.gid}"]
+    argv += ["--tmpfs", "/tmp:rw,nosuid,nodev,size=512m"]
+    argv += ["--tmpfs", f"{HOME_IN}:rw,nosuid,nodev,size=256m"]
+    argv += ["--label", f"{LABEL}=1", "--label", f"{LABEL}.run={spec.run_id}"]
+    argv += ["--name", f"{LABEL}-{spec.run_id}-check"]
+    argv += _mount_args(spec) + ["--workdir", workdir]
+    for key, value in container_env(spec).items():
+        argv += ["-e", f"{key}={value}"]
+    return [*argv, spec.image, *spec.command]
+
+
+def client_env(spec: RunSpec, host_env: dict[str, str]) -> dict[str, str]:
+    """Minimal env for the docker CLI: no DOCKER_HOST/CONTEXT/TLS, empty DOCKER_CONFIG."""
+    env = {k: host_env[k] for k in CLIENT_ENV_KEYS if k in host_env}
+    env["DOCKER_CONFIG"] = str(spec.docker_config)
+    return env
+
+
+def _spec_from_args(args: argparse.Namespace) -> RunSpec:
+    command = list(args.command)
+    if command[:1] == ["--"]:
+        command = command[1:]
+    return RunSpec(
+        repo=args.repo,
+        workdir=args.workdir,
+        toolkit=args.toolkit,
+        image=args.image,
+        run_id=args.run_id,
+        uid=args.uid,
+        gid=args.gid,
+        docker_config=args.docker_config,
+        command=command,
+        deps_volume=args.deps_volume,
+    )
+
+
+def _docker_cmd(args: argparse.Namespace) -> None:
+    spec = _spec_from_args(args)
+    out = {"argv": docker_argv(spec), "client_env": client_env(spec, dict(os.environ))}
+    print(json.dumps(out, indent=2))
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -141,6 +278,17 @@ def _parser() -> argparse.ArgumentParser:
     rl.add_argument("--mount", required=True)
     sn = sub.add_parser("snapshot")
     sn.add_argument("root", type=Path)
+    dk = sub.add_parser("docker-cmd")
+    dk.add_argument("--repo", type=Path, required=True)
+    dk.add_argument("--workdir", required=True)
+    dk.add_argument("--toolkit", type=Path, required=True)
+    dk.add_argument("--image", required=True)
+    dk.add_argument("--run-id", required=True)
+    dk.add_argument("--uid", type=int, required=True)
+    dk.add_argument("--gid", type=int, required=True)
+    dk.add_argument("--docker-config", type=Path, required=True)
+    dk.add_argument("--deps-volume")
+    dk.add_argument("command", nargs=argparse.REMAINDER)
     return parser
 
 
@@ -151,8 +299,10 @@ def main(argv: list[str] | None = None) -> int:
             print(copy_repo(args.src, args.dest_dir))
         elif args.cmd == "relink":
             relink(args.root, args.toolkit, args.mount)
-        else:
+        elif args.cmd == "snapshot":
             print(json.dumps(snapshot(args.root), indent=2))
+        else:
+            _docker_cmd(args)
     except CompatError as exc:
         print(f"compat: error: {exc}", file=sys.stderr)
         return 1
