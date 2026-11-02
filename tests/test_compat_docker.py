@@ -214,9 +214,31 @@ def test_client_env_drops_remote_daemon_selectors(paths: dict[str, Path]) -> Non
     assert client["DOCKER_CONFIG"] == str(paths["config"])
 
 
-def test_docker_config_dir_must_exist_and_be_empty(paths: dict[str, Path]) -> None:
-    (paths["config"] / "config.json").write_text('{"credsStore": "desktop.exe"}')
+@pytest.mark.parametrize("user_config", ["config.json", "contexts", "cli-plugins"])
+def test_docker_config_must_hold_no_user_configuration(
+    paths: dict[str, Path], user_config: str
+) -> None:
+    """Credentials/proxies (config.json), remote contexts and plugins must never apply."""
+    target = paths["config"] / user_config
+    if user_config == "config.json":
+        target.write_text('{"credsStore": "desktop.exe"}')
+    else:
+        target.mkdir()
     res = _run(paths)
+    assert res.returncode != 0
+    assert "docker-config" in res.stderr.lower()
+    assert user_config in res.stderr
+
+
+def test_docker_config_may_hold_docker_runtime_state(paths: dict[str, Path]) -> None:
+    """The CLI writes its own state there (buildx/, .token_seed): harmless, accepted."""
+    (paths["config"] / "buildx" / "refs").mkdir(parents=True)
+    (paths["config"] / ".token_seed").write_text("seed")
+    _ok(paths)
+
+
+def test_docker_config_must_exist(paths: dict[str, Path]) -> None:
+    res = _run({**paths, "config": paths["config"] / "missing"})
     assert res.returncode != 0
     assert "docker-config" in res.stderr.lower()
 

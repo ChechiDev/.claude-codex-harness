@@ -10,6 +10,9 @@ Subcommands:
   docker-cmd ... -- CMD...               print (JSON) the locked-down docker invocation
                                          of a check container and its client env;
                                          never runs docker
+  preflight --image REF                  check (on the host) the local Engine and the image
+  build-image --tag T --state DIR        build the image from compat/ (needs network once)
+                                         and record its id in DIR/images.json
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 HARNESS_LINKS = ("harness", ".claude/agents", ".claude/codex", ".claude/settings.json")
 SKILLS = ".claude/skills"
@@ -180,9 +184,21 @@ def _check_workdir(workdir: str) -> str:
     return "/work" if workdir in ("", ".") else f"/work/{rel.as_posix()}"
 
 
+DOCKER_USER_CONFIG = ("config.json", "contexts", "cli-plugins")
+
+
 def _check_docker_config(path: Path) -> None:
-    if not path.is_dir() or any(path.iterdir()):
-        raise CompatError(f"docker-config must be an existing EMPTY directory: {path}")
+    """A throwaway DOCKER_CONFIG holding no user configuration.
+
+    config.json (credentials, proxies, default context), contexts/ (remote engines) and
+    cli-plugins/ (executables) are refused; the CLI's own runtime state (buildx/,
+    .token_seed) is harmless and accepted.
+    """
+    if not path.is_dir():
+        raise CompatError(f"docker-config must be an existing directory: {path}")
+    found = [name for name in DOCKER_USER_CONFIG if (path / name).exists()]
+    if found:
+        raise CompatError(f"docker-config holds user configuration ({', '.join(found)}): {path}")
 
 
 def container_env(spec: RunSpec) -> dict[str, str]:
@@ -232,10 +248,10 @@ def docker_argv(spec: RunSpec) -> list[str]:
     return [*argv, spec.image, *spec.command]
 
 
-def client_env(spec: RunSpec, host_env: dict[str, str]) -> dict[str, str]:
+def client_env(docker_config: Path, host_env: dict[str, str]) -> dict[str, str]:
     """Minimal env for the docker CLI: no DOCKER_HOST/CONTEXT/TLS, empty DOCKER_CONFIG."""
     env = {k: host_env[k] for k in CLIENT_ENV_KEYS if k in host_env}
-    env["DOCKER_CONFIG"] = str(spec.docker_config)
+    env["DOCKER_CONFIG"] = str(docker_config)
     return env
 
 
@@ -259,8 +275,85 @@ def _spec_from_args(args: argparse.Namespace) -> RunSpec:
 
 def _docker_cmd(args: argparse.Namespace) -> None:
     spec = _spec_from_args(args)
-    out = {"argv": docker_argv(spec), "client_env": client_env(spec, dict(os.environ))}
+    env = client_env(spec.docker_config, dict(os.environ))
+    out = {"argv": docker_argv(spec), "client_env": env}
     print(json.dumps(out, indent=2))
+
+
+# ── host side: preflight and image build ─────────────────────────────────────
+
+COMPAT_DIR = Path(__file__).resolve().parent
+ENTRYPOINT = ["/usr/local/bin/compat-entrypoint"]
+IMAGE_ENV_NAMES = {"PATH"}
+TAG = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def _docker(docker_config: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run the docker CLI against the local socket only, with a minimal environment."""
+    _check_docker_config(docker_config)
+    return subprocess.run(
+        ["docker", "--host", DOCKER_SOCKET, *args],
+        env=client_env(docker_config, dict(os.environ)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _image_config(docker_config: Path, image: str) -> dict[str, Any]:
+    res = _docker(docker_config, "image", "inspect", image)
+    if res.returncode != 0:
+        raise CompatError(f"image {image} not found: run build-image first")
+    data: list[dict[str, Any]] = json.loads(res.stdout)
+    config: dict[str, Any] = data[0].get("Config") or {}
+    return config
+
+
+def _check_image(config: dict[str, Any], image: str) -> None:
+    names = {entry.split("=", 1)[0] for entry in config.get("Env") or []}
+    if names != IMAGE_ENV_NAMES:
+        raise CompatError(f"image {image} env drifted: {sorted(names)} (expected only PATH)")
+    if (config.get("Labels") or {}).get(LABEL) != "1":
+        raise CompatError(f"image {image} label {LABEL}=1 missing")
+    if config.get("Entrypoint") != ENTRYPOINT:
+        raise CompatError(f"image {image} entrypoint drifted: {config.get('Entrypoint')}")
+
+
+def preflight(image: str, docker_config: Path) -> None:
+    """Before any container: the local Engine answers and the image is the expected one."""
+    info = _docker(docker_config, "info", "--format", "{{json .}}")
+    if info.returncode != 0:
+        raise CompatError(f"docker engine not reachable at {DOCKER_SOCKET}: {info.stderr.strip()}")
+    if json.loads(info.stdout).get("OSType") != "linux":
+        raise CompatError("docker engine is not a local linux engine")
+    _check_image(_image_config(docker_config, image), image)
+
+
+def _record_image(state: Path, image_id: str, tag: str) -> None:
+    path = state / "images.json"
+    records: list[dict[str, str]] = json.loads(path.read_text()) if path.exists() else []
+    entry = {"id": image_id, "tag": tag}
+    if entry not in records:
+        records.append(entry)
+    path.write_text(json.dumps(records, indent=2) + "\n")
+
+
+def build_image(tag: str, state: Path, docker_config: Path) -> str:
+    """Build compat/ into harness-compat:<tag>; record the image id for scoped cleanup."""
+    if not TAG.match(tag):
+        raise CompatError(f"invalid tag {tag!r}: use [a-z0-9._-], max 64")
+    state.mkdir(parents=True, exist_ok=True)
+    ref = f"{LABEL}:{tag}"
+    iidfile = state / f"iid-{tag}"
+    res = _docker(
+        docker_config,
+        "build", "--label", f"{LABEL}=1", "-t", ref, "--iidfile", str(iidfile), str(COMPAT_DIR),
+    )  # fmt: skip
+    if res.returncode != 0:
+        raise CompatError(f"docker build failed:\n{res.stderr.strip()[-2000:]}")
+    image_id = iidfile.read_text().strip()
+    _record_image(state, image_id, ref)
+    return image_id
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -289,6 +382,13 @@ def _parser() -> argparse.ArgumentParser:
     dk.add_argument("--docker-config", type=Path, required=True)
     dk.add_argument("--deps-volume")
     dk.add_argument("command", nargs=argparse.REMAINDER)
+    pf = sub.add_parser("preflight")
+    pf.add_argument("--image", required=True)
+    pf.add_argument("--docker-config", type=Path, required=True)
+    bi = sub.add_parser("build-image")
+    bi.add_argument("--tag", required=True)
+    bi.add_argument("--state", type=Path, required=True)
+    bi.add_argument("--docker-config", type=Path, required=True)
     return parser
 
 
@@ -301,8 +401,12 @@ def main(argv: list[str] | None = None) -> int:
             relink(args.root, args.toolkit, args.mount)
         elif args.cmd == "snapshot":
             print(json.dumps(snapshot(args.root), indent=2))
-        else:
+        elif args.cmd == "docker-cmd":
             _docker_cmd(args)
+        elif args.cmd == "preflight":
+            preflight(args.image, args.docker_config)
+        else:
+            print(build_image(args.tag, args.state, args.docker_config))
     except CompatError as exc:
         print(f"compat: error: {exc}", file=sys.stderr)
         return 1
