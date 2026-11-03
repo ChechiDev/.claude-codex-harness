@@ -94,10 +94,14 @@ def test_guard_bash_fails_open_on_a_malformed_payload_today(project: Project, st
 
 
 @pytest.mark.parametrize("stdin", ["valid", *MALFORMED])
-def test_post_write_never_blocks(project: Project, stdin: str) -> None:
+def test_post_write_gives_feedback_and_never_blocks(project: Project, stdin: str) -> None:
+    """It runs lint + test after a write and reports them, even when both are red."""
+    project.write("Makefile", "lint:\n\t@echo lint-ran; exit 1\ntest:\n\t@echo test-ran; exit 1\n")
     raw = json.dumps(write_payload(project.root / "notes.md")) if stdin == "valid" else stdin
-    code, _ = _raw(project, "post_write.sh", raw)
+    code, out = _raw(project, "post_write.sh", raw)
     assert code == 0
+    assert "fast lint + tests after the write" in out
+    assert "lint-ran" in out and "test-ran" in out
 
 
 # ── stop_gate.sh ─────────────────────────────────────────────────────────────

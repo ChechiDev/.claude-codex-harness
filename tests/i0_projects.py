@@ -57,13 +57,29 @@ class Installed:
         return self.run("make", "-s", "--no-print-directory", target)
 
 
+LEAKY = ("GIT_", "HARNESS_", "UV_", "VIRTUAL_ENV", "CLAUDE_")
+
+
+def uv_cache() -> str:
+    """The user's uv cache, resolved once from the real environment."""
+    out = subprocess.run(["uv", "cache", "dir"], text=True, capture_output=True, check=True)
+    return out.stdout.strip()
+
+
 def isolated_env(tmp: Path) -> dict[str, str]:
+    """No network for uv (offline, from the user's cache), a throwaway HOME, no
+    inherited git/harness/uv/venv/Claude variables."""
     cfg = tmp / "empty.gitconfig"
     cfg.touch()
-    base = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "HARNESS_"))}
+    home = tmp / "home"
+    home.mkdir()
+    base = {k: v for k, v in os.environ.items() if not k.startswith(LEAKY)}
     return {
         **base,
         **IDENTITY,
+        "HOME": str(home),
+        "UV_OFFLINE": "1",
+        "UV_CACHE_DIR": uv_cache(),
         "CLAUDE_HOME": str(tmp / "claude-home"),
         "GIT_CONFIG_GLOBAL": str(cfg),
         "GIT_CONFIG_NOSYSTEM": "1",

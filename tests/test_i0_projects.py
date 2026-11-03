@@ -70,3 +70,10 @@ def test_nested_install_asks_to_commit_its_files_today(tmp_path: Path) -> None:
     project = install_project(tmp_path, "nested")
     assert "commit them" in project.install_output
     assert project.make("check").returncode == 0
+
+
+def test_the_projects_run_offline_with_a_throwaway_home(installed: Installed) -> None:
+    env = installed.env
+    assert env["UV_OFFLINE"] == "1"
+    assert Path(env["HOME"]) != Path.home() and Path(env["HOME"]).is_dir()
+    assert not [k for k in env if k.startswith(("UV_PROJECT", "VIRTUAL_ENV", "HARNESS_"))]
