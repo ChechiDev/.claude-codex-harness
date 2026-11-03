@@ -25,10 +25,11 @@ PHASE_MD = (
 )
 
 
-def spec(src: str, test: str, status: str = "pending") -> str:
+def spec(files: list[str], test: str, status: str = "pending") -> str:
+    listed = "".join(f"  - {f}\n" for f in files)
     return (
         f"# {SID} Greet\n- status: {status}\n- layer: domain\n- depends: none\n"
-        f"- files:\n  - {src}\n"
+        f"- files:\n{listed}"
         f"- acceptance:\n  - AC1 | greets by name | {test}::test_ac1_greets\n"
     )
 
