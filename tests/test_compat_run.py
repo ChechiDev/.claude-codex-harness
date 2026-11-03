@@ -502,3 +502,18 @@ def test_an_inspect_failure_during_cleanup_is_an_error(fake: dict[str, Path]) ->
     report = json.loads(res.stdout)
     assert report["cleanup_errors"]
     assert report["kept"]
+
+
+def test_purge_keeps_the_record_when_inspect_fails_for_another_reason(
+    fake: dict[str, Path],
+) -> None:
+    state_dir = fake["tmp"] / "compat-state"
+    state_dir.mkdir()
+    record = {"id": "sha256:ours", "tag": "harness-compat:local"}
+    (state_dir / "images.json").write_text(json.dumps([record]))
+    _set(fake, image_inspect_fails=True)
+    args = ["purge-images", "--state", str(state_dir), "--docker-config", str(fake["config"])]
+    res = _run(*args, env=_fake_env(fake))
+    assert "inspect failed" in res.stdout.lower()
+    assert json.loads((state_dir / "images.json").read_text()) == [record]
+    assert "sha256:ours" in _state(fake)["images"]

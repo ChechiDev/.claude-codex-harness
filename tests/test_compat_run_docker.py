@@ -256,3 +256,19 @@ def test_run_never_touches_a_foreign_resource_carrying_the_session_label(
             ["docker", "--host", SOCKET, "volume", "rm", "-f", foreign],
             capture_output=True, check=False,
         )  # fmt: skip
+
+
+def test_a_check_timeout_is_an_error_with_a_report(tmp_path: Path, config: Path) -> None:
+    env = _setup(tmp_path, "sleep 30\n")
+    res = _compat(
+        "run", "--project", str(env["proj"]), "--timeout", "3",
+        "--baseline", str(env["A"]), "--candidate", str(env["B"]), "--origin", str(env["A"]),
+        "--image", IMAGE, "--docker-config", str(config), "--scratch", str(env["scratch"]),
+    )  # fmt: skip
+    assert res.returncode == 1, res.stderr
+    report = json.loads(res.stdout)
+    proj = report["projects"][str(env["proj"])]
+    assert proj["verdict"] == "error"
+    assert "timeout" in proj["candidate"]["output"].lower()
+    assert report["kept"]
+    assert _leftovers(report["run_id"]) == []

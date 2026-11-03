@@ -31,6 +31,9 @@ def _info(state: dict[str, Any]) -> int:
 
 
 def _inspect(state: dict[str, Any], ref: str) -> int:
+    if state.get("image_inspect_fails"):
+        print("Error response from daemon: unavailable", file=sys.stderr)
+        return 1
     image = state.get("images", {}).get(ref)
     if image is None:
         print(f"Error: No such image: {ref}", file=sys.stderr)

@@ -767,7 +767,9 @@ def _purge_one(docker_config: Path, image_id: str) -> tuple[bool, str]:
     """(keep the record?, message) for one recorded image id."""
     res = _docker(docker_config, "image", "inspect", image_id)
     if res.returncode != 0:
-        return False, f"{image_id}: not found (already removed)"
+        if "no such" in res.stderr.lower():
+            return False, f"{image_id}: not found (already removed)"
+        return True, f"{image_id}: inspect failed, record kept: {res.stderr.strip()}"
     config = (json.loads(res.stdout)[0].get("Config") or {}).get("Labels") or {}
     if config.get(LABEL) != "1":
         return True, f"{image_id}: not labelled {LABEL}=1, kept"
@@ -806,6 +808,7 @@ class RunPlan:
     docker_config: Path
     scratch: Path
     session: str
+    timeout: int = 1800
     created_volumes: list[str] = field(default_factory=list)
 
 
@@ -832,7 +835,12 @@ def _side(plan: RunPlan, index: int, project: Path, side: str) -> dict[str, Any]
     )  # fmt: skip
     env = client_env(plan.docker_config, dict(os.environ))
     res = subprocess.run(
-        docker_argv(spec), env=env, text=True, capture_output=True, check=False, timeout=1800
+        docker_argv(spec),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=plan.timeout,
     )
     full = res.stdout + res.stderr
     return {
@@ -862,6 +870,9 @@ def _run_project(plan: RunPlan, index: int, project: Path) -> dict[str, Any]:
             sides[side] = _side(plan, index, snapshot, side)
         except CompatError as exc:
             sides[side] = _error_side(side, exc)
+        except subprocess.TimeoutExpired:
+            # The docker client was killed; the container is removed by name in cleanup.
+            sides[side] = _error_side(side, CompatError(f"timeout after {plan.timeout}s"))
     return sides
 
 
@@ -989,6 +1000,7 @@ def _add_run_parsers(sub: Any) -> None:
         rn.add_argument(name, type=Path, required=True)
     rn.add_argument("--image", required=True)
     rn.add_argument("--run-id")
+    rn.add_argument("--timeout", type=int, default=1800)
     rp = sub.add_parser("report")
     rp.add_argument("results", type=Path)
     cl = sub.add_parser("cleanup")
@@ -1046,6 +1058,7 @@ def _run_main(args: argparse.Namespace) -> int:
             projects=args.project, baseline=args.baseline, candidate=args.candidate,
             origin=args.origin, image=args.image, docker_config=args.docker_config,
             scratch=args.scratch, session=args.run_id or "c" + uuid.uuid4().hex[:10],
+            timeout=args.timeout,
         )  # fmt: skip
         report = run(plan)
     print(json.dumps(report, indent=2))
