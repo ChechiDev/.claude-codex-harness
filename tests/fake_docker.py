@@ -12,8 +12,10 @@ State: {"engine": "linux" | null, "images": {"<ref or id>": {inspect Config...}}
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +103,10 @@ def _volume_create(state: dict[str, Any], args: list[str]) -> int:
 
 
 def _run(state: dict[str, Any]) -> int:
+    time.sleep(float(state.get("run_sleep", 0)))
+    if state.get("run_freeze"):  # make a tree undeletable, to simulate a failed rmtree
+        for dirpath, _, _ in os.walk(state["run_freeze"]):
+            os.chmod(dirpath, 0o555)
     print(state.get("run_stdout", ""), end="")
     return int(state.get("run_exit", 0))
 

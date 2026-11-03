@@ -304,12 +304,14 @@ def _python_project(tmp_path: Path) -> Path:
     return proj
 
 
-def _prepare_deps(fake: dict[str, Path], run_id: str) -> subprocess.CompletedProcess[str]:
+def _prepare_deps(
+    fake: dict[str, Path], run_id: str, *extra: str
+) -> subprocess.CompletedProcess[str]:
     args = [
         "prepare-deps", "--repo", str(_python_project(fake["tmp"])), "--workdir", ".",
         "--scratch", str(fake["tmp"] / "scratch"), "--run-id", run_id,
         "--uid", "1000", "--gid", "1000", "--image", "harness-compat:t",
-        "--docker-config", str(fake["config"]),
+        "--docker-config", str(fake["config"]), *extra,
     ]  # fmt: skip
     return _run(*args, env=_fake_env(fake))
 
@@ -517,3 +519,50 @@ def test_purge_keeps_the_record_when_inspect_fails_for_another_reason(
     assert "inspect failed" in res.stdout.lower()
     assert json.loads((state_dir / "images.json").read_text()) == [record]
     assert "sha256:ours" in _state(fake)["images"]
+
+
+@pytest.mark.parametrize("where", ["project", "toolkit", "home", "claude"])
+def test_scratch_must_not_overlap_originals_toolkits_or_home(
+    fake: dict[str, Path], where: str
+) -> None:
+    repo, toolkit = _toy_repo(fake)
+    _preflight(fake)
+    home = fake["tmp"] / "home"  # a fake HOME: a regression can never touch the real one
+    (home / ".claude").mkdir(parents=True)
+    scratch = {
+        "project": repo / "scratch",
+        "toolkit": toolkit / "scratch",
+        "home": home,
+        "claude": home / ".claude" / "compat-scratch-test",
+    }[where]
+    args = _run_args(repo, toolkit, fake, "cscr1")
+    args[args.index("--scratch") + 1] = str(scratch)
+    res = _run(*args, env={**_fake_env(fake), "HOME": str(home)})
+    assert res.returncode != 0
+    assert "scratch" in res.stderr.lower()
+    if where != "home":
+        assert not scratch.exists()
+
+
+def test_a_hung_deps_phase_times_out_and_removes_its_volume(fake: dict[str, Path]) -> None:
+    _set(fake, run_sleep=5)
+    res = _prepare_deps(fake, "runt", "--timeout", "1")
+    assert res.returncode != 0
+    assert "timeout" in res.stderr.lower()
+    assert "harness-compat-deps-runt" not in _state(fake)["volumes"]
+
+
+def test_a_failed_copy_removal_is_reported(fake: dict[str, Path]) -> None:
+    repo, toolkit = _toy_repo(fake)
+    _preflight(fake)
+    scratch = fake["tmp"] / "scratch"
+    _set(fake, run_freeze=str(scratch / "cfrz1" / "cfrz1-0b"))
+    try:
+        res = _run(*_run_args(repo, toolkit, fake, "cfrz1"), env=_fake_env(fake))
+        assert res.returncode == 1, res.stdout + res.stderr
+        report = json.loads(res.stdout)
+        assert any("scratch" in e for e in report["cleanup_errors"])
+        assert report["kept"]
+    finally:
+        for dirpath, _, _ in os.walk(scratch):
+            os.chmod(dirpath, 0o755)

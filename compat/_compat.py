@@ -353,6 +353,7 @@ class DepsSpec:
     repo: Path | None = None
     workdir: str = "."
     session: str | None = None
+    timeout: int = 1800
 
 
 def deps_volume(run_id: str) -> str:
@@ -437,13 +438,20 @@ def prepare_lock(install_root: Path, out: Path) -> bool:
 
 
 def _run_phase(spec: DepsSpec) -> None:
-    res = subprocess.run(
-        deps_argv(spec),
-        env=client_env(spec.docker_config, dict(os.environ)),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        res = subprocess.run(
+            deps_argv(spec),
+            env=client_env(spec.docker_config, dict(os.environ)),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=spec.timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        name = f"{LABEL}-{spec.run_id}-deps-{spec.phase}"
+        if _owned(spec.docker_config, "container", name, spec.session or spec.run_id):
+            _docker(spec.docker_config, "rm", "-f", name)
+        raise CompatError(f"deps phase {spec.phase} timeout after {spec.timeout}s") from exc
     if res.returncode != 0:
         tail = (res.stdout + res.stderr).strip()[-2000:]
         raise CompatError(f"deps phase {spec.phase} failed:\n{tail}")
@@ -824,7 +832,7 @@ def _side(plan: RunPlan, index: int, project: Path, side: str) -> dict[str, Any]
     deps = DepsSpec(
         phase="init", run_id=sub, image=plan.image, docker_config=plan.docker_config,
         volume=deps_volume(sub), repo=repo_top, workdir=workdir, session=plan.session,
-        uid=uid, gid=gid,
+        uid=uid, gid=gid, timeout=plan.timeout,
     )  # fmt: skip
     volume = prepare_deps(deps, dest, plan.created_volumes)
     toolkit = plan.baseline if side == "baseline" else plan.candidate
@@ -851,7 +859,7 @@ def _side(plan: RunPlan, index: int, project: Path, side: str) -> dict[str, Any]
     }
 
 
-def _error_side(stage: str, exc: CompatError) -> dict[str, Any]:
+def _error_side(stage: str, exc: Exception) -> dict[str, Any]:
     line = f"[FAIL] compat {stage}: {exc}"
     return {"exit": 99, "output": line, "error": True, "fail_lines": [line.splitlines()[0]]}
 
@@ -861,14 +869,14 @@ def _run_project(plan: RunPlan, index: int, project: Path) -> dict[str, Any]:
     session editing the real project during the run cannot create a fake delta."""
     try:
         snapshot = copy_repo(project, plan.scratch / plan.session / f"{index}-src")
-    except CompatError as exc:
+    except (CompatError, OSError) as exc:
         failed = _error_side("snapshot", exc)
         return {"baseline": failed, "candidate": failed}
     sides: dict[str, Any] = {}
     for side in ("baseline", "candidate"):
         try:
             sides[side] = _side(plan, index, snapshot, side)
-        except CompatError as exc:
+        except (CompatError, OSError) as exc:
             sides[side] = _error_side(side, exc)
         except subprocess.TimeoutExpired:
             # The docker client was killed; the container is removed by name in cleanup.
@@ -902,6 +910,21 @@ def _cleanup_created(plan: RunPlan) -> list[str]:
     return [err for kind, name in targets if (err := _remove_owned(plan, kind, name))]
 
 
+def _check_scratch(plan: RunPlan) -> None:
+    """The scratch dir must not overlap (inside or containing) a real project, a toolkit
+    or ~/.claude, and must not be HOME or above it."""
+    scratch = plan.scratch.resolve()
+    home = Path.home().resolve()
+    if home.is_relative_to(scratch):
+        raise CompatError(f"scratch {scratch} is HOME or contains it; refusing")
+    roots = [git_toplevel(p.resolve()).resolve() for p in plan.projects]
+    roots += [t.resolve() for t in (plan.baseline, plan.candidate, plan.origin)]
+    roots.append(home / ".claude")
+    for root in roots:
+        if scratch.is_relative_to(root) or root.is_relative_to(scratch):
+            raise CompatError(f"scratch {scratch} overlaps {root}; refusing")
+
+
 def _reserve(plan: RunPlan) -> None:
     """Claim the run id before creating anything: no Docker resource may carry its label
     and its scratch dir is created exclusively. Cleanup only runs after this succeeded,
@@ -911,6 +934,7 @@ def _reserve(plan: RunPlan) -> None:
     busy += _ids(plan.docker_config, "volume", "ls", "-q", "--filter", label)
     if busy:
         raise CompatError(f"run-id {plan.session} is in use: docker resources exist {busy}")
+    _check_scratch(plan)
     plan.scratch.mkdir(parents=True, exist_ok=True)
     try:
         (plan.scratch / plan.session).mkdir()
@@ -935,8 +959,13 @@ def run(plan: RunPlan) -> dict[str, Any]:
     if report["regressions"] or report["errors"] or cleanup_errors:
         report["kept"] = [str(session_dir)]
     else:
-        shutil.rmtree(session_dir, ignore_errors=True)
-        report["kept"] = []
+        failures: list[str] = []
+        shutil.rmtree(session_dir, onexc=lambda _f, path, exc: failures.append(f"{path}: {exc}"))
+        if failures:
+            cleanup_errors.append(f"scratch copies not fully removed: {failures[0]}")
+            report["kept"] = [str(session_dir)]
+        else:
+            report["kept"] = []
     report["run_id"] = plan.session
     return report
 
@@ -982,6 +1011,7 @@ def _parser() -> argparse.ArgumentParser:
             dp.add_argument("--lock-dir", type=Path)
         else:
             dp.add_argument("--scratch", type=Path, required=True)
+            dp.add_argument("--timeout", type=int, default=1800)
         dp.add_argument("--repo", type=Path)
         dp.add_argument("--workdir", default=".")
         dp.add_argument("--run-id", required=True)
@@ -1026,6 +1056,7 @@ def _deps_spec(args: argparse.Namespace) -> DepsSpec:
         lock_dir=getattr(args, "lock_dir", None),
         repo=args.repo,
         workdir=args.workdir,
+        timeout=getattr(args, "timeout", 1800),
     )
 
 
