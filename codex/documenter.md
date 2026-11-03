@@ -128,11 +128,19 @@ What goes in each:
 - **Decisions**: choices that are not obvious from the requirements, or that
   depart from them, with who made them and why ("the user chose…", "the
   reviewer asked for…"). If there were none, say so in one line.
-- **Issues resolved**: what a gate or the implementation pushed back on and how
-  it was fixed. Take it from `progress/review_history/` (rounds with
-  `CHANGES_REQUESTED`) for the task's subtasks, its phase and the roadmap, and
-  from the `## Problems & resolution` of the reference notes. Keep only what
-  touches this task.
+- **Issues resolved**: every problem met while doing the task and how it was
+  fixed: what a gate pushed back on, and what blocked or broke during the work
+  (a red check, a blocked implementer, a plan that had to change). Write one
+  bold-titled paragraph per problem saying: what broke and its visible effect,
+  why it was not caught earlier, the options considered (and why the others
+  were discarded), and the resolution with the files, specs and gates it
+  touched. Sources: `progress/review_history/` (rounds with
+  `CHANGES_REQUESTED`) for the task's subtasks, its phase and the roadmap; the
+  `## Problems & resolution` of the reference notes; the implementer reports
+  `progress/impl_<id>.md` (BLOCKED or failed runs); advisory reviews
+  `progress/advisory_*.md`; and the task's notes in `progress/current.md`.
+  Keep only what touches this task; minor gate wording rounds can share one
+  short paragraph.
 - **Issues open**: non-blocking notes still standing (a reviewer remark, a
   known limitation). "Nothing open." if there are none.
 - **Follow-ups**: what this task leaves constrained or pending for later tasks
