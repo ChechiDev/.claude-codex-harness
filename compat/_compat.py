@@ -489,10 +489,13 @@ def _labels_of(data: dict[str, Any]) -> dict[str, str]:
 
 
 def _owned(docker_config: Path, kind: str, name: str, run_label: str) -> bool | None:
-    """None if the resource does not exist; else whether it carries this run's labels."""
+    """None if the resource does not exist; else whether it carries this run's labels.
+    Only "No such ..." means absent: any other inspect failure raises."""
     res = _docker(docker_config, kind, "inspect", name)
     if res.returncode != 0:
-        return None
+        if "no such" in res.stderr.lower():
+            return None
+        raise CompatError(f"docker {kind} inspect {name} failed: {res.stderr.strip()}")
     labels = _labels_of(json.loads(res.stdout)[0])
     return labels.get(LABEL) == "1" and labels.get(f"{LABEL}.run") == run_label
 
@@ -557,8 +560,45 @@ def preflight(image: str, docker_config: Path) -> None:
         )
     if not data.get("ServerVersion"):
         raise CompatError("docker engine reports no server version")
+    _check_systemd_engine()
     _check_image(_image_config(docker_config, image), image)
     _check_tools(image, docker_config)
+
+
+LOCAL_SOCKET = re.compile(r"(^|\s)/(?:var/)?run/docker\.sock\b")
+
+
+def _systemctl(unit: str, *props: str) -> dict[str, str]:
+    argv = ["systemctl", "show", unit, *(arg for p in props for arg in ("-p", p))]
+    res = subprocess.run(argv, text=True, capture_output=True, check=False)
+    if res.returncode != 0:
+        raise CompatError(f"systemctl show {unit} failed: {res.stderr.strip()}")
+    return dict(ln.split("=", 1) for ln in res.stdout.splitlines() if "=" in ln)
+
+
+def _proc_uid(pid: int) -> int:
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("Uid:"):
+                return int(line.split()[1])
+    except OSError:
+        pass
+    return -1
+
+
+def _check_systemd_engine() -> None:
+    """Strongest local evidence available without root that the socket is this host's
+    own Engine: systemd's docker.socket is active on /run/docker.sock and docker.service
+    runs a root-owned daemon. Known limit (documented in plan 0.3): a proxy installed by
+    root in place of that socket cannot be told apart without root (engine-id is
+    root-only); C0 targets accidental remote contexts and Docker Desktop."""
+    sock = _systemctl("docker.socket", "Listen", "ActiveState")
+    if sock.get("ActiveState") != "active" or not LOCAL_SOCKET.search(sock.get("Listen", "")):
+        raise CompatError(f"systemd docker.socket is not active on /run/docker.sock: {sock}")
+    svc = _systemctl("docker.service", "ActiveState", "MainPID")
+    pid = int(svc.get("MainPID") or 0)
+    if svc.get("ActiveState") != "active" or pid <= 0 or _proc_uid(pid) != 0:
+        raise CompatError(f"systemd docker.service is not running a root-owned daemon: {svc}")
 
 
 REQUIRED_TOOLS = ("bash", "make", "git", "gcc", "python3", "uv", "norminette", "valgrind")
@@ -827,8 +867,11 @@ def _run_project(plan: RunPlan, index: int, project: Path) -> dict[str, Any]:
 
 def _remove_owned(plan: RunPlan, kind: str, name: str) -> str | None:
     """Remove one resource if it is this run's; an error message if removal failed."""
-    if not _owned(plan.docker_config, kind, name, plan.session):
-        return None
+    try:
+        if not _owned(plan.docker_config, kind, name, plan.session):
+            return None
+    except CompatError as exc:
+        return str(exc)
     args = ("rm", "-f", name) if kind == "container" else ("volume", "rm", "-f", name)
     res = _docker(plan.docker_config, *args)
     return None if res.returncode == 0 else f"{kind} {name}: {res.stderr.strip()}"
@@ -848,10 +891,27 @@ def _cleanup_created(plan: RunPlan) -> list[str]:
     return [err for kind, name in targets if (err := _remove_owned(plan, kind, name))]
 
 
+def _reserve(plan: RunPlan) -> None:
+    """Claim the run id before creating anything: no Docker resource may carry its label
+    and its scratch dir is created exclusively. Cleanup only runs after this succeeded,
+    so a second run with the same id can never remove the first one's resources."""
+    label = f"label={LABEL}.run={plan.session}"
+    busy = _ids(plan.docker_config, "ps", "-a", "--format", "{{.Names}}", "--filter", label)
+    busy += _ids(plan.docker_config, "volume", "ls", "-q", "--filter", label)
+    if busy:
+        raise CompatError(f"run-id {plan.session} is in use: docker resources exist {busy}")
+    plan.scratch.mkdir(parents=True, exist_ok=True)
+    try:
+        (plan.scratch / plan.session).mkdir()
+    except FileExistsError as exc:
+        raise CompatError(f"run-id {plan.session} is in use: scratch dir exists") from exc
+
+
 def run(plan: RunPlan) -> dict[str, Any]:
     """Baseline vs candidate on isolated copies; run-scoped cleanup always happens."""
     _check_run_id(plan.session)
     preflight(plan.image, plan.docker_config)
+    _reserve(plan)
     results: dict[str, Any] = {}
     try:
         for index, project in enumerate(plan.projects):

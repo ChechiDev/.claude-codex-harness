@@ -199,6 +199,13 @@ def fake(tmp_path: Path) -> dict[str, Path]:
     wrapper = bin_dir / "docker"
     wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_DOCKER}" "{state}" "$@"\n')
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+    systemctl = bin_dir / "systemctl"
+    fake_systemctl = Path(__file__).resolve().parent / "fake_systemctl.py"
+    systemd = tmp_path / "systemd.json"
+    systemctl.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" "{fake_systemctl}" "{systemd}" "$@"\n'
+    )
+    systemctl.chmod(systemctl.stat().st_mode | stat.S_IXUSR)
     config = tmp_path / "docker-config"
     config.mkdir()
     return {"bin": bin_dir, "state": state, "config": config, "tmp": tmp_path}
@@ -408,22 +415,90 @@ def _toy_repo(fake: dict[str, Path]) -> tuple[Path, Path]:
 
 
 def test_a_failed_cleanup_turns_the_run_into_an_error(fake: dict[str, Path]) -> None:
-    """If removing what the run created fails, the run must not report success."""
+    """If removing what the run created (here: its deps volume) fails, no success."""
     repo, toolkit = _toy_repo(fake)
-    run_labels = {"harness-compat": "1", "harness-compat.run": "cfail1"}
-    state = _state(fake)
-    state["containers"]["harness-compat-cfail1-0b-check"] = run_labels  # left behind
-    state["rm_fails"] = True
-    fake["state"].write_text(json.dumps(state))
-    _preflight(fake)  # registers the image in the fake
-    args = [
-        "run", "--project", str(repo), "--run-id", "cfail1",
+    (repo / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "0"\n')
+    (repo / "uv.lock").write_text("version = 1\n")
+    _preflight(fake)
+    _set(fake, rm_fails=True)
+    res = _run(*_run_args(repo, toolkit, fake, "cfail1"), env=_fake_env(fake))
+    assert res.returncode == 1, res.stdout + res.stderr
+    report = json.loads(res.stdout)
+    assert report["cleanup_errors"], report
+    assert report["kept"]
+
+
+def _systemd(fake: dict[str, Path], **units: dict[str, str]) -> None:
+    (fake["tmp"] / "systemd.json").write_text(json.dumps(units))
+
+
+@pytest.mark.parametrize(
+    ("unit", "props", "word"),
+    [
+        ("docker.socket", {"Listen": "/tmp/proxy.sock (Stream)"}, "socket"),
+        ("docker.socket", {"ActiveState": "inactive"}, "socket"),
+        ("docker.service", {"ActiveState": "failed"}, "service"),
+        ("docker.service", {"MainPID": "0"}, "service"),
+    ],
+)
+def test_preflight_requires_the_local_systemd_engine(
+    fake: dict[str, Path], unit: str, props: dict[str, str], word: str
+) -> None:
+    """Without root, the strongest local evidence: systemd's docker.socket listens on the
+    socket C0 uses and docker.service runs a root-owned daemon."""
+    _systemd(fake, **{unit: props})
+    res = _preflight(fake)
+    assert res.returncode != 0
+    assert word in res.stderr.lower()
+
+
+def _run_args(repo: Path, toolkit: Path, fake: dict[str, Path], run_id: str) -> list[str]:
+    return [
+        "run", "--project", str(repo), "--run-id", run_id,
         "--baseline", str(toolkit), "--candidate", str(toolkit), "--origin", str(toolkit),
         "--image", "harness-compat:t", "--docker-config", str(fake["config"]),
         "--scratch", str(fake["tmp"] / "scratch"),
     ]  # fmt: skip
-    res = _run(*args, env=_fake_env(fake))
+
+
+def test_a_reused_run_id_is_refused_and_touches_nothing(fake: dict[str, Path]) -> None:
+    """A second run with the same id must not clean up the first one's resources."""
+    repo, toolkit = _toy_repo(fake)
+    _preflight(fake)
+    (fake["tmp"] / "scratch" / "cdup1").mkdir(parents=True)  # first run in progress
+    state = _state(fake)
+    labels = {"harness-compat": "1", "harness-compat.run": "cdup1"}
+    state["containers"]["harness-compat-cdup1-0b-check"] = labels
+    state["calls"] = []
+    fake["state"].write_text(json.dumps(state))
+    res = _run(*_run_args(repo, toolkit, fake, "cdup1"), env=_fake_env(fake))
+    assert res.returncode != 0
+    assert "in use" in res.stderr.lower()
+    assert "harness-compat-cdup1-0b-check" in _state(fake)["containers"]
+    assert not any(c[2:3] == ["rm"] for c in _state(fake)["calls"])
+
+
+def test_a_run_id_with_live_docker_resources_is_refused(fake: dict[str, Path]) -> None:
+    repo, toolkit = _toy_repo(fake)
+    _preflight(fake)
+    state = _state(fake)
+    labels = {"harness-compat": "1", "harness-compat.run": "cdup2"}
+    state["volumes"]["harness-compat-deps-cdup2-0b"] = labels
+    fake["state"].write_text(json.dumps(state))
+    res = _run(*_run_args(repo, toolkit, fake, "cdup2"), env=_fake_env(fake))
+    assert res.returncode != 0
+    assert "in use" in res.stderr.lower()
+    assert "harness-compat-deps-cdup2-0b" in _state(fake)["volumes"]
+    assert not (fake["tmp"] / "scratch" / "cdup2").exists()
+
+
+def test_an_inspect_failure_during_cleanup_is_an_error(fake: dict[str, Path]) -> None:
+    """Only "No such ..." means absent; any other inspect failure must not pass."""
+    repo, toolkit = _toy_repo(fake)
+    _preflight(fake)
+    _set(fake, inspect_fails=True)
+    res = _run(*_run_args(repo, toolkit, fake, "cinsp1"), env=_fake_env(fake))
     assert res.returncode == 1, res.stdout + res.stderr
     report = json.loads(res.stdout)
-    assert report["cleanup_errors"], report
+    assert report["cleanup_errors"]
     assert report["kept"]

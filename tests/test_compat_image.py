@@ -143,6 +143,13 @@ def fake(tmp_path: Path) -> dict[str, Path]:
     wrapper = bin_dir / "docker"
     wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_DOCKER}" "{state}" "$@"\n')
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+    systemctl = bin_dir / "systemctl"
+    fake_systemctl = Path(__file__).resolve().parent / "fake_systemctl.py"
+    systemd = tmp_path / "systemd.json"
+    systemctl.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" "{fake_systemctl}" "{systemd}" "$@"\n'
+    )
+    systemctl.chmod(systemctl.stat().st_mode | stat.S_IXUSR)
     config = tmp_path / "docker-config"
     config.mkdir()
     return {"bin": bin_dir, "state": state, "config": config, "tmp": tmp_path}

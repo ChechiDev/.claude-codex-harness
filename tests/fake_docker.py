@@ -76,7 +76,12 @@ def _labels_of(args: list[str]) -> dict[str, str]:
     return out
 
 
-def _inspect_named(items: dict[str, dict[str, str]], name: str, kind: str) -> int:
+def _inspect_named(
+    items: dict[str, dict[str, str]], name: str, kind: str, fails: bool = False
+) -> int:
+    if fails:
+        print("Error response from daemon: unavailable", file=sys.stderr)
+        return 1
     if name not in items:
         print(f"Error: No such {kind}: {name}", file=sys.stderr)
         return 1
@@ -101,9 +106,11 @@ def _named(state: dict[str, Any], args: list[str]) -> int | None:
     if args[:2] == ["volume", "create"]:
         return _volume_create(state, args)
     if args[:2] == ["volume", "inspect"]:
-        return _inspect_named(state["volumes"], args[2], "volume")
+        fails = bool(state.get("inspect_fails"))
+        return _inspect_named(state["volumes"], args[2], "volume", fails)
     if args[:2] == ["container", "inspect"]:
-        return _inspect_named(state["containers"], args[2], "container")
+        fails = bool(state.get("inspect_fails"))
+        return _inspect_named(state["containers"], args[2], "container", fails)
     if args[:1] == ["run"]:
         return _run(state)
     if args[:2] == ["image", "rm"]:
@@ -130,7 +137,7 @@ def _resources(state: dict[str, Any], args: list[str]) -> int | None:
     if args[:2] == ["volume", "ls"]:
         return _list(volumes, args)
     if args[:2] == ["volume", "rm"]:
-        return _remove(volumes, [a for a in args[2:] if not a.startswith("-")])
+        return _rm(state, volumes, args[1:])
     return None
 
 

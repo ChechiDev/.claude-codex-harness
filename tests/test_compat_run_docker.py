@@ -227,7 +227,8 @@ def test_a_compat_failure_is_an_error_and_keeps_the_copies(tmp_path: Path, confi
 def test_run_never_touches_a_foreign_resource_carrying_the_session_label(
     tmp_path: Path, config: Path
 ) -> None:
-    """Cleanup of a run removes only what that run created, verified by name and label."""
+    """A resource already carrying the session label makes the run refuse to start, and it
+    is never removed."""
     env = _setup(tmp_path, "echo baseline-toolkit\n")
     session = "cfixed" + os.urandom(3).hex()
     foreign = f"foreign-{session}"
@@ -242,7 +243,9 @@ def test_run_never_touches_a_foreign_resource_carrying_the_session_label(
             "--baseline", str(env["A"]), "--candidate", str(env["B"]), "--origin", str(env["A"]),
             "--image", IMAGE, "--docker-config", str(config), "--scratch", str(env["scratch"]),
         )  # fmt: skip
-        assert res.returncode == 0, res.stdout + res.stderr
+        # The id is in use (a resource carries its label): the run refuses to start.
+        assert res.returncode != 0
+        assert "in use" in res.stderr.lower()
         still = subprocess.run(
             ["docker", "--host", SOCKET, "volume", "inspect", foreign],
             capture_output=True, check=False,
