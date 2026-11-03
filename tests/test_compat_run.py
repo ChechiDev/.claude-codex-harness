@@ -566,3 +566,16 @@ def test_a_failed_copy_removal_is_reported(fake: dict[str, Path]) -> None:
     finally:
         for dirpath, _, _ in os.walk(scratch):
             os.chmod(dirpath, 0o755)
+
+
+def test_prepare_deps_refuses_a_scratch_inside_the_project(fake: dict[str, Path]) -> None:
+    proj = _python_project(fake["tmp"])
+    args = [
+        "prepare-deps", "--repo", str(proj), "--workdir", ".", "--scratch", str(proj),
+        "--run-id", "runs", "--uid", "1000", "--gid", "1000", "--image", "harness-compat:t",
+        "--docker-config", str(fake["config"]),
+    ]  # fmt: skip
+    res = _run(*args, env=_fake_env(fake))
+    assert res.returncode != 0
+    assert "scratch" in res.stderr.lower()
+    assert not (proj / "lock-runs").exists()

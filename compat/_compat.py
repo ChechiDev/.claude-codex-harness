@@ -29,6 +29,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -911,16 +912,19 @@ def _cleanup_created(plan: RunPlan) -> list[str]:
 
 
 def _check_scratch(plan: RunPlan) -> None:
-    """The scratch dir must not overlap (inside or containing) a real project, a toolkit
-    or ~/.claude, and must not be HOME or above it."""
-    scratch = plan.scratch.resolve()
+    roots = [git_toplevel(p.resolve()).resolve() for p in plan.projects]
+    roots += [t.resolve() for t in (plan.baseline, plan.candidate, plan.origin)]
+    check_scratch_dir(plan.scratch, roots)
+
+
+def check_scratch_dir(scratch_dir: Path, roots: list[Path]) -> None:
+    """A scratch dir must not overlap (inside or containing) any of `roots` (real
+    projects, toolkits) or ~/.claude, and must not be HOME or above it."""
+    scratch = scratch_dir.resolve()
     home = Path.home().resolve()
     if home.is_relative_to(scratch):
         raise CompatError(f"scratch {scratch} is HOME or contains it; refusing")
-    roots = [git_toplevel(p.resolve()).resolve() for p in plan.projects]
-    roots += [t.resolve() for t in (plan.baseline, plan.candidate, plan.origin)]
-    roots.append(home / ".claude")
-    for root in roots:
+    for root in [*roots, home / ".claude"]:
         if scratch.is_relative_to(root) or root.is_relative_to(scratch):
             raise CompatError(f"scratch {scratch} overlaps {root}; refusing")
 
@@ -1070,6 +1074,10 @@ def _deps_main(args: argparse.Namespace) -> None:
         env = client_env(spec.docker_config, dict(os.environ))
         print(json.dumps({"argv": deps_argv(spec), "client_env": env}, indent=2))
         return
+    repo = args.repo.resolve()
+    with contextlib.suppress(CompatError):  # not a git repo: the dir itself is the root
+        repo = git_toplevel(repo).resolve()
+    check_scratch_dir(args.scratch, [repo])
     volume = prepare_deps(spec, args.scratch)
     print(volume if volume else "no python deps to prepare (no pyproject.toml)")
 
