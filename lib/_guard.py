@@ -847,8 +847,38 @@ def seal_command(args: list[str]) -> int:
     return 2
 
 
+# The toolkit code `make check` runs, reached through the project's links. Git tracks a
+# link as its target path only, so their contents go into the fingerprint explicitly.
+TOOLKIT_LINKS = ("harness", ".claude/settings.json")
+BYTECODE = "__pycache__"
+
+
+def _toolkit_part(digest: Any) -> bool:
+    """Hash the toolkit files behind TOOLKIT_LINKS; False when one cannot be read (a
+    broken link, an unreadable file): no fingerprint then, so never a stale green."""
+    for link in TOOLKIT_LINKS:
+        path = ROOT / link
+        if not path.exists():
+            if path.is_symlink():
+                return False  # dangling: the toolkit behind it is unknown
+            digest.update(f"absent:{link}\0".encode())
+            continue
+        files = [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.is_file())
+        try:
+            for file in files:
+                rel = file.relative_to(path)
+                if BYTECODE in rel.parts:
+                    continue
+                name = f"{link}/{rel}" if file != path else link
+                digest.update(f"{name}\0{_sha256(file)}\0".encode())
+        except OSError:
+            return False
+    return True
+
+
 def fingerprint() -> int:
-    """Hash HEAD + status + diff + untracked contents; exit 1 outside a git repo."""
+    """Hash HEAD + status + diff + untracked contents + the toolkit behind the links;
+    exit 1 outside a git repo or when the toolkit part cannot be computed."""
     status = _git_out("status", "--porcelain=v1", "-z", "-uall")
     if status is None:
         return 1
@@ -866,6 +896,8 @@ def fingerprint() -> int:
         path = ROOT / rel
         if path.is_file():
             digest.update(rel.encode() + _sha256(path).encode())
+    if not _toolkit_part(digest):
+        return 1
     print(digest.hexdigest())
     return 0
 
