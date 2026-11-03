@@ -90,8 +90,9 @@ def _sh(cwd: Path, env: dict[str, str], *argv: str) -> None:
     subprocess.run(list(argv), cwd=cwd, env=env, check=True, capture_output=True)
 
 
-def install_project(tmp: Path, kind: str) -> Installed:
-    """Install the harness into a throwaway project of the given kind."""
+def install_project(tmp: Path, kind: str, toolkit: Path = TOOLKIT) -> Installed:
+    """Install the harness into a throwaway project of the given kind (from `toolkit`,
+    the real worktree by default, or a throwaway copy of it)."""
     env = isolated_env(tmp)
     repo = tmp / f"{kind}-proj"
     repo.mkdir()
@@ -107,7 +108,7 @@ def install_project(tmp: Path, kind: str) -> Installed:
         root = repo
         args = ["--python", "demo"] if kind == "python" else ["--c", "demo"]
     res = subprocess.run(
-        ["bash", str(TOOLKIT / "install.sh"), str(root), *args],
+        ["bash", str(toolkit / "install.sh"), str(root), *args],
         env=env,
         text=True,
         capture_output=True,
