@@ -133,10 +133,9 @@ def test_an_uncollected_sealed_oracle_is_green_today(
     assert code == 0, out
 
 
-# ── I10: check scripts fail open on helper failure ───────────────────────────
+# ── I10: check scripts fail closed on helper failure ─────────────────────────
 
 
-@pytest.mark.pins("I10")
 @pytest.mark.parametrize(
     ("script", "ok"),
     [
@@ -144,11 +143,11 @@ def test_an_uncollected_sealed_oracle_is_green_today(
         ("doc_gate.sh", "reference docs complete"),
     ],
 )
-def test_check_scripts_say_ok_when_done_ids_fails_today(
-    project: Installed, script: str, ok: str
-) -> None:
-    """Known wrong: an unreadable feature_list.json empties the done list -> OK."""
+def test_check_scripts_fail_when_done_ids_fails(project: Installed, script: str, ok: str) -> None:
+    """An unreadable feature_list.json: the done list is unknown, so the gate fails
+    (it was OK before I10, pinned in I0)."""
     (project.root / STATUS).write_text("{not json")
     res = project.run("bash", f"harness/{script}")
-    assert res.returncode == 0, res.stdout + res.stderr
-    assert ok in res.stdout
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "[FAIL]" in res.stdout + res.stderr and "done" in res.stdout + res.stderr
+    assert ok not in res.stdout
