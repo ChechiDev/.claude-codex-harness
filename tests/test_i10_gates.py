@@ -97,3 +97,25 @@ def test_a_gate_fails_when_it_cannot_enter_the_project(
     assert code == 1, out + err
     assert "[FAIL]" in out + err
     assert SCRIPTS[script] not in out
+
+
+@pytest.mark.parametrize("script", list(SCRIPTS))
+def test_a_healthy_project_needs_no_temp_dir(fresh: Installed, tmp_path: Path, script: str) -> None:
+    """No temp file on the way: an unwritable TMPDIR must not turn a healthy gate red."""
+    code, out, err = _gate(fresh, script, TMPDIR=str(tmp_path / "no-such-tmp"))
+    assert code == 0, out + err
+    assert SCRIPTS[script] in out
+
+
+def test_an_unreadable_reference_doc_fails_the_doc_gate(tmp_path: Path) -> None:
+    project = build_legacy(tmp_path)
+    assert _gate(project, "doc_gate.sh")[0] == 0, "control: green while readable"
+    doc = next((project.root / "docs/reference").glob("1.1.1-*.md"))
+    doc.chmod(0)
+    try:
+        code, out, err = _gate(project, "doc_gate.sh")
+    finally:
+        doc.chmod(0o644)
+    assert code == 1, out + err
+    assert f"cannot read {doc.relative_to(project.root)}" in out + err
+    assert SCRIPTS["doc_gate.sh"] not in out

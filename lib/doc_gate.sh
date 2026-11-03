@@ -16,23 +16,29 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 . "$HARNESS_DIR/_colors.sh"
 cd "$PROJECT_DIR" || { fail "cannot enter the project directory $PROJECT_DIR"; exit 1; }
 # The done leaves, or FAIL: a helper that cannot answer must not empty the list (I10).
-err="$(mktemp)" || { fail "cannot create a temp file to read the done leaves"; exit 1; }
-if ! IDS="$(python3 "$HARNESS_DIR/_harness.py" done-ids 2>"$err")"; then
-  fail "cannot read the done leaves: $(tail -n 3 "$err" | cut -c1-300)"
-  rm -f "$err"
+# No temp file: the helper's own error goes straight to stderr, above this FAIL.
+if ! IDS="$(python3 "$HARNESS_DIR/_harness.py" done-ids)"; then
+  fail "cannot read the done leaves (the helper's error is above)"
   exit 1
 fi
-rm -f "$err"
 
 ANCHORS="concept planning execution problems files"
 rc=0
 
 while read -r ID; do
   [ -z "$ID" ] && continue
-  # Match docs/reference/<ID>-*.md (and tolerate a bare <ID>.md).
-  DOC="$(ls docs/reference/"${ID}"-*.md docs/reference/"${ID}".md 2>/dev/null | head -1)"
-  if [ -z "$DOC" ] || [ ! -f "$DOC" ]; then
+  # Match docs/reference/<ID>-*.md (and tolerate a bare <ID>.md); first in name order.
+  DOC=""
+  for candidate in docs/reference/"${ID}"-*.md docs/reference/"${ID}".md; do
+    if [ -f "$candidate" ]; then DOC="$candidate"; break; fi
+  done
+  if [ -z "$DOC" ]; then
     fail "leaf ${ID} is 'done' but has no docs/reference/${ID}-<name>.md"
+    rc=1
+    continue
+  fi
+  if [ ! -r "$DOC" ]; then
+    fail "cannot read ${DOC}"
     rc=1
     continue
   fi
