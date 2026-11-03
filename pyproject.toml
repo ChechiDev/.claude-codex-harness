@@ -16,7 +16,10 @@ package = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-markers = ["docker: needs the local Docker Engine and the harness-compat image (C0)"]
+markers = [
+  "docker: needs the local Docker Engine and the harness-compat image (C0)",
+  "pins(issue): characterisation of a known-wrong behaviour; that issue flips it (I0)",
+]
 
 [tool.ruff]
 line-length = 100
