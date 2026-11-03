@@ -44,6 +44,7 @@ printf '%s\n' "$prompt" > "$I0_LOG.prompt.$phase"
 verdict() { printf '# Review\n\n**Verdict:** %s\n' "$2" > "$1"; }
 case "$phase" in
   roadmap) verdict progress/roadmap_review.md ROADMAP_APPROVED ;;
+  issue)   verdict "progress/issue_review_$id.md" ISSUE_APPROVED ;;
   phase)   verdict "progress/phase_review_$id.md" PHASE_APPROVED ;;
   plan)    mkdir -p "$(dirname "$I0_ACCEPTANCE")"
            printf '%s' "$I0_ACCEPTANCE_BODY" > "$I0_ACCEPTANCE"
@@ -67,7 +68,8 @@ DOC
            python3 harness/sync_plan.py >/dev/null
            msg='feat(domain): greet by name [%s]\n\nAdds greet().\n'
            printf "$msg" "$id" > "progress/close_$id.msg"
-           printf '## Overview\nGreeting task.\n' > progress/pr_1.1.md ;;
+           owner="${I0_PR_OWNER:-task}"
+           printf '## Overview\nGreeting %s.\n' "$owner" > "progress/pr_${I0_PR_OWNER:-1.1}.md" ;;
 esac
 """
 
