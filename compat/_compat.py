@@ -641,12 +641,29 @@ def _record_image(state: Path, image_id: str, tag: str) -> None:
     path.write_text(json.dumps(records, indent=2) + "\n")
 
 
+def _check_tag_is_ours(docker_config: Path, ref: str, state: Path) -> None:
+    """docker build -t moves an existing tag: only a tag on an image C0 built and
+    recorded (and still labelled) may be moved."""
+    res = _docker(docker_config, "image", "inspect", ref)
+    if res.returncode != 0:
+        if "no such" in res.stderr.lower():
+            return
+        raise CompatError(f"docker image inspect {ref} failed: {res.stderr.strip()}")
+    image = json.loads(res.stdout)[0]
+    path = state / "images.json"
+    recorded = {r["id"] for r in json.loads(path.read_text())} if path.exists() else set()
+    labels = (image.get("Config") or {}).get("Labels") or {}
+    if labels.get(LABEL) != "1" or image.get("Id") not in recorded:
+        raise CompatError(f"tag {ref} exists and was not created by C0; refusing to move it")
+
+
 def build_image(tag: str, state: Path, docker_config: Path) -> str:
     """Build compat/ into harness-compat:<tag>; record the image id for scoped cleanup."""
     if not TAG.match(tag):
         raise CompatError(f"invalid tag {tag!r}: use [a-z0-9._-], max 64")
     state.mkdir(parents=True, exist_ok=True)
     ref = f"{LABEL}:{tag}"
+    _check_tag_is_ours(docker_config, ref, state)
     iidfile = state / f"iid-{tag}"
     res = _docker(
         docker_config,

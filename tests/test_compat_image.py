@@ -223,13 +223,38 @@ def test_preflight_rejects_an_image_that_drifted(
 def test_build_image_labels_tags_and_records_the_image_id(fake: dict[str, Path]) -> None:
     _set(fake, build_id="sha256:0123abcd")
     state_dir = fake["tmp"] / "compat-state"
-    res = _compat(fake, "build-image", "--tag", "t", "--state", str(state_dir))
+    res = _compat(fake, "build-image", "--tag", "fresh", "--state", str(state_dir))
     assert res.returncode == 0, res.stderr
     build = next(c for c in _calls(fake) if "build" in c)
     assert build[:3] == ["--host", SOCKET, "build"]
     assert "harness-compat=1" in build
-    assert build[build.index("-t") + 1] == "harness-compat:t"
+    assert build[build.index("-t") + 1] == "harness-compat:fresh"
     assert build[-1] == str(COMPAT)
     assert "--network" not in build
     recorded = json.loads((state_dir / "images.json").read_text())
-    assert {"id": "sha256:0123abcd", "tag": "harness-compat:t"} in recorded
+    assert {"id": "sha256:0123abcd", "tag": "harness-compat:fresh"} in recorded
+
+
+def _build(fake: dict[str, Path], state_dir: Path) -> subprocess.CompletedProcess[str]:
+    return _compat(fake, "build-image", "--tag", "t", "--state", str(state_dir))
+
+
+def test_build_image_never_retags_a_foreign_image(fake: dict[str, Path]) -> None:
+    """An existing harness-compat:<tag> that C0 did not record is someone else's."""
+    _set(fake, images={"harness-compat:t": {"Id": "sha256:theirs", "Config": {"Labels": {}}}})
+    res = _build(fake, fake["tmp"] / "compat-state")
+    assert res.returncode != 0
+    assert "not created by c0" in res.stderr.lower()
+    assert not any("build" in c for c in _calls(fake))
+
+
+def test_build_image_may_rebuild_its_own_recorded_image(fake: dict[str, Path]) -> None:
+    state_dir = fake["tmp"] / "compat-state"
+    state_dir.mkdir()
+    (state_dir / "images.json").write_text(
+        json.dumps([{"id": "sha256:ours", "tag": "harness-compat:t"}])
+    )
+    own = {"Id": "sha256:ours", "Config": {"Labels": {"harness-compat": "1"}}}
+    _set(fake, images={"harness-compat:t": own})
+    res = _build(fake, state_dir)
+    assert res.returncode == 0, res.stderr
