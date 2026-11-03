@@ -847,8 +847,51 @@ def seal_command(args: list[str]) -> int:
     return 2
 
 
+# The toolkit code `make check` runs, reached through the project's links. Git tracks a
+# link as its target path only, so their contents go into the fingerprint explicitly.
+TOOLKIT_LINKS = ("harness", ".claude/settings.json")
+
+
+def _hash_tree(digest: Any, name: str, path: Path, seen: frozenset[str]) -> None:
+    """Hash a file, or every entry of a directory in name order, following links into
+    directories. A directory already on the current path (a link loop) is hashed as a
+    link to its target instead of walked. Raises OSError on anything unreadable
+    (a dangling link, a directory it cannot list, a file it cannot read)."""
+    real = os.path.realpath(path)
+    if path.is_symlink() and not path.exists():
+        raise OSError(f"dangling link: {path}")
+    if path.is_file():
+        digest.update(f"f\0{name}\0{_sha256(path)}\0".encode())
+    elif path.is_dir():
+        if real in seen:
+            digest.update(f"loop\0{name}\0{os.readlink(path)}\0".encode())
+            return
+        digest.update(f"d\0{name}\0".encode())
+        for entry in sorted(os.listdir(path)):
+            _hash_tree(digest, f"{name}/{entry}", path / entry, seen | {real})
+    else:
+        raise OSError(f"not a file or directory: {path}")
+
+
+def _toolkit_part(digest: Any) -> bool:
+    """Hash the toolkit behind TOOLKIT_LINKS, bytecode included (Python may run a .pyc
+    instead of its source). False when any part cannot be read: no fingerprint then,
+    so the Stop runs the full check. Never a stale green."""
+    for link in TOOLKIT_LINKS:
+        path = ROOT / link
+        if not path.exists() and not path.is_symlink():
+            digest.update(f"absent\0{link}\0".encode())
+            continue
+        try:
+            _hash_tree(digest, link, path, frozenset())
+        except OSError:
+            return False
+    return True
+
+
 def fingerprint() -> int:
-    """Hash HEAD + status + diff + untracked contents; exit 1 outside a git repo."""
+    """Hash HEAD + status + diff + untracked contents + the toolkit behind the links;
+    exit 1 outside a git repo or when the toolkit part cannot be computed."""
     status = _git_out("status", "--porcelain=v1", "-z", "-uall")
     if status is None:
         return 1
@@ -866,6 +909,8 @@ def fingerprint() -> int:
         path = ROOT / rel
         if path.is_file():
             digest.update(rel.encode() + _sha256(path).encode())
+    if not _toolkit_part(digest):
+        return 1
     print(digest.hexdigest())
     return 0
 
