@@ -110,16 +110,66 @@ def test_any_toolkit_change_changes_the_fingerprint(
     assert after.stdout != before, change
 
 
-def test_python_bytecode_in_the_toolkit_does_not_change_it(
+def test_python_bytecode_in_the_toolkit_is_part_of_the_key(
     setup: tuple[Path, Installed],
 ) -> None:
-    """Running the harness writes __pycache__ into lib/: that must not void the cache."""
+    """Python may run a .pyc from lib/__pycache__ instead of its source: it counts."""
     toolkit, project = setup
     before = _fingerprint(project).stdout
     cache_dir = toolkit / "lib/__pycache__"
     cache_dir.mkdir(exist_ok=True)
     (cache_dir / "extra.cpython-312.pyc").write_bytes(b"\0")
-    assert _fingerprint(project).stdout == before
+    assert _fingerprint(project).stdout != before
+
+
+def test_running_the_harness_settles_the_bytecode_after_one_stop(
+    setup: tuple[Path, Installed],
+) -> None:
+    """The bytecode the check itself writes must not void the cache on every Stop."""
+    _, project = setup
+    _stop(project)  # at most one more full check while __pycache__ settles
+    assert ALREADY_GREEN in _stop(project).stdout
+
+
+def test_a_change_behind_a_directory_link_inside_lib_changes_it(
+    setup: tuple[Path, Installed], tmp_path: Path
+) -> None:
+    toolkit, project = setup
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "helper.sh").write_text("echo one\n")
+    (toolkit / "lib/linked").symlink_to(outside)
+    before = _fingerprint(project).stdout
+    (outside / "helper.sh").write_text("echo two\n")
+    assert _fingerprint(project).stdout != before
+
+
+def test_a_link_loop_inside_lib_still_gives_a_fingerprint(
+    setup: tuple[Path, Installed],
+) -> None:
+    """A loop is hashed as a link (its target), not walked forever nor dropped."""
+    toolkit, project = setup
+    (toolkit / "lib/loop").symlink_to(toolkit / "lib")
+    first = _fingerprint(project)
+    assert first.returncode == 0 and first.stdout.strip()
+    (toolkit / "lib/loop").unlink()
+    (toolkit / "lib/loop").symlink_to(toolkit)
+    assert _fingerprint(project).stdout != first.stdout
+
+
+def test_an_unreadable_directory_in_lib_means_no_fingerprint(
+    setup: tuple[Path, Installed],
+) -> None:
+    toolkit, project = setup
+    hidden = toolkit / "lib/private"
+    hidden.mkdir()
+    (hidden / "x.sh").write_text("echo\n")
+    hidden.chmod(0)
+    try:
+        res = _fingerprint(project)
+    finally:
+        hidden.chmod(0o755)
+    assert res.returncode != 0 and not res.stdout.strip()
 
 
 def test_a_broken_settings_link_means_no_cache(setup: tuple[Path, Installed]) -> None:
