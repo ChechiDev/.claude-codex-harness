@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -222,3 +223,23 @@ def test_snapshot_lists_every_link_with_its_target(tmp_path: Path, toolkit: Path
     assert snap["harness"] == str(toolkit / "lib")
     assert snap[".claude/skills/react"] == str(toolkit / "packs" / "web" / "react")
     assert ".git" not in "".join(snap)
+
+
+def test_relink_refuses_links_reached_through_a_linked_parent(
+    tmp_path: Path, toolkit: Path
+) -> None:
+    """A copy whose .claude is a symlink outside the copy (e.g. to ~/.claude) must never
+    have the links behind it replaced."""
+    copy_root = _copy(tmp_path, _repo(tmp_path, toolkit))
+    outside = tmp_path / "outside-claude"
+    outside.mkdir()
+    for name in ("agents", "codex", "skills"):
+        (outside / name).symlink_to(toolkit / name)
+    (outside / "settings.json").symlink_to(toolkit / "settings.json")
+    shutil.rmtree(copy_root / ".claude")
+    (copy_root / ".claude").symlink_to(outside)
+    before = _state(outside)
+    res = _run("relink", str(copy_root), "--toolkit", str(toolkit), "--mount", MOUNT)
+    assert res.returncode != 0
+    assert "outside the copy" in res.stderr
+    assert _state(outside) == before

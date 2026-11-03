@@ -258,3 +258,17 @@ def test_build_image_may_rebuild_its_own_recorded_image(fake: dict[str, Path]) -
     _set(fake, images={"harness-compat:t": own})
     res = _build(fake, state_dir)
     assert res.returncode == 0, res.stderr
+
+
+def test_build_image_never_moves_a_tag_c0_did_not_record(fake: dict[str, Path]) -> None:
+    """The image is ours, but this TAG on it was added by someone else."""
+    state_dir = fake["tmp"] / "compat-state"
+    state_dir.mkdir()
+    (state_dir / "images.json").write_text(
+        json.dumps([{"id": "sha256:ours", "tag": "harness-compat:other"}])
+    )
+    own = {"Id": "sha256:ours", "Config": {"Labels": {"harness-compat": "1"}}}
+    _set(fake, images={"harness-compat:t": own})
+    res = _build(fake, state_dir)
+    assert res.returncode != 0
+    assert "not created by c0" in res.stderr.lower()

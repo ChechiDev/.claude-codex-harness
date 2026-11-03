@@ -137,8 +137,17 @@ def _skill_links(root: Path) -> list[tuple[Path, str]]:
     return found
 
 
+def _check_inside(root: Path, link: Path, name: str) -> None:
+    """The link's directory must be the copy's own: never reached through a linked
+    parent (e.g. .claude -> ~/.claude), or the replacement would land outside."""
+    if not link.parent.resolve().is_relative_to(root.resolve()):
+        raise CompatError(f"{name}: its directory resolves outside the copy; refusing")
+
+
 def plan_relink(root: Path, toolkit: Path, mount: str) -> list[tuple[Path, str]]:
     """Validate every expected link first; nothing is changed if one is wrong."""
+    if (root / ".claude").is_symlink():
+        raise CompatError(".claude is itself a link (outside the copy); refusing")
     links: list[tuple[Path, str]] = []
     for name in HARNESS_LINKS:
         link = root / name
@@ -146,6 +155,8 @@ def plan_relink(root: Path, toolkit: Path, mount: str) -> list[tuple[Path, str]]
             raise CompatError(f"{name}: missing link")
         links.append((link, name))
     links += _skill_links(root)
+    for link, name in links:
+        _check_inside(root, link, name)
     return [_plan_link(link, name, toolkit, mount) for link, name in links]
 
 
@@ -651,9 +662,10 @@ def _check_tag_is_ours(docker_config: Path, ref: str, state: Path) -> None:
         raise CompatError(f"docker image inspect {ref} failed: {res.stderr.strip()}")
     image = json.loads(res.stdout)[0]
     path = state / "images.json"
-    recorded = {r["id"] for r in json.loads(path.read_text())} if path.exists() else set()
+    records = json.loads(path.read_text()) if path.exists() else []
+    recorded = {(r["id"], r["tag"]) for r in records}
     labels = (image.get("Config") or {}).get("Labels") or {}
-    if labels.get(LABEL) != "1" or image.get("Id") not in recorded:
+    if labels.get(LABEL) != "1" or (image.get("Id"), ref) not in recorded:
         raise CompatError(f"tag {ref} exists and was not created by C0; refusing to move it")
 
 
