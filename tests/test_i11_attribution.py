@@ -7,6 +7,7 @@ close-message check (`_guard.py commit-message`) and the issue-draft publish che
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -84,7 +85,11 @@ def test_guard_bash_blocks_glued_option_forms(project: Project, cmd: str) -> Non
 @pytest.mark.parametrize("text", NOT_ATTRIBUTION)
 def test_guard_bash_allows_words_containing_a_term(project: Project, text: str) -> None:
     q = _shell_quote(text)
-    for cmd in (f"git commit -m {q}", f"gh pr create --title {q} --body ok"):
+    for cmd in (
+        f"git commit -m {q}",
+        f"gh pr create --title {q} --body ok",
+        f"gh pr create --title ok --body {q}",
+    ):
         code, err = _guard_bash(project, cmd)
         assert code == 0, (cmd, err)
 
@@ -130,20 +135,24 @@ def test_close_message_allows_words_containing_a_term(
 # ── issue draft ──────────────────────────────────────────────────────────────
 
 
-def _publish(repo: Repo, extra: str) -> str:
+def _publish(repo: Repo, extra: str) -> subprocess.CompletedProcess[str]:
     _draft(repo, FRONT + GOOD_DRAFT_BODY + f"\n{extra}\n")
-    res = repo.issue("publish")
-    return res.stdout + res.stderr
+    return repo.issue("publish")
 
 
 @pytest.mark.parametrize("text", ATTRIBUTION)
 def test_issue_draft_rejects_attribution(repo: Repo, text: str) -> None:  # noqa: F811
-    assert "agent attribution" in _publish(repo, text)
+    res = _publish(repo, text)
+    assert res.returncode == 1
+    assert "agent attribution" in res.stdout + res.stderr
+    assert "15" not in repo.gh_state()["issues"]
 
 
 @pytest.mark.parametrize("text", NOT_ATTRIBUTION)
 def test_issue_draft_allows_words_containing_a_term(repo: Repo, text: str) -> None:  # noqa: F811
-    assert "agent attribution" not in _publish(repo, text)
+    res = _publish(repo, text)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert text in repo.gh_state()["issues"]["15"]["body"]
 
 
 # ── one pattern, one place ───────────────────────────────────────────────────
