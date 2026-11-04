@@ -1,0 +1,5 @@
+# Harness targets, shared by every project (keep this block last).
+ifeq ($(wildcard harness/harness.mk),)
+$(error harness/ is missing on this machine: run install.sh <project> first)
+endif
+include harness/harness.mk

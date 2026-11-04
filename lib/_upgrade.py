@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import _templates
 from _status import say
 
 TOOLKIT = Path(__file__).resolve().parents[1]
@@ -56,7 +57,7 @@ LINKS = {
 }
 RECORD = Path(".harness/templates.json")
 MIGRATIONS = Path(".harness/migrations")
-EMPTY_RECORD: dict[str, Any] = {"migration_level": 0, "templates": {}}
+MIGRATION_LEVEL_RECORDED = 0  # level a migration by this toolkit leaves the project at
 ALLOWED = {"Makefile", "CLAUDE.md", "AGENTS.md", "docs/plan/issues/README.md"}
 # docs/plan/issues/ turns the issues lane on (make status asks GitHub for the queue).
 ISSUES_README = Path(__file__).resolve().parents[1] / "templates/docs/plan/issues/README.md"
@@ -179,30 +180,93 @@ def _verify(root: Path) -> None:
         raise MigrationError(f"make -pn shows unexpected definitions: {', '.join(sorted(wrong))}")
 
 
-def _planned_docs(root: Path) -> dict[str, str]:
-    """rel path -> new text of the docs the migration changes (nothing is written)."""
-    planned: dict[str, str] = {}
-    claude = root / "CLAUDE.md"
-    if claude.is_file() and IMPORT not in claude.read_text("utf-8").splitlines():
-        planned["CLAUDE.md"] = f"{IMPORT}\n\n" + claude.read_text("utf-8")
-    agents = root / "AGENTS.md"
-    if agents.is_file() and "harness/WORKFLOW.md" not in agents.read_text("utf-8"):
-        planned["AGENTS.md"] = agents.read_text("utf-8").rstrip("\n") + "\n" + POINTER
-    if not (root / ISSUES_DIR).is_file():
-        planned[ISSUES_DIR.as_posix()] = ISSUES_README.read_text("utf-8")
-    return planned
+def _read_record(root: Path) -> dict[str, Any] | None:
+    path = root / RECORD
+    if not path.is_file():
+        return None
+    data: dict[str, Any] = json.loads(path.read_text("utf-8"))
+    return data
+
+
+def _with_fragment(tpl: _templates.Template, text: str) -> str:
+    """`text` with the current version of an absent fragment added."""
+    if tpl.id == "claude-import":
+        return f"{IMPORT}\n\n" + text
+    if tpl.id == "agents-pointer":
+        return text.rstrip("\n") + "\n" + POINTER
+    raise MigrationError(f"{tpl.path}: no rule to add fragment {tpl.id}")
+
+
+def build_record(root: Path, tset: str, texts: dict[str, str]) -> dict[str, Any]:
+    """The record describing `texts` (rel path -> content; missing = file absent)."""
+    entries: dict[str, Any] = {}
+    for tpl in _templates.load(tset):
+        if tpl.path in texts:
+            text = texts[tpl.path]
+            if tpl.mode == "whole":
+                ver = next((v for v, b in tpl.versions.items() if b == text), None)
+                state = _templates.State("installed", ver) if ver else _templates.State("stop")
+            else:
+                ver = _templates.fragment_version(tpl, text)
+                state = _templates.State("installed" if ver else "absent", ver)
+        else:
+            state = _templates.State("absent" if tpl.mode == "whole" else "nofile")
+        entries[tpl.path] = _templates.record_entry(tpl, state)
+    return {"migration_level": MIGRATION_LEVEL_RECORDED, "set": tset, "templates": entries}
 
 
 def _plan(root: Path) -> dict[str, str]:
     """Every harness-owned file the migration would write, with its new text."""
+    record = _read_record(root)
+    tset = str(record["set"]) if record else _templates.detect_set(root)
+    templates = _templates.load(tset)
+    recorded = record["templates"] if record else {}
+    states = {t.path: _templates.classify(t, root, recorded.get(t.path)) for t in templates}
+    problems = [s.problem for s in states.values() if s.kind == "stop"]
+    if problems:
+        raise MigrationError("\n".join(problems) + "\nnothing was changed; resolve by hand")
     planned: dict[str, str] = {}
     new = migrated_makefile((root / "Makefile").read_text("utf-8"))
     if new is not None:
         planned["Makefile"] = new
-    planned.update(_planned_docs(root))
-    if planned and not (root / RECORD).is_file():
-        planned[RECORD.as_posix()] = json.dumps(EMPTY_RECORD, indent=2) + "\n"
+    for tpl in templates:
+        state, path = states[tpl.path], root / tpl.path
+        if tpl.mode == "whole" and (state.kind == "absent" or state.version != tpl.current):
+            planned[tpl.path] = tpl.current_text
+        elif tpl.mode == "fragments" and state.kind == "absent" and tpl.path != "Makefile":
+            planned[tpl.path] = _with_fragment(tpl, path.read_text("utf-8"))
+    texts = {
+        t.path: planned[t.path] if t.path in planned else (root / t.path).read_text("utf-8")
+        for t in templates
+        if t.path in planned or (root / t.path).is_file()
+    }
+    new_record = build_record(root, tset, texts)
+    if record:
+        new_record["migration_level"] = record.get("migration_level", 0)
+    if new_record != record:
+        planned[RECORD.as_posix()] = json.dumps(new_record, indent=2) + "\n"
     return planned
+
+
+def register(root: Path, tset: str) -> int:
+    """Fresh install: record what install.sh copied (no backup: nothing existed)."""
+    path = root / RECORD
+    if path.exists():
+        say("OK", f"{RECORD} kept")
+        return 0
+    templates = _templates.load(tset)
+    problems = [
+        s.problem for t in templates if (s := _templates.classify(t, root, None)).kind == "stop"
+    ]
+    if problems:
+        say("WARN", "record not written: " + "; ".join(problems) + " (run --migrate)")
+        return 0
+    texts = {
+        t.path: (root / t.path).read_text("utf-8") for t in templates if (root / t.path).is_file()
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(build_record(root, tset, texts), indent=2) + "\n", "utf-8")
+    return 0
 
 
 # ── links: verified, never written (plan 0.7, 0.11 d) ────────────────────────
@@ -419,6 +483,8 @@ def main(argv: list[str]) -> int:
     try:
         if len(args) == 2 and args[0] == "migrate":
             return migrate(Path(args[1]).resolve(), apply, yes)
+        if len(args) == 3 and args[0] == "register" and args[2] in _templates.SETS:
+            return register(Path(args[1]).resolve(), args[2])
         if len(args) == 3 and args[0] == "rollback":
             return rollback(Path(args[1]).resolve(), args[2], apply, yes)
     except MigrationError as exc:

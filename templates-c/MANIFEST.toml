@@ -1,0 +1,62 @@
+# Harness-managed copied files (M0a, #14). Every released version keeps its
+# content in _bases/<id>/<version> (append-only). mode: whole = the file is the
+# harness's; fragments = only these harness-owned parts are managed, the rest of
+# the file belongs to the project. signature: the lines that identify the
+# fragment, used to tell 'absent' from 'modified' on first registration.
+
+[[template]]
+id = "makefile-guard"
+path = "Makefile"
+mode = "fragments"
+current = "2"
+signature = [
+  "# Harness targets, shared by every project (keep this block last).",
+  "# Harness targets, shared by every project (keep this block last). harness/ is a",
+  "ifneq ($(wildcard harness/harness.mk),)",
+  "ifeq ($(wildcard harness/harness.mk),)",
+  "include harness/harness.mk",
+]
+
+[[template.version]]
+version = "1"
+sha256 = "85044a1f72e9421d1eb71ec0383e24741d9077cb93373f58e11f6c6afc63d369"
+
+[[template.version]]
+version = "2"
+sha256 = "3f378183d25ae2f4ee79e721ba635b8c0cafcf894bf02956cbd81741849d5e1f"
+
+[[template]]
+id = "claude-import"
+path = "CLAUDE.md"
+mode = "fragments"
+current = "1"
+signature = ["@harness/WORKFLOW.md"]
+
+[[template.version]]
+version = "1"
+sha256 = "d3d94a515c13a19e76348942e64ce852ba2eb316db9581e15fd82a20a3165d85"
+
+[[template]]
+id = "agents-pointer"
+path = "AGENTS.md"
+mode = "fragments"
+current = "1"
+signature = [
+  "> Shared workflow, the same in every project (leader role, gates, issues lane):",
+  "> `harness/WORKFLOW.md`.",
+]
+
+[[template.version]]
+version = "1"
+sha256 = "0f1e5b67e0ee558bcb3f0fcf764c1a8224f70513d418f251be2dbb54bbd1b30f"
+
+[[template]]
+id = "issues-readme"
+path = "docs/plan/issues/README.md"
+mode = "whole"
+current = "1"
+signature = []
+
+[[template.version]]
+version = "1"
+sha256 = "d515ec1fa66dc696bebadcc9e8a7029bd7bba47c276fe36af8e7ae53d414f007"

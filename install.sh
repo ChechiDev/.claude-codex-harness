@@ -144,6 +144,9 @@ if [ -n "$SRC_DIRS" ]; then
     COPIED+=("harness.toml")
   fi
 fi
+# Versions of the harness-managed copied files (lib/_templates.py, M0a).
+python3 "$TOOLKIT/lib/_upgrade.py" register "$DEST" "$TPLSUB"
+COPIED+=(".harness/templates.json")
 [ ${#COPIED[@]} -gt 0 ] && row "$GREEN" "[copy]" "${COPIED[*]}"
 [ ${#KEPT[@]} -gt 0 ] && row "$ORANGE" "[SKIP]" "${KEPT[*]} (exist; --force to overwrite)"
 
