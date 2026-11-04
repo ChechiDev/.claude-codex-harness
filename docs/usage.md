@@ -280,6 +280,55 @@ cached per working-tree fingerprint, so an unchanged tree does not re-run the
 suite. If the stop was already blocked once and the check is still red, it
 reports but does not block again, so the session cannot loop.
 
+## Recovery when a hook blocks Claude
+
+The two guards (`guard_write.sh`, `guard_bash.sh`) fail closed: if they cannot
+start, crash, time out or get an unreadable payload, the tool call is blocked
+(`BLOCKED: harness hook … failed` / `harness guard error`). Claude Code
+>= 2.1.295 is required for the start-up and timeout cases (`onFailure: "block"`
+in `settings.json`). A broken toolkit therefore blocks Claude in every linked
+project until you restore it. The toolkit adds no env var, flag or file to
+turn the guards off. Claude Code's own `disableAllHooks` setting would switch
+off every harness hook (guards, post-write feedback, stop gate), so it is not
+a recovery path: do not use it to get past a block. Restore the toolkit
+instead, yourself, from a shell outside Claude:
+
+1. Find the root of the toolkit checkout the project uses. The `harness` link
+   points to its `lib/`:
+
+   ```bash
+   TOOLKIT="$(git -C "$(readlink -f <project>/harness)" rev-parse --show-toplevel)"
+   ```
+
+   Normally this is `~/.claude-codex-harness`; during development it may be a worktree.
+2. Find the last good commit. There are no tags yet: take the previous merge
+   commit on `main` (`git -C "$TOOLKIT" log --merges --oneline`).
+3. Restore only the code paths. Leave `skills/`, `packs/` and `catalog/` alone,
+   so no skill link dangles:
+
+   ```bash
+   git -C "$TOOLKIT" checkout <good> -- lib settings.json agents codex install.sh link-global.sh
+   ```
+
+   Or revert the bad merge (`git -C "$TOOLKIT" revert -m 1 <merge>`) and push it.
+   That needs no local restore.
+4. Check that both guards answer a harmless payload with exit 0:
+
+   ```bash
+   cd <project>
+   echo '{"tool_input":{"command":"ls"}}' | bash harness/guard_bash.sh; echo $?
+   echo "{\"tool_input\":{\"file_path\":\"$PWD/notes.md\"}}" | bash harness/guard_write.sh; echo $?
+   ```
+
+5. Once a fix is merged, return to normal. Drop the temporary restore first:
+   it is staged in those paths and would block the pull.
+
+   ```bash
+   git -C "$TOOLKIT" checkout HEAD -- lib settings.json agents codex install.sh link-global.sh
+   git -C "$TOOLKIT" status --porcelain   # must print nothing
+   git -C "$TOOLKIT" pull
+   ```
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

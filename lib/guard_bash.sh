@@ -12,5 +12,18 @@
 # The decision logic lives in _guard.py.
 set -uo pipefail
 
-HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$HARNESS_DIR/_guard.py" bash
+# Fail closed (I9): Claude Code only blocks a PreToolUse call on exit 2, so every
+# other failure (python3 missing, import/syntax error, signal) is mapped to exit 2.
+# settings.json also sets onFailure: "block" for failures before this script runs.
+HOOK="guard_bash.sh"
+if ! HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; then
+  echo "BLOCKED: harness hook $HOOK cannot resolve its directory. Report it; do not work around it." >&2
+  exit 2
+fi
+python3 "$HARNESS_DIR/_guard.py" bash
+rc=$?
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+  echo "BLOCKED: harness hook $HOOK failed (exit $rc). Report it; do not work around it." >&2
+  exit 2
+fi
+exit "$rc"
