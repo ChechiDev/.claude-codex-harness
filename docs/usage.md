@@ -287,9 +287,11 @@ start, crash, time out or get an unreadable payload, the tool call is blocked
 (`BLOCKED: harness hook … failed` / `harness guard error`). Claude Code
 >= 2.1.295 is required for the start-up and timeout cases (`onFailure: "block"`
 in `settings.json`). A broken toolkit therefore blocks Claude in every linked
-project until you restore it. Claude cannot do this for you, and there is no
-env var, flag or file that turns the guards off. Run these steps yourself, from
-a shell outside Claude:
+project until you restore it. The toolkit adds no env var, flag or file to
+turn the guards off. Claude Code's own `disableAllHooks` setting would switch
+off every harness hook (guards, post-write feedback, stop gate), so it is not
+a recovery path: do not use it to get past a block. Restore the toolkit
+instead, yourself, from a shell outside Claude:
 
 1. Find the root of the toolkit checkout the project uses. The `harness` link
    points to its `lib/`:
