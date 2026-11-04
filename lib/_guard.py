@@ -47,6 +47,7 @@ import _config
 import _harness
 import _migrate
 import _plan_seal
+from _attribution import RE_ATTRIBUTION
 from _status import say
 
 BLOCK = 2
@@ -68,7 +69,6 @@ RE_CODEX_OWNED = re.compile(
     r"|progress/issue_migrations_[^/]+\.json|progress/oracle_migrations/[^/]+\.json"
     r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+)$"
 )
-RE_ATTRIBUTION = re.compile(r"co-authored-by|generated with|🤖|claude code|codex|anthropic", re.I)
 
 MSG_ACCEPTANCE = (
     "BLOCKED: tests/acceptance/ is the independent oracle written by Codex and is READ-ONLY "

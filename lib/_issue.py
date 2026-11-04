@@ -41,6 +41,7 @@ from typing import Any
 
 import _config
 import _harness
+from _attribution import RE_ATTRIBUTION
 from _status import say
 
 GH = os.environ.get("HARNESS_GH", "gh")
@@ -54,7 +55,6 @@ DRAFT = Path("progress/issue_draft.md")
 DRAFT_REVIEW = Path("progress/issue_draft_review.md")
 DRAFT_SEAL = Path("progress/issue_draft.sha256")
 TEMPLATE = Path(__file__).resolve().parent / "issue_template.md"
-RE_ATTRIBUTION = re.compile(r"co-authored-by|generated with|🤖|claude code|codex|anthropic", re.I)
 RE_VERDICT = re.compile(r"^\*\*Verdict:\*\*[ \t]*(\w+)[ \t]*$", re.MULTILINE)
 
 Item = dict[str, Any]
