@@ -8,23 +8,37 @@
 #   <!-- section: execution -->  how it was executed
 #   <!-- section: problems -->   problems found and how they were solved
 #   <!-- section: files -->      files created/modified
-# Used by check.sh and (via make check) the Stop hook. exit 0 = ok; 1 = missing.
+# Used by check.sh and (via make check) the Stop hook. exit 0 = ok; 1 = missing, or a helper failed.
 set -uo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 . "$HARNESS_DIR/_colors.sh"
-cd "$PROJECT_DIR" || exit 0
+cd "$PROJECT_DIR" || { fail "cannot enter the project directory $PROJECT_DIR"; exit 1; }
+# The done leaves, or FAIL: a helper that cannot answer must not empty the list (I10).
+# No temp file: the helper's own error goes straight to stderr, above this FAIL.
+if ! IDS="$(python3 "$HARNESS_DIR/_harness.py" done-ids)"; then
+  fail "cannot read the done leaves (the helper's error is above)"
+  exit 1
+fi
 
 ANCHORS="concept planning execution problems files"
 rc=0
 
 while read -r ID; do
   [ -z "$ID" ] && continue
-  # Match docs/reference/<ID>-*.md (and tolerate a bare <ID>.md).
-  DOC="$(ls docs/reference/"${ID}"-*.md docs/reference/"${ID}".md 2>/dev/null | head -1)"
-  if [ -z "$DOC" ] || [ ! -f "$DOC" ]; then
+  # Match docs/reference/<ID>-*.md (and tolerate a bare <ID>.md); first in name order.
+  DOC=""
+  for candidate in docs/reference/"${ID}"-*.md docs/reference/"${ID}".md; do
+    if [ -f "$candidate" ]; then DOC="$candidate"; break; fi
+  done
+  if [ -z "$DOC" ]; then
     fail "leaf ${ID} is 'done' but has no docs/reference/${ID}-<name>.md"
+    rc=1
+    continue
+  fi
+  if [ ! -r "$DOC" ]; then
+    fail "cannot read ${DOC}"
     rc=1
     continue
   fi
@@ -42,7 +56,7 @@ while read -r ID; do
       rc=1
     fi
   done
-done < <(python3 "$HARNESS_DIR/_harness.py" done-ids 2>/dev/null)
+done <<< "$IDS"
 
 [ $rc -eq 0 ] && ok "reference docs complete (every 'done' documented)"
 exit $rc

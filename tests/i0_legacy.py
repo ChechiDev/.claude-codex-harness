@@ -14,6 +14,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from conftest import TOOLKIT
 from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, spec
 from i0_projects import Installed, install_project
 
@@ -59,9 +60,9 @@ def _plan(project: Installed, status: str) -> None:
     _ok(project.make("plan"), "make plan")
 
 
-def build_legacy(tmp: Path) -> Installed:
+def build_legacy(tmp: Path, toolkit: Path = TOOLKIT) -> Installed:
     """Install a Python project and take it through one closed subtask + a baseline."""
-    project = install_project(tmp, "python")
+    project = install_project(tmp, "python", toolkit=toolkit)
     env = fake_tools(project, tmp, ORACLE, ORACLE_BODY, SPEC)
     for rel, text in BASELINE_CODE.items():
         _write(project.root, rel, text)
