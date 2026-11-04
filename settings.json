@@ -8,7 +8,8 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/harness/guard_write.sh\"",
-            "description": "Blocks writes to tests/acceptance/ (Codex oracle), Codex verdicts, and src/ outside the approved plan scope."
+            "description": "Blocks writes to tests/acceptance/ (Codex oracle), Codex verdicts, and src/ outside the approved plan scope.",
+            "onFailure": "block"
           }
         ]
       },
@@ -18,7 +19,8 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/harness/guard_bash.sh\"",
-            "description": "Blocks Claude commits, agent attribution, and shell writes to protected paths."
+            "description": "Blocks Claude commits, agent attribution, and shell writes to protected paths.",
+            "onFailure": "block"
           }
         ]
       }

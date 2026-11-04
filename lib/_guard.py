@@ -212,11 +212,21 @@ def protected_kind(path: Path, destructive: bool = False) -> str | None:
 # ── Write guard ──────────────────────────────────────────────────────────────
 
 
-def guard_write(payload: dict[str, Any]) -> None:
-    tool_input = payload.get("tool_input") or {}
-    raw = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
-    if not raw:
-        return
+def _tool_input(payload: object) -> dict[str, Any]:
+    """The payload's tool_input; raises (the guard then blocks) if it is malformed (I9)."""
+    if not isinstance(payload, dict):
+        raise ValueError("the hook payload is not a JSON object")
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        raise ValueError("the hook payload has no tool_input object")
+    return tool_input
+
+
+def guard_write(payload: object) -> None:
+    tool_input = _tool_input(payload)
+    raw = tool_input.get("file_path") or tool_input.get("notebook_path")
+    if not isinstance(raw, str) or not raw:
+        raise ValueError("the write payload has no file_path/notebook_path string")
     rel = project_rel(resolve(str(raw), ROOT))
     if rel is None:
         return
@@ -525,11 +535,17 @@ def _git_alias(sub: str) -> str:
         text=True,
         check=False,
     )
-    return res.stdout.strip() if res.returncode == 0 else ""
+    if res.returncode == 0:
+        return res.stdout.strip()
+    if res.returncode == 1:  # the alias is not set
+        return ""
+    raise RuntimeError(f"git config alias.{sub} failed: {res.stderr.strip()}")  # fail closed (I9)
 
 
-def guard_bash(payload: dict[str, Any]) -> None:
-    command = str((payload.get("tool_input") or {}).get("command") or "")
+def guard_bash(payload: object) -> None:
+    command = _tool_input(payload).get("command")
+    if not isinstance(command, str):
+        raise ValueError("the Bash payload has no command string")
     if not command.strip():
         return
     found = BashAnalyzer(command).run()
@@ -922,7 +938,7 @@ def _run_guard(kind: str) -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except json.JSONDecodeError:
-        return 0  # not a hook payload: nothing to guard
+        payload = None  # fail closed (I9): an unreadable payload is a guard error
     try:
         (guard_write if kind == "write" else guard_bash)(payload)
     except Blocked as blocked:

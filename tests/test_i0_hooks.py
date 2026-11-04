@@ -63,13 +63,12 @@ def test_guard_write_is_alive_and_blocks_the_oracle(project: Project) -> None:
     assert project.run("guard_write.sh", payload).returncode == 2
 
 
-@pytest.mark.pins("I9")
 @pytest.mark.parametrize("stdin", MALFORMED)
-def test_guard_write_fails_open_on_a_malformed_payload_today(project: Project, stdin: str) -> None:
-    """Known wrong: a guard that cannot read its input lets the action through. I9 makes
-    it fail closed (blocking)."""
-    code, _ = _raw(project, "guard_write.sh", stdin)
-    assert code == 0
+def test_guard_write_fails_closed_on_a_malformed_payload(project: Project, stdin: str) -> None:
+    """I9: a guard that cannot read its input blocks the action (exit 2)."""
+    code, out = _raw(project, "guard_write.sh", stdin)
+    assert code == 2, out
+    assert "BLOCKED" in out
 
 
 # ── guard_bash.sh ────────────────────────────────────────────────────────────
@@ -83,11 +82,12 @@ def test_guard_bash_is_alive_and_blocks_a_claude_commit(project: Project) -> Non
     assert project.run("guard_bash.sh", bash_payload("git commit -m x")).returncode == 2
 
 
-@pytest.mark.pins("I9")
 @pytest.mark.parametrize("stdin", MALFORMED)
-def test_guard_bash_fails_open_on_a_malformed_payload_today(project: Project, stdin: str) -> None:
-    code, _ = _raw(project, "guard_bash.sh", stdin)
-    assert code == 0
+def test_guard_bash_fails_closed_on_a_malformed_payload(project: Project, stdin: str) -> None:
+    """I9: a guard that cannot read its input blocks the action (exit 2)."""
+    code, out = _raw(project, "guard_bash.sh", stdin)
+    assert code == 2, out
+    assert "BLOCKED" in out
 
 
 # ── post_write.sh (feedback only, never blocks) ──────────────────────────────
