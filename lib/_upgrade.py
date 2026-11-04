@@ -6,7 +6,15 @@ harness targets copied into their Makefile and the workflow rules copied into
 their CLAUDE.md, so later harness changes never reached them. After this
 migration they reach every project through the harness/ symlink.
 
-Usage: python3 _upgrade.py migrate <project>     (install.sh <project> --migrate)
+Usage: python3 _upgrade.py migrate <project> [--apply [--yes]]
+       python3 _upgrade.py rollback <project> <migration> [--apply [--yes]]
+       (install.sh <project> --migrate | --rollback <migration> [--apply] [--yes])
+
+Without --apply it is a dry-run: it prints the diff and writes nothing. It never
+creates, deletes or retargets a link: the expected links must already exist. An
+applied migration backs up every file under .harness/migrations/<id>/ and writes
+all files or none; --rollback <id> restores them and deletes the ones it created.
+--apply and --yes are for the human (Claude never runs them).
 
 Makefile: each harness-owned target (see harness.mk) defined in the project
 Makefile is removed when its recipe is identical to harness.mk's; any customised
@@ -21,14 +29,35 @@ of the project is touched. Running it again changes nothing.
 
 from __future__ import annotations
 
+import contextlib
+import difflib
+import hashlib
+import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from _status import say
 
-HARNESS_MK = Path(__file__).resolve().parent / "harness.mk"
+TOOLKIT = Path(__file__).resolve().parents[1]
+HARNESS_MK = TOOLKIT / "lib" / "harness.mk"
+# Links install.sh creates (directory shape); verified by the migration, never written.
+LINKS = {
+    ".claude/agents": "agents",
+    ".claude/codex": "codex",
+    ".claude/skills": "skills",
+    ".claude/settings.json": "settings.json",
+    "harness": "lib",
+}
+RECORD = Path(".harness/templates.json")
+MIGRATIONS = Path(".harness/migrations")
+EMPTY_RECORD: dict[str, Any] = {"migration_level": 0, "templates": {}}
+ALLOWED = {"Makefile", "CLAUDE.md", "AGENTS.md", "docs/plan/issues/README.md"}
 # docs/plan/issues/ turns the issues lane on (make status asks GitHub for the queue).
 ISSUES_README = Path(__file__).resolve().parents[1] / "templates/docs/plan/issues/README.md"
 ISSUES_DIR = Path("docs/plan/issues/README.md")
@@ -150,62 +179,253 @@ def _verify(root: Path) -> None:
         raise MigrationError(f"make -pn shows unexpected definitions: {', '.join(sorted(wrong))}")
 
 
-def _migrate_makefile(root: Path) -> bool:
-    path = root / "Makefile"
-    old = path.read_text("utf-8")
-    new = migrated_makefile(old)
-    if new is None:
-        return False
-    path.write_text(new, "utf-8")
-    try:
-        _verify(root)
-    except MigrationError:
-        path.write_text(old, "utf-8")
-        raise
-    return True
-
-
-def _migrate_docs(root: Path) -> list[str]:
-    changed = []
+def _planned_docs(root: Path) -> dict[str, str]:
+    """rel path -> new text of the docs the migration changes (nothing is written)."""
+    planned: dict[str, str] = {}
     claude = root / "CLAUDE.md"
     if claude.is_file() and IMPORT not in claude.read_text("utf-8").splitlines():
-        claude.write_text(f"{IMPORT}\n\n" + claude.read_text("utf-8"), "utf-8")
-        changed.append("CLAUDE.md")
+        planned["CLAUDE.md"] = f"{IMPORT}\n\n" + claude.read_text("utf-8")
     agents = root / "AGENTS.md"
     if agents.is_file() and "harness/WORKFLOW.md" not in agents.read_text("utf-8"):
-        agents.write_text(agents.read_text("utf-8").rstrip("\n") + "\n" + POINTER, "utf-8")
-        changed.append("AGENTS.md")
-    readme = root / ISSUES_DIR
-    if not readme.is_file():
-        readme.parent.mkdir(parents=True, exist_ok=True)
-        readme.write_text(ISSUES_README.read_text("utf-8"), "utf-8")
-        changed.append(ISSUES_DIR.as_posix())
-    return changed
+        planned["AGENTS.md"] = agents.read_text("utf-8").rstrip("\n") + "\n" + POINTER
+    if not (root / ISSUES_DIR).is_file():
+        planned[ISSUES_DIR.as_posix()] = ISSUES_README.read_text("utf-8")
+    return planned
 
 
-def migrate(root: Path) -> int:
-    if not (root / "harness" / "harness.mk").is_file():
-        raise MigrationError("harness/ is not linked in the project: run install.sh first")
+def _plan(root: Path) -> dict[str, str]:
+    """Every harness-owned file the migration would write, with its new text."""
+    planned: dict[str, str] = {}
+    new = migrated_makefile((root / "Makefile").read_text("utf-8"))
+    if new is not None:
+        planned["Makefile"] = new
+    planned.update(_planned_docs(root))
+    if planned and not (root / RECORD).is_file():
+        planned[RECORD.as_posix()] = json.dumps(EMPTY_RECORD, indent=2) + "\n"
+    return planned
+
+
+# ── links: verified, never written (plan 0.7, 0.11 d) ────────────────────────
+
+
+def expected_links(root: Path) -> dict[str, Path]:
+    """rel link path -> toolkit path it must resolve to. The single place the T2-S
+    resolver will extend to the per-skill shape (Track 2); today: directory shape."""
+    if (root / ".claude/skills").is_dir() and not (root / ".claude/skills").is_symlink():
+        raise MigrationError(
+            ".claude/skills is a real directory (per-skill shape): not supported until the "
+            "T2-S resolver exists; nothing was changed"
+        )
+    return {rel: TOOLKIT / target for rel, target in LINKS.items()}
+
+
+def check_links(root: Path) -> None:
+    wrong = []
+    for rel, target in expected_links(root).items():
+        path = root / rel
+        if not path.is_symlink():
+            wrong.append(f"{rel}: missing (expected a link to {target})")
+        elif path.resolve() != target.resolve():
+            wrong.append(f"{rel}: points to {os.readlink(path)} (expected {target})")
+    if wrong:
+        raise MigrationError(
+            "; ".join(wrong) + f" -- fix the links first (bash {TOOLKIT}/install.sh {root}),"
+            " the migration never changes links"
+        )
+
+
+def _claude_home() -> Path:
+    return Path(os.environ.get("CLAUDE_HOME") or Path.home() / ".claude")
+
+
+def link_snapshot(root: Path) -> dict[str, tuple[str, str]]:
+    """Type + exact (unresolved) target of every link in the project and ~/.claude."""
+    snap: dict[str, tuple[str, str]] = {}
+    for label, base in (("project", root), ("claude_home", _claude_home())):
+        if not base.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+            for name in dirnames + filenames:
+                path = Path(dirpath) / name
+                if path.is_symlink():
+                    snap[f"{label}:{path.relative_to(base).as_posix()}"] = (
+                        "link",
+                        os.readlink(path),
+                    )
+    return snap
+
+
+# ── transaction ──────────────────────────────────────────────────────────────
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _safe_target(root: Path, rel: str) -> Path:
+    """Allow-listed path whose own entry and parents inside the project are not links."""
+    if rel not in ALLOWED and not rel.startswith(".harness/"):
+        raise MigrationError(f"{rel}: not a harness-owned file")
+    path = root / rel
+    for part in [path, *path.parents]:
+        if part == root:
+            break
+        if part.is_symlink():
+            raise MigrationError(f"{rel}: {part.relative_to(root)} is a link; refusing to write")
+    return path
+
+
+def _confirm(yes: bool, what: str) -> None:
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        raise MigrationError("no terminal to confirm: re-run with --yes (human only)")
+    if input(f"{what} [y/N] ").strip().lower() != "y":
+        raise MigrationError("not confirmed")
+
+
+def _diff(root: Path, planned: dict[str, str]) -> str:
+    out: list[str] = []
+    for rel, new in planned.items():
+        path = root / rel
+        old = path.read_text("utf-8") if path.is_file() else ""
+        out += difflib.unified_diff(
+            old.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            "/dev/null" if not path.exists() else f"a/{rel}",
+            f"b/{rel}",
+        )
+    return "".join(out)
+
+
+def _restore(root: Path, backup: Path, entries: dict[str, Any], done: list[str]) -> None:
+    for rel in reversed(done):
+        path = root / rel
+        if entries[rel]["existed"]:
+            shutil.copy2(backup / "files" / rel, path)
+        elif path.exists():
+            path.unlink()
+    for d in sorted(entries.get("__dirs__", []), reverse=True):
+        with contextlib.suppress(OSError):
+            (root / d).rmdir()
+
+
+def _apply(root: Path, planned: dict[str, str], name: str) -> Path:
+    """Write every planned file or none; returns the backup dir (kept)."""
+    targets = {rel: _safe_target(root, rel) for rel in planned}
+    before = link_snapshot(root)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = root / MIGRATIONS / f"{stamp}-{name}"
+    created_dirs = [
+        p.relative_to(root).as_posix()
+        for rel, t in targets.items()
+        for p in reversed(t.parents)
+        if root in p.parents and not p.exists() and not rel.startswith(".harness/")
+    ]
+    backup.mkdir(parents=True)
+    entries: dict[str, Any] = {}
+    for rel, path in targets.items():
+        entries[rel] = {"existed": path.is_file(), "new_sha256": _sha(planned[rel].encode())}
+        if path.is_file():
+            (backup / "files" / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup / "files" / rel)
+    entries["__dirs__"] = sorted(set(created_dirs))
+    manifest = {"migration": name, "status": "applying", "entries": entries}
+    (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
+    done: list[str] = []
+    tmps: list[Path] = []
+    try:
+        for rel, path in targets.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.m0a-tmp")
+            tmp.write_text(planned[rel], "utf-8")
+            tmps.append(tmp)
+        for rel, path in targets.items():
+            os.replace(path.with_name(f".{path.name}.m0a-tmp"), path)
+            done.append(rel)
+        if "Makefile" in planned:
+            _verify(root)
+        if link_snapshot(root) != before:
+            raise MigrationError("links changed during the migration")
+    except (OSError, MigrationError) as exc:
+        for tmp in tmps:
+            tmp.unlink(missing_ok=True)
+        _restore(root, backup, entries, done)
+        manifest["status"] = "failed"
+        (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
+        raise MigrationError(f"{exc}; every file restored (backup kept in {backup})") from exc
+    manifest["status"] = "applied"
+    (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
+    return backup
+
+
+def migrate(root: Path, apply: bool = False, yes: bool = False) -> int:
+    check_links(root)
     if not (root / "Makefile").is_file():
         raise MigrationError("the project has no Makefile")
-    changed = ["Makefile"] if _migrate_makefile(root) else []
-    changed += _migrate_docs(root)
-    if changed:
-        say("OK", f"migrated to the shared harness files: {', '.join(changed)}")
-    else:
+    planned = _plan(root)
+    if not planned:
         say("OK", "already migrated: nothing to change")
+        return 0
+    if not apply:
+        print(_diff(root, planned), end="")
+        say("OK", f"dry-run, nothing written; would change: {', '.join(planned)}")
+        print(f"to write it: bash {TOOLKIT}/install.sh {root} --migrate --apply")
+        return 0
+    _confirm(yes, f"write {', '.join(planned)}?")
+    backup = _apply(root, planned, "templates")
+    say("OK", f"migrated: {', '.join(planned)} (rollback: --rollback {backup.name})")
+    return 0
+
+
+def rollback(root: Path, name: str, apply: bool = False, yes: bool = False) -> int:
+    backup = root / MIGRATIONS / name
+    if "/" in name or not (backup / "manifest.json").is_file():
+        raise MigrationError(f"no migration named {name!r} in {MIGRATIONS}")
+    manifest = json.loads((backup / "manifest.json").read_text("utf-8"))
+    if manifest.get("status") != "applied":
+        raise MigrationError(f"{name} is {manifest.get('status')!r}, not applied")
+    entries: dict[str, Any] = manifest["entries"]
+    files = [rel for rel in entries if rel != "__dirs__"]
+    edited = []
+    for rel in files:
+        path = _safe_target(root, rel)
+        if not path.is_file() or _sha(path.read_bytes()) != entries[rel]["new_sha256"]:
+            edited.append(rel)
+    if edited:
+        raise MigrationError(
+            f"changed since the migration: {', '.join(edited)}; resolve by hand, nothing undone"
+        )
+    if not apply:
+        for rel in files:
+            say("OK", f"would {'restore' if entries[rel]['existed'] else 'delete'} {rel}")
+        print(f"to undo it: bash {TOOLKIT}/install.sh {root} --rollback {name} --apply")
+        return 0
+    _confirm(yes, f"undo {name}?")
+    before = link_snapshot(root)
+    _restore(root, backup, entries, files)
+    if link_snapshot(root) != before:
+        raise MigrationError("links changed during the rollback")
+    manifest["status"] = "rolled_back"
+    (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
+    say("OK", f"rolled back {name}: {', '.join(files)}")
     return 0
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[0] != "migrate":
-        print(__doc__, file=sys.stderr)
-        return 2
+    flags = {a for a in argv if a in ("--apply", "--yes")}
+    args = [a for a in argv if a not in flags]
+    apply, yes = "--apply" in flags, "--yes" in flags
     try:
-        return migrate(Path(argv[1]).resolve())
+        if len(args) == 2 and args[0] == "migrate":
+            return migrate(Path(args[1]).resolve(), apply, yes)
+        if len(args) == 3 and args[0] == "rollback":
+            return rollback(Path(args[1]).resolve(), args[2], apply, yes)
     except MigrationError as exc:
-        say("FAIL", f"migration refused, nothing changed: {exc}", sys.stderr)
+        say("FAIL", f"refused: {exc}", sys.stderr)
         return 1
+    print(__doc__, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
