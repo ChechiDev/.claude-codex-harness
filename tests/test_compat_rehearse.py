@@ -391,3 +391,27 @@ def test_record_problems_reports_a_wrong_level(tmp_path: Path) -> None:
     record = _applied_record(tmp_path)
     record["migration_level"] = 99
     assert any("migration_level" in p for p in mod.record_problems(record))
+
+
+# ── the check runs as C0 runs it (rh2: `make -s` hid nested make messages) ───
+
+
+def test_the_default_check_is_the_one_compat_run_uses() -> None:
+    mod = _driver_module()
+    assert mod.DEFAULT_CHECK.split() == ["make", "check"]
+
+
+def test_the_default_check_lets_nested_make_speak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A project test asserting on nested make output (codexion's no-relink check
+    looks for "Nothing to be done") must see it: no -s in MAKEFLAGS."""
+    monkeypatch.delenv("MAKEFLAGS", raising=False)
+    monkeypatch.delenv("MFLAGS", raising=False)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub/Makefile").write_text("all:\n.PHONY: all\n")
+    (tmp_path / "Makefile").write_text("check:\n\t$(MAKE) -C sub\n")
+    mod = _driver_module()
+    rehearsal = mod.Rehearsal(tmp_path, mod.DEFAULT_CHECK)
+    assert rehearsal.check("check-before"), rehearsal.steps
+    assert "Nothing to be done" in rehearsal.steps[-1]["output"]

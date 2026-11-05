@@ -6,7 +6,8 @@ Usage: python3 /toolkit/compat/_rehearse.py ROOT [--check-cmd CMD]
 Steps, in order; the first one that fails stops the rehearsal:
   snapshot          every file git sees (tracked + untracked, not ignored) with its
                     sha256, every link of the project and CLAUDE_HOME, info/exclude
-  check-before      CMD (default `make -s --no-print-directory check`); red here means
+  check-before      CMD (default `make check`, as `compat run`; no -s: MAKEFLAGS would
+                    silence nested make output a project test may assert on); red here means
                     the rehearsal proves nothing: verdict inconclusive
   dry-run           `_upgrade.py migrate ROOT`: must succeed and change nothing
   apply             `--apply --yes`: links identical, record at the current versions
@@ -39,7 +40,7 @@ import _templates  # noqa: E402
 import _upgrade  # noqa: E402
 
 UPGRADE = TOOLKIT / "lib" / "_upgrade.py"
-DEFAULT_CHECK = "make -s --no-print-directory check"
+DEFAULT_CHECK = "make check"
 # What a rollback is allowed to leave behind (path prefixes of the files snapshot).
 ROLLBACK_EXCEPTIONS: tuple[str, ...] = (_upgrade.MIGRATIONS.as_posix() + "/",)
 RECORD_STATES = ("installed", "nofile")

@@ -1185,7 +1185,7 @@ def _add_run_parsers(sub: Any) -> None:
     rh.add_argument("--image", required=True)
     rh.add_argument("--run-id")
     rh.add_argument("--timeout", type=int, default=1800)
-    rh.add_argument("--check-cmd", help="default: the driver's (make -s check)")
+    rh.add_argument("--check-cmd", help="default: the driver's (make check)")
     rp = sub.add_parser("report")
     rp.add_argument("results", type=Path)
     cl = sub.add_parser("cleanup")
