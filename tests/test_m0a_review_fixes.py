@@ -149,3 +149,74 @@ def test_a_record_missing_a_manifest_entry_is_refused(tmp_path: Path) -> None:
     assert "CLAUDE.md" in out and "missing" in out
     assert _snapshot(root) == before
     assert os.path.exists(record_path)
+
+
+# ── round 2 (codex_verdict_m0a_review2.md) ───────────────────────────────────
+
+
+def _fail_manifest_write(monkeypatch: pytest.MonkeyPatch, status: str) -> None:
+    """Make writing a manifest that carries `status` fail, however it is written
+    (directly or through a temp file)."""
+    real_text, real_bytes = Path.write_text, Path.write_bytes
+
+    def text(self: Path, data: str, *a: Any, **kw: Any) -> int:
+        if "manifest" in self.name and f'"{status}"' in data:
+            raise OSError(f"injected failure writing the {status} manifest")
+        return real_text(self, data, *a, **kw)
+
+    def raw(self: Path, data: bytes, *a: Any, **kw: Any) -> int:
+        if "manifest" in self.name and f'"{status}"'.encode() in data:
+            raise OSError(f"injected failure writing the {status} manifest")
+        return real_bytes(self, data, *a, **kw)
+
+    monkeypatch.setattr(Path, "write_text", text)
+    monkeypatch.setattr(Path, "write_bytes", raw)
+
+
+def test_a_failed_final_manifest_write_undoes_the_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _project(tmp_path)
+    for k, v in _env(root).items():
+        monkeypatch.setenv(k, v)
+    before = _files(root)
+    up = _upgrade()
+    _fail_manifest_write(monkeypatch, "applied")
+    assert up.main(["migrate", str(root), "--apply", "--yes"]) != 0
+    monkeypatch.undo()
+    assert _files(root) == before
+    for mig in _migrations(root):
+        manifest = json.loads((mig / "manifest.json").read_text())
+        assert manifest["status"] != "applied"
+
+
+def test_a_failed_final_manifest_write_undoes_the_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, mig = _applied(tmp_path)
+    for k, v in _env(root).items():
+        monkeypatch.setenv(k, v)
+    applied = _files(root)
+    up = _upgrade()
+    _fail_manifest_write(monkeypatch, "rolled_back")
+    assert up.main(["rollback", str(root), mig, "--apply", "--yes"]) != 0
+    monkeypatch.undo()
+    assert _files(root) == applied
+    manifest = json.loads((root / ".harness/migrations" / mig / "manifest.json").read_text())
+    assert manifest["status"] == "applied"  # still undoable later
+
+
+def test_a_linked_migration_dir_is_refused_by_rollback(tmp_path: Path) -> None:
+    root, mig = _applied(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / ".harness/migrations" / mig).rename(outside / mig)
+    (root / ".harness/migrations" / mig).symlink_to(outside / mig)
+    applied = _files(root)
+    manifest_before = (outside / mig / "manifest.json").read_text()
+    for args in ((), ("--apply", "--yes")):
+        res = _install(root, "--rollback", mig, *args)
+        assert res.returncode != 0, args
+        assert "link" in (res.stdout + res.stderr).lower(), args
+        assert _files(root) == applied, args
+    assert (outside / mig / "manifest.json").read_text() == manifest_before

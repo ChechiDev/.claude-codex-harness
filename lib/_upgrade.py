@@ -464,10 +464,11 @@ def _safe_target(root: Path, rel: str) -> Path:
     return path
 
 
-def _check_backup_dir(root: Path) -> None:
-    """.harness/ and .harness/migrations/ must be real dirs (or absent): a link there
-    would send the backups (and the record) outside the project."""
-    for rel in (MIGRATIONS.parent, MIGRATIONS):
+def _check_backup_dir(root: Path, name: str | None = None) -> None:
+    """.harness/, .harness/migrations/ and the migration's own dir must be real dirs
+    (or absent): a link there would read or write backups outside the project."""
+    rels = [MIGRATIONS.parent, MIGRATIONS] + ([MIGRATIONS / name] if name else [])
+    for rel in rels:
         if (root / rel).is_symlink():
             raise MigrationError(f"{rel.as_posix()} is a link; refusing (nothing was changed)")
 
@@ -493,6 +494,16 @@ def _diff(root: Path, planned: dict[str, str]) -> str:
             f"b/{rel}",
         )
     return "".join(out)
+
+
+def _write_manifest(backup: Path, manifest: dict[str, Any]) -> None:
+    """Atomic: the old manifest stays intact if the write fails."""
+    tmp = backup / ".manifest.json.m0a-tmp"
+    try:
+        tmp.write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
+        os.replace(tmp, backup / "manifest.json")
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _restore(root: Path, backup: Path, entries: dict[str, Any], done: list[str]) -> None:
@@ -528,7 +539,7 @@ def _apply(root: Path, planned: dict[str, str], name: str) -> Path:
             shutil.copy2(path, backup / "files" / rel)
     entries["__dirs__"] = sorted(set(created_dirs))
     manifest = {"migration": name, "status": "applying", "entries": entries}
-    (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
+    _write_manifest(backup, manifest)
     done: list[str] = []
     tmps: list[Path] = []
     try:
@@ -544,15 +555,14 @@ def _apply(root: Path, planned: dict[str, str], name: str) -> Path:
             _verify(root)
         if link_snapshot(root) != before:
             raise MigrationError("links changed during the migration")
+        _write_manifest(backup, {**manifest, "status": "applied"})
     except (OSError, MigrationError) as exc:
         for tmp in tmps:
             tmp.unlink(missing_ok=True)
         _restore(root, backup, entries, done)
-        manifest["status"] = "failed"
-        (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
+        with contextlib.suppress(OSError):  # stays "applying" (never "applied") if this fails
+            _write_manifest(backup, {**manifest, "status": "failed"})
         raise MigrationError(f"{exc}; every file restored (backup kept in {backup})") from exc
-    manifest["status"] = "applied"
-    (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
     return backup
 
 
@@ -614,15 +624,18 @@ def _put_back(root: Path, applied: dict[str, bytes | None]) -> None:
         os.replace(tmp, path)
 
 
-def _restore_all_or_nothing(
-    root: Path, backup: Path, entries: dict[str, Any], files: list[str]
-) -> None:
+def _restore_all_or_nothing(root: Path, backup: Path, manifest: dict[str, Any]) -> None:
+    """Restore every file and mark the manifest rolled_back, or put the applied
+    state back (the manifest stays "applied": the rollback can be retried)."""
+    entries: dict[str, Any] = manifest["entries"]
+    files = [rel for rel in entries if rel != "__dirs__"]
     applied = {rel: (root / rel).read_bytes() if (root / rel).is_file() else None for rel in files}
     before = link_snapshot(root)
     try:
         _restore(root, backup, entries, files)
         if link_snapshot(root) != before:
             raise MigrationError("links changed during the rollback")
+        _write_manifest(backup, {**manifest, "status": "rolled_back"})
     except (OSError, MigrationError) as exc:
         _put_back(root, applied)
         raise MigrationError(f"{exc}; the migrated files were put back, nothing undone") from exc
@@ -630,6 +643,8 @@ def _restore_all_or_nothing(
 
 def rollback(root: Path, name: str, apply: bool = False, yes: bool = False) -> int:
     backup = root / MIGRATIONS / name
+    if "/" not in name:
+        _check_backup_dir(root, name)
     if "/" in name or not (backup / "manifest.json").is_file():
         raise MigrationError(f"no migration named {name!r} in {MIGRATIONS}")
     manifest = json.loads((backup / "manifest.json").read_text("utf-8"))
@@ -637,7 +652,6 @@ def rollback(root: Path, name: str, apply: bool = False, yes: bool = False) -> i
         raise MigrationError(f"{name} is {manifest.get('status')!r}, not applied")
     entries: dict[str, Any] = manifest["entries"]
     files = [rel for rel in entries if rel != "__dirs__"]
-    _check_backup_dir(root)
     _check_backup_parts(backup, entries, files)
     edited = []
     for rel in files:
@@ -654,9 +668,7 @@ def rollback(root: Path, name: str, apply: bool = False, yes: bool = False) -> i
         print(f"to undo it: bash {TOOLKIT}/install.sh {root} --rollback {name} --apply")
         return 0
     _confirm(yes, f"undo {name}?")
-    _restore_all_or_nothing(root, backup, entries, files)
-    manifest["status"] = "rolled_back"
-    (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
+    _restore_all_or_nothing(root, backup, manifest)
     say("OK", f"rolled back {name}: {', '.join(files)}")
     return 0
 
