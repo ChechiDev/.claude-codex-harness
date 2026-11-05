@@ -60,7 +60,12 @@ echo "── 7. Integrity (src/ scope · sealed oracle · plan) ────"
 if ! python3 "$HARNESS_DIR/_guard.py" integrity; then EXIT=1; fi
 
 echo ""
-echo "── 8. Summary ──────────────────────────────────────────"
+echo "── 8. Migration level (copied harness files) ───────────"
+# WARN only (plan 0.7): never changes EXIT. Fixed with install.sh --migrate.
+python3 "$HARNESS_DIR/_upgrade.py" level "$PROJECT_DIR" || true
+
+echo ""
+echo "── 9. Summary ──────────────────────────────────────────"
 if [ $EXIT -eq 0 ]; then
   ok "Harness invariants OK."
 else

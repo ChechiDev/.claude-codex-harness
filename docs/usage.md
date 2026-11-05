@@ -192,22 +192,51 @@ harness/issue.sh resume              # after a `now` issue is merged: back to th
   `./harness/review_with_codex.sh issue-draft` → `DRAFT_APPROVED` → your OK →
   `harness/issue.sh publish`.
 
-## 9. Existing projects: move to the shared files (once)
+## 9. Existing projects: migrate the copied harness files
 
-Projects installed before `lib/harness.mk` and `lib/WORKFLOW.md` existed have
-the harness targets and rules copied in. Move each one once (it can loop over
-many projects):
+Copied files (`Makefile`, `CLAUDE.md`, `AGENTS.md`, `docs/plan/issues/README.md`)
+do not follow the toolkit; they change only through a migration. These commands
+are **human-only**: run them from your own shell, never ask Claude to run them.
 
 ```bash
-~/.claude-codex-harness/install.sh <project> --migrate
+~/.claude-codex-harness/install.sh <project> --migrate            # dry-run: diff only
+~/.claude-codex-harness/install.sh <project> --migrate --apply    # write (asks y/N)
+~/.claude-codex-harness/install.sh <project> --rollback <id>      # dry-run of the undo
+~/.claude-codex-harness/install.sh <project> --rollback <id> --apply
 ```
 
-It relinks the symlinks on this machine, removes the harness targets copied
-into the `Makefile` only when they are unchanged (a customised one stops it with
-nothing changed), adds `include harness/harness.mk` and `@harness/WORKFLOW.md`,
-and verifies the result with `make -pn`. Running it again changes nothing. After
-that, new harness targets and rules reach the project with no edit. The old
-rules copied into `CLAUDE.md` stay; trim them by hand if you want.
+- **Dry-run by default.** `--migrate` prints the diff of every file it would
+  write and touches nothing. `--yes` skips the y/N question (only for scripts
+  with no terminal, such as the C0 runner).
+- **Links are never touched.** The links (`.claude/agents`, `.claude/codex`,
+  `.claude/skills`, `.claude/settings.json`, `harness`) must already point into
+  the toolkit; a missing or wrong one stops the migration with the command to
+  fix it. A project whose `.claude/skills` is a real directory (per-skill links)
+  is not supported until Track 2.
+- **Only harness-owned parts.** `docs/plan/issues/README.md` is the harness's
+  whole file; in `Makefile`, `CLAUDE.md` and `AGENTS.md` only the harness
+  fragment is managed (the `include harness/harness.mk` block, the
+  `@harness/WORKFLOW.md` import, the WORKFLOW pointer). Your targets and text
+  are never compared nor rewritten. A customised harness part stops the whole
+  migration (a 3-way diff for a whole file); nothing is written. `src/`,
+  `tests/` and any other file are never written.
+- **All or nothing.** Every file is backed up first in
+  `.harness/migrations/<id>/`; any failure restores all of them. `--rollback
+  <id>` restores the backups and deletes the files the migration created, and
+  stops if one of them was edited since.
+- **The record** `.harness/templates.json` lists the version of each managed
+  file and the project's migration level. Commit it with the migrated files
+  (the migration never commits). The first migration of a project installed
+  before it registers what is there; unknown content stops it.
+- **Backups stay out of git.** Fresh installs add `.harness/migrations/` to the
+  generated `.gitignore`. In an existing project the migration adds
+  `/<path>/.harness/migrations/` to `.git/info/exclude` (local, not a project
+  file; your `.gitignore` is never edited; works in monorepo subdirs and
+  worktrees). Outside git nothing is written; add the entry yourself if you run
+  `git init` later.
+- **Migration level.** `make check` reports it; below the level the toolkit
+  requires it is a WARN (never a FAIL in this version) with the command to run.
+- Claude cannot write `.harness/` (guards).
 
 ## Checking that Codex really ran
 

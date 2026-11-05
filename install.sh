@@ -163,7 +163,7 @@ fi
 ( cd "$DEST" && python3 "$TOOLKIT/lib/sync_plan.py" >/dev/null )
 
 # --- .gitignore: secrets and build artifacts never reach a commit ---
-IGNORES=(.env)
+IGNORES=(.env .harness/migrations/)  # migration backups are machine-local (M0a)
 if [ "$TPL_LANG" = "c" ]; then
   IGNORES+=("*.o" "*.bin")
 else

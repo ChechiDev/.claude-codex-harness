@@ -58,6 +58,8 @@ LINKS = {
 RECORD = Path(".harness/templates.json")
 MIGRATIONS = Path(".harness/migrations")
 MIGRATION_LEVEL_RECORDED = 0  # level a migration by this toolkit leaves the project at
+# Raised only by the FAIL-promotion PR of a rule that needs a migration (plan 0.7).
+REQUIRED_MIGRATION_LEVEL = 0
 ALLOWED = {"Makefile", "CLAUDE.md", "AGENTS.md", "docs/plan/issues/README.md"}
 # docs/plan/issues/ turns the issues lane on (make status asks GitHub for the queue).
 ISSUES_README = Path(__file__).resolve().parents[1] / "templates/docs/plan/issues/README.md"
@@ -180,12 +182,130 @@ def _verify(root: Path) -> None:
         raise MigrationError(f"make -pn shows unexpected definitions: {', '.join(sorted(wrong))}")
 
 
+STATES = ("installed", "absent", "nofile")
+
+
+def _check_entry(tset: str, rel: str, entry: object) -> str | None:
+    """Why one record entry is invalid, or None."""
+    tpl = next((t for t in _templates.load(tset) if t.path == rel), None)
+    if tpl is None:
+        return f"{rel}: not a managed file"
+    if not isinstance(entry, dict):
+        return f"{rel}: entry is not an object"
+    if entry.get("id") != tpl.id or entry.get("mode") != tpl.mode:
+        return f"{rel}: id/mode do not match the manifest ({tpl.id}, {tpl.mode})"
+    state = entry.get("state")
+    if state not in STATES:
+        return f"{rel}: unknown state {state!r}"
+    return _check_installed(rel, tpl, entry) if state == "installed" else None
+
+
+def _check_installed(rel: str, tpl: _templates.Template, entry: dict[str, Any]) -> str | None:
+    version = entry.get("version")
+    if not isinstance(version, str) or version not in tpl.versions:
+        return f"{rel}: unknown version {version!r}"
+    if entry.get("sha256") != _templates.sha256(tpl.versions[version]):
+        return f"{rel}: sha256 does not match version {version}"
+    return None
+
+
 def _read_record(root: Path) -> dict[str, Any] | None:
+    """The validated record, None when absent. Raises MigrationError when invalid."""
     path = root / RECORD
     if not path.is_file():
         return None
-    data: dict[str, Any] = json.loads(path.read_text("utf-8"))
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise MigrationError(f"{RECORD} is not valid JSON ({exc}); resolve by hand") from exc
+    problems: list[str] = []
+    if not isinstance(data, dict):
+        raise MigrationError(f"{RECORD} is not a JSON object; resolve by hand")
+    level, tset, entries = data.get("migration_level"), data.get("set"), data.get("templates")
+    if not isinstance(level, int) or isinstance(level, bool) or level < 0:
+        problems.append(f"migration_level {level!r} is not a non-negative integer")
+    if tset not in _templates.SETS:
+        problems.append(f"set {tset!r} is not one of {', '.join(_templates.SETS)}")
+    if not isinstance(entries, dict):
+        problems.append("templates is not an object")
+    elif tset in _templates.SETS:
+        problems += [p for rel, e in entries.items() if (p := _check_entry(str(tset), rel, e))]
+    if problems:
+        raise MigrationError(f"{RECORD} is invalid: " + "; ".join(problems) + "; resolve by hand")
     return data
+
+
+# ── backups out of git (user decision A: .git/info/exclude) ──────────────────
+
+IGNORE_ENTRY = ".harness/migrations/"
+
+
+def _git(root: Path, *args: str) -> str | None:
+    res = subprocess.run(
+        ["git", "-C", str(root), *args], text=True, capture_output=True, check=False
+    )
+    return res.stdout.strip() if res.returncode == 0 else None
+
+
+def exclude_target(root: Path) -> tuple[Path, str] | None:
+    """(info/exclude file, anchored entry) for the repo holding root, None outside git."""
+    top, git_path = (
+        _git(root, "rev-parse", "--show-toplevel"),
+        _git(root, "rev-parse", "--git-path", "info/exclude"),
+    )
+    if not top or not git_path:
+        return None
+    rel = root.resolve().relative_to(Path(top).resolve()).as_posix()
+    prefix = "/" if rel == "." else f"/{rel}/"
+    path = Path(git_path) if Path(git_path).is_absolute() else root / git_path
+    return path.resolve(), prefix + IGNORE_ENTRY
+
+
+def _exclude_plan(root: Path) -> str:
+    target = exclude_target(root)
+    if target is None:
+        return (
+            f"not a git repo: backups in {IGNORE_ENTRY} are not ignored; if you run git init "
+            f"later, add {IGNORE_ENTRY} to .git/info/exclude before git add"
+        )
+    path, entry = target
+    present = path.is_file() and entry in path.read_text("utf-8").splitlines()
+    return f"{entry} already in {path}" if present else f"add {entry} to {path} (local, git-only)"
+
+
+def _add_exclude(root: Path) -> None:
+    target = exclude_target(root)
+    if target is None:
+        return
+    path, entry = target
+    text = path.read_text("utf-8") if path.is_file() else ""
+    if entry in text.splitlines():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sep = "" if not text or text.endswith("\n") else "\n"
+    path.write_text(f"{text}{sep}{entry}\n", "utf-8")
+
+
+# ── migration level: WARN only in M0a (plan 0.7) ─────────────────────────────
+
+
+def check_level(root: Path) -> int:
+    """Report the project's migration level; never fails (WARN only)."""
+    hint = f"bash {TOOLKIT}/install.sh {root} --migrate (dry-run first)"
+    try:
+        record = _read_record(root)
+    except MigrationError as exc:
+        say("WARN", f"{exc} -- see {hint}")
+        return 0
+    if record is None:
+        say("WARN", f"no {RECORD}: register the copied harness files with {hint}")
+        return 0
+    level = int(record["migration_level"])
+    if level < REQUIRED_MIGRATION_LEVEL:
+        say("WARN", f"migration level {level} < required {REQUIRED_MIGRATION_LEVEL}: run {hint}")
+    else:
+        say("OK", f"migration level {level} (required {REQUIRED_MIGRATION_LEVEL})")
+    return 0
 
 
 def _with_fragment(tpl: _templates.Template, text: str) -> str:
@@ -434,10 +554,14 @@ def migrate(root: Path, apply: bool = False, yes: bool = False) -> int:
     if not apply:
         print(_diff(root, planned), end="")
         say("OK", f"dry-run, nothing written; would change: {', '.join(planned)}")
+        say("OK", f"backups: {_exclude_plan(root)}")
         print(f"to write it: bash {TOOLKIT}/install.sh {root} --migrate --apply")
         return 0
     _confirm(yes, f"write {', '.join(planned)}?")
     backup = _apply(root, planned, "templates")
+    note = _exclude_plan(root)
+    _add_exclude(root)
+    say("OK" if not note.startswith("not a git") else "WARN", f"backups: {note}")
     say("OK", f"migrated: {', '.join(planned)} (rollback: --rollback {backup.name})")
     return 0
 
@@ -483,6 +607,8 @@ def main(argv: list[str]) -> int:
     try:
         if len(args) == 2 and args[0] == "migrate":
             return migrate(Path(args[1]).resolve(), apply, yes)
+        if len(args) == 2 and args[0] == "level":
+            return check_level(Path(args[1]).resolve())
         if len(args) == 3 and args[0] == "register" and args[2] in _templates.SETS:
             return register(Path(args[1]).resolve(), args[2])
         if len(args) == 3 and args[0] == "rollback":
