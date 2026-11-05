@@ -320,3 +320,74 @@ def test_host_refuses_a_reused_run_id(fake: dict[str, Path]) -> None:
     res = _host(fake, repo, "rh5")
     assert res.returncode == 1
     assert "in use" in res.stdout + res.stderr
+
+
+# ── evidence a reviewer can check from the saved report (Codex rh1 review) ───
+
+
+def test_the_report_carries_the_initial_and_final_snapshots(tmp_path: Path) -> None:
+    import hashlib
+
+    root = _project(tmp_path)
+    makefile_sha = hashlib.sha256((root / "Makefile").read_bytes()).hexdigest()
+    code, report = _drive(root, tmp_path)
+    assert code == 0, report
+    for key in ("initial", "final"):
+        snap = report[key]
+        assert snap["files"]["Makefile"] == makefile_sha, key
+        assert snap["links"]["project:harness"] == ["link", str(TOOLKIT / "lib")], key
+        assert snap["links"]["project:.claude/agents"] == ["link", str(TOOLKIT / "agents")]
+        assert "exclude" in snap
+
+
+def test_a_report_stopped_early_still_carries_the_initial_snapshot(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    _, report = _drive(root, tmp_path, check="false")
+    assert report["initial"]["files"]
+    assert report["final"] is None
+
+
+def _applied_record(tmp_path: Path) -> dict[str, Any]:
+    root = _project(tmp_path)
+    upgrade = TOOLKIT / "lib" / "_upgrade.py"
+    subprocess.run(
+        [sys.executable, str(upgrade), "migrate", str(root), "--apply", "--yes"],
+        check=True, capture_output=True, env=_env(tmp_path), stdin=subprocess.DEVNULL,
+    )  # fmt: skip
+    record: dict[str, Any] = json.loads((root / ".harness/templates.json").read_text())
+    return record
+
+
+def test_record_problems_accepts_the_record_a_migration_writes(tmp_path: Path) -> None:
+    mod = _driver_module()
+    assert mod.record_problems(_applied_record(tmp_path)) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "word"),
+    [("version", "0.0.0-old", "version"), ("sha256", "0" * 64, "sha256")],
+)
+def test_record_problems_reports_a_stale_version_or_hash(
+    tmp_path: Path, field: str, value: str, word: str
+) -> None:
+    mod = _driver_module()
+    record = _applied_record(tmp_path)
+    entry = next(e for e in record["templates"].values() if e["state"] == "installed")
+    entry[field] = value
+    problems = mod.record_problems(record)
+    assert problems and any(word in p for p in problems), problems
+
+
+def test_record_problems_reports_a_missing_template(tmp_path: Path) -> None:
+    mod = _driver_module()
+    record = _applied_record(tmp_path)
+    record["templates"].pop("Makefile")
+    problems = mod.record_problems(record)
+    assert any("Makefile" in p for p in problems), problems
+
+
+def test_record_problems_reports_a_wrong_level(tmp_path: Path) -> None:
+    mod = _driver_module()
+    record = _applied_record(tmp_path)
+    record["migration_level"] = 99
+    assert any("migration_level" in p for p in mod.record_problems(record))

@@ -35,6 +35,7 @@ from typing import Any
 TOOLKIT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLKIT / "lib"))
 
+import _templates  # noqa: E402
 import _upgrade  # noqa: E402
 
 UPGRADE = TOOLKIT / "lib" / "_upgrade.py"
@@ -114,6 +115,32 @@ def _exclude_diff(s0: Snapshot, s1: Snapshot, allowed: set[str]) -> list[str]:
     return diffs + [f"info/exclude: added {line!r}" for line in extra]
 
 
+def record_problems(record: dict[str, Any]) -> list[str]:
+    """The record a migration must leave: the toolkit's migration level and every
+    template of its set at the CURRENT version, with that version's sha256."""
+    problems: list[str] = []
+    if record.get("migration_level") != _upgrade.MIGRATION_LEVEL_RECORDED:
+        problems.append(f"migration_level {record.get('migration_level')!r}")
+    tset = record.get("set")
+    if tset not in _templates.SETS:
+        return [*problems, f"set {tset!r}: unknown"]
+    entries = record.get("templates")
+    if not isinstance(entries, dict):
+        return [*problems, "templates: not an object"]
+    for tpl in _templates.load(str(tset)):
+        entry = entries.get(tpl.path)
+        if not isinstance(entry, dict):
+            problems.append(f"{tpl.path}: missing from the record")
+        elif entry.get("state") not in RECORD_STATES:
+            problems.append(f"{tpl.path}: state {entry.get('state')!r}")
+        elif entry["state"] == "installed":
+            if entry.get("version") != tpl.current:
+                problems.append(f"{tpl.path}: version {entry.get('version')!r} != {tpl.current}")
+            if entry.get("sha256") != _templates.sha256(tpl.current_text):
+                problems.append(f"{tpl.path}: sha256 is not the current version's")
+    return problems
+
+
 # ── steps ────────────────────────────────────────────────────────────────────
 
 
@@ -123,6 +150,7 @@ class Rehearsal:
         self.check_cmd = check_cmd
         self.steps: list[dict[str, Any]] = []
         self.s0: Snapshot = {}
+        self.final: Snapshot | None = None
         self.migration = ""
         self.record: dict[str, Any] | None = None
         self.changed: list[str] = []
@@ -174,16 +202,10 @@ class Rehearsal:
             data = json.loads(path.read_text("utf-8"))
         except (OSError, ValueError) as exc:
             return [f"record {_upgrade.RECORD}: {exc}"]
-        if not isinstance(data, dict) or not isinstance(data.get("templates"), dict):
+        if not isinstance(data, dict):
             return [f"record {_upgrade.RECORD}: not a record object"]
         self.record = data
-        problems = []
-        if self.record.get("migration_level") != _upgrade.MIGRATION_LEVEL_RECORDED:
-            problems.append(f"migration_level {self.record.get('migration_level')!r}")
-        for rel, entry in self.record.get("templates", {}).items():
-            if entry.get("state") not in RECORD_STATES:
-                problems.append(f"record {rel}: state {entry.get('state')!r}")
-        return problems
+        return [f"record {p}" for p in record_problems(data)]
 
     def apply(self) -> bool:
         before = snapshot(self.root)
@@ -213,7 +235,7 @@ class Rehearsal:
 
     def rollback(self) -> bool:
         code, out = self._upgrade("rollback", str(self.root), self.migration, "--apply", "--yes")
-        final = snapshot(self.root)
+        final = self.final = snapshot(self.root)
         diffs = compare(self.s0, final, ROLLBACK_EXCEPTIONS)
         diffs += _exclude_diff(self.s0, final, {self.exclude_entry})
         if diffs:
@@ -243,6 +265,8 @@ class Rehearsal:
             "record": self.record,
             "exclude_entry": self.exclude_entry,
             "changed_by_apply": self.changed,
+            "initial": self.s0 or None,
+            "final": self.final,
             "steps": self.steps,
         }
 
