@@ -21,6 +21,11 @@ Subcommands:
                                          full compatibility run: baseline vs candidate on
                                          isolated copies; prints the JSON report; exit 1
                                          on any regression
+  rehearse-migration --project P ... --candidate C --origin O
+                                         M0a migration rehearsal on isolated copies: the
+                                         driver compat/_rehearse.py runs in the locked-down
+                                         container; prints the JSON report; exit 0 pass,
+                                         1 fail/error, 2 inconclusive; copies kept unless pass
   report RESULTS.json                    verdicts from raw baseline/candidate results
   cleanup --run-id ID                    remove ONLY containers/volumes labelled with ID
   purge-images --state DIR               remove ONLY recorded ids still labelled
@@ -926,13 +931,13 @@ def _remove_owned(plan: RunPlan, kind: str, name: str) -> str | None:
     return None if res.returncode == 0 else f"{kind} {name}: {res.stderr.strip()}"
 
 
-def _cleanup_created(plan: RunPlan) -> list[str]:
+def _cleanup_created(plan: RunPlan, suffixes: tuple[str, ...] = ("b", "c")) -> list[str]:
     """Remove ONLY what this run created: its named containers (normally already gone,
     --rm) and the volumes it recorded, each re-verified by this run's labels. Returns
     the failures, which turn the run into an error."""
     targets: list[tuple[str, str]] = []
     for index in range(len(plan.projects)):
-        for side in ("b", "c"):
+        for side in suffixes:
             sub = f"{plan.session}-{index}{side}"
             names = [f"{LABEL}-{sub}-check", *(f"{LABEL}-{sub}-deps-{p}" for p in PHASES)]
             targets += [("container", name) for name in names]
@@ -1003,6 +1008,115 @@ def run(plan: RunPlan) -> dict[str, Any]:
     return report
 
 
+# ── rehearse-migration: the M0a migration on copies (driver compat/_rehearse.py) ──
+
+REHEARSE_DRIVER = "/toolkit/compat/_rehearse.py"
+REHEARSE_VERDICTS = {"pass": 0, "fail": 1, "inconclusive": 2}
+
+
+def _driver_result(res: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """The driver's JSON report; verdict "error" when unreadable or inconsistent
+    with its exit code (never trust one without the other)."""
+    tail = (res.stdout + res.stderr)[-OUTPUT_KEEP:]
+    try:
+        report = json.loads(res.stdout)
+    except ValueError:
+        return {"verdict": "error", "exit": res.returncode, "output": tail}
+    verdict = report.get("verdict") if isinstance(report, dict) else None
+    if verdict not in REHEARSE_VERDICTS or REHEARSE_VERDICTS[verdict] != res.returncode:
+        return {"verdict": "error", "exit": res.returncode, "output": tail, "driver": report}
+    return {"verdict": verdict, "exit": res.returncode, "driver": report}
+
+
+def _rehearse_project(
+    plan: RunPlan, index: int, project: Path, check_cmd: str | None
+) -> dict[str, Any]:
+    """Copy, relink to /toolkit, prepare deps, run the driver in the container."""
+    sub = f"{plan.session}-{index}r"
+    dest = plan.scratch / plan.session / sub
+    install_root = copy_repo(project, dest)
+    repo_top = dest / git_toplevel(project.resolve()).resolve().name
+    workdir = install_root.relative_to(repo_top).as_posix() or "."
+    relink(install_root, plan.origin, "/toolkit")
+    uid, gid = os.getuid(), os.getgid()
+    deps = DepsSpec(
+        phase="init", run_id=sub, image=plan.image, docker_config=plan.docker_config,
+        volume=deps_volume(sub), repo=repo_top, workdir=workdir, session=plan.session,
+        uid=uid, gid=gid, timeout=plan.timeout,
+    )  # fmt: skip
+    volume = prepare_deps(deps, dest, plan.created_volumes)
+    command = ["python3", REHEARSE_DRIVER, _check_workdir(workdir)]
+    command += ["--check-cmd", check_cmd] if check_cmd else []
+    spec = RunSpec(
+        repo=repo_top, workdir=workdir, toolkit=plan.candidate, image=plan.image, run_id=sub,
+        docker_config=plan.docker_config, command=command, deps_volume=volume,
+        session=plan.session, uid=uid, gid=gid,
+    )  # fmt: skip
+    res = subprocess.run(
+        docker_argv(spec),
+        env=client_env(plan.docker_config, dict(os.environ)),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=plan.timeout,
+    )
+    return {**_driver_result(res), "copy": str(dest)}
+
+
+def _rehearse_one(
+    plan: RunPlan, index: int, project: Path, check_cmd: str | None
+) -> dict[str, Any]:
+    try:
+        return _rehearse_project(plan, index, project, check_cmd)
+    except (CompatError, OSError) as exc:
+        return {"verdict": "error", "output": f"[FAIL] compat rehearse: {exc}"}
+    except subprocess.TimeoutExpired:
+        # The docker client was killed; the container is removed by name in cleanup.
+        return {
+            "verdict": "error",
+            "output": f"[FAIL] compat rehearse: timeout after {plan.timeout}s",
+        }
+
+
+def rehearse(plan: RunPlan, check_cmd: str | None = None) -> dict[str, Any]:
+    """The migration rehearsal on isolated copies; run-scoped cleanup always happens.
+    Copies are kept for inspection unless every project passed."""
+    _check_run_id(plan.session)
+    preflight(plan.image, plan.docker_config)
+    _reserve(plan)
+    projects: dict[str, Any] = {}
+    try:
+        for index, project in enumerate(plan.projects):
+            projects[str(project)] = _rehearse_one(plan, index, project, check_cmd)
+    finally:
+        cleanup_errors = _cleanup_created(plan, ("r",))
+    verdicts = {name: res["verdict"] for name, res in projects.items()}
+    report: dict[str, Any] = {
+        "projects": projects,
+        "failures": [n for n, v in verdicts.items() if v in ("fail", "error")],
+        "inconclusive": [n for n, v in verdicts.items() if v == "inconclusive"],
+        "cleanup_errors": cleanup_errors,
+        "kept": [],
+        "run_id": plan.session,
+    }
+    session_dir = plan.scratch / plan.session
+    if report["failures"] or report["inconclusive"] or cleanup_errors:
+        report["kept"] = [str(session_dir)]
+    else:
+        failures: list[str] = []
+        shutil.rmtree(session_dir, onexc=lambda _f, path, exc: failures.append(f"{path}: {exc}"))
+        if failures:
+            cleanup_errors.append(f"scratch copies not fully removed: {failures[0]}")
+            report["kept"] = [str(session_dir)]
+    return report
+
+
+def rehearse_exit_code(report: dict[str, Any]) -> int:
+    if report["failures"] or report["cleanup_errors"]:
+        return 1
+    return 2 if report["inconclusive"] else 0
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -1064,6 +1178,14 @@ def _add_run_parsers(sub: Any) -> None:
     rn.add_argument("--image", required=True)
     rn.add_argument("--run-id")
     rn.add_argument("--timeout", type=int, default=1800)
+    rh = sub.add_parser("rehearse-migration")
+    rh.add_argument("--project", type=Path, action="append", required=True)
+    for name in ("--candidate", "--origin", "--scratch", "--docker-config"):
+        rh.add_argument(name, type=Path, required=True)
+    rh.add_argument("--image", required=True)
+    rh.add_argument("--run-id")
+    rh.add_argument("--timeout", type=int, default=1800)
+    rh.add_argument("--check-cmd", help="default: the driver's (make -s check)")
     rp = sub.add_parser("report")
     rp.add_argument("results", type=Path)
     cl = sub.add_parser("cleanup")
@@ -1121,6 +1243,16 @@ def _run_main(args: argparse.Namespace) -> int:
     elif args.cmd == "purge-images":
         print("\n".join(purge_images(args.state, args.docker_config)))
         return 0
+    elif args.cmd == "rehearse-migration":
+        plan = RunPlan(
+            projects=args.project, baseline=args.candidate, candidate=args.candidate,
+            origin=args.origin, image=args.image, docker_config=args.docker_config,
+            scratch=args.scratch, session=args.run_id or "m" + uuid.uuid4().hex[:10],
+            timeout=args.timeout,
+        )  # fmt: skip
+        report = rehearse(plan, args.check_cmd)
+        print(json.dumps(report, indent=2))
+        return rehearse_exit_code(report)
     else:
         plan = RunPlan(
             projects=args.project, baseline=args.baseline, candidate=args.candidate,
@@ -1148,7 +1280,7 @@ def main(argv: list[str] | None = None) -> int:
             preflight(args.image, args.docker_config)
         elif args.cmd == "build-image":
             print(build_image(args.tag, args.state, args.docker_config))
-        elif args.cmd in ("run", "report", "cleanup", "purge-images"):
+        elif args.cmd in ("run", "rehearse-migration", "report", "cleanup", "purge-images"):
             return _run_main(args)
         else:
             _deps_main(args)

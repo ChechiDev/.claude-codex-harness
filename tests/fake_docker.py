@@ -6,7 +6,9 @@ State: {"engine": "linux" | null, "images": {"<ref or id>": {inspect Config...}}
         "build_id": "sha256:...", "containers": {"<id>": {"<label>": "<value>"}},
         "volumes": {"<name>": {"<label>": "<value>"}}, "calls": [[...argv...]],
         "os": "Ubuntu 24.04" (docker info OperatingSystem), "run_exit": 0,
-        "run_stdout": "", "create_drops_labels": false}
+        "run_stdout": "", "create_drops_labels": false,
+        "run_match": "<arg>" (run_stdout/run_exit only for runs with that argument;
+        other runs print nothing and exit 0)}
 """
 
 from __future__ import annotations
@@ -102,7 +104,9 @@ def _volume_create(state: dict[str, Any], args: list[str]) -> int:
     return 0
 
 
-def _run(state: dict[str, Any]) -> int:
+def _run(state: dict[str, Any], args: list[str]) -> int:
+    if state.get("run_match") and state["run_match"] not in args:
+        return 0
     time.sleep(float(state.get("run_sleep", 0)))
     if state.get("run_freeze"):  # make a tree undeletable, to simulate a failed rmtree
         for dirpath, _, _ in os.walk(state["run_freeze"]):
@@ -121,7 +125,7 @@ def _named(state: dict[str, Any], args: list[str]) -> int | None:
         fails = bool(state.get("inspect_fails"))
         return _inspect_named(state["containers"], args[2], "container", fails)
     if args[:1] == ["run"]:
-        return _run(state)
+        return _run(state, args)
     if args[:2] == ["image", "rm"]:
         return _remove(state.setdefault("images", {}), args[2:])
     return None
