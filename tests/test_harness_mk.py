@@ -61,11 +61,25 @@ def _origins(root: Path) -> dict[str, str]:
     return found
 
 
+# The links install.sh creates: the migration only verifies them (M0a, #14).
+LINKS = {
+    ".claude/agents": "agents",
+    ".claude/codex": "codex",
+    ".claude/skills": "skills",
+    ".claude/settings.json": "settings.json",
+    "harness": "lib",
+}
+
+
 def _migrate(root: Path) -> subprocess.CompletedProcess[str]:
+    for rel, target in LINKS.items():
+        if not (root / rel).is_symlink():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).symlink_to(TOOLKIT / target)
     env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
     env["CLAUDE_HOME"] = str(root.parent / "claude-home")
     return subprocess.run(
-        ["bash", str(TOOLKIT / "install.sh"), str(root), "--migrate"],
+        ["bash", str(TOOLKIT / "install.sh"), str(root), "--migrate", "--apply", "--yes"],
         text=True,
         capture_output=True,
         check=False,

@@ -39,8 +39,13 @@ project must share lives in `lib/` and the copies only point to it:
 | `WORKFLOW.md`: leader role, rules, startup protocol, issues lane | `CLAUDE.md`: `@harness/WORKFLOW.md` + project context; `AGENTS.md`: a pointer |
 | `pr_template.md`, `issue_template.md` | (used by the harness scripts directly) |
 
-A project installed before this shape is moved to it once with
-`install.sh <project> --migrate` (`lib/_upgrade.py`, see [usage](usage.md)).
+Copied files change only through `install.sh <project> --migrate`
+(`lib/_upgrade.py`, see [usage](usage.md)): dry-run by default, `--apply` writes
+all-or-nothing with backups in `.harness/migrations/` and `--rollback`; links are
+verified, never written. `templates/MANIFEST.toml` (`lib/_templates.py`) versions
+each managed file (whole file, or only its harness fragment) with every released
+version kept in `templates/_bases/`; the project's `.harness/templates.json`
+records what it has and its migration level.
 
 ### Machine-level config (`link-global.sh`)
 

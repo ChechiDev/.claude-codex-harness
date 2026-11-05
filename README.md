@@ -151,8 +151,9 @@ make issue-new                                # draft a new issue (Codex reviews
 
 The workflow rules Claude follows are shared the same way: each project's
 `CLAUDE.md` imports `@harness/WORKFLOW.md`. A project installed before that
-moves to it once with `install.sh <project> --migrate` (see
-[usage](docs/usage.md)).
+moves to it with `install.sh <project> --migrate`: a dry-run by default,
+`--apply` to write (all-or-nothing, backed up, `--rollback <id>` to undo; it never
+touches links). Human-only; see [usage](docs/usage.md).
 
 ## Documentation
 

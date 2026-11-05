@@ -58,7 +58,7 @@ CONFIG_FILE = _config.CONFIG_FILE
 ConfigError = _config.ConfigError
 DEFAULT_SRC_DIRS = ("src", "include")
 # Roots besides the source dirs whose deletion destroys protected state.
-STATE_ROOTS = ("tests/acceptance", "progress")
+STATE_ROOTS = ("tests/acceptance", "progress", ".harness")
 SKIP_DIRS = {"node_modules", "site-packages"}
 # Gate verdicts (roadmap, phase, plan, code), their history, the task PR
 # narrative and every seal under progress/.
@@ -67,7 +67,9 @@ RE_CODEX_OWNED = re.compile(
     r"|progress/(roadmap_review|issue_draft_review)\.md"
     r"|progress/review_history/[^/]+\.md|progress/pr_[^/]+\.md"
     r"|progress/issue_migrations_[^/]+\.json|progress/oracle_migrations/[^/]+\.json"
-    r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+)$"
+    r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+"
+    # Migration record and backups (M0a): written only by the human-run migrator.
+    r"|\.harness(/.*)?)$"
 )
 
 MSG_ACCEPTANCE = (
@@ -358,7 +360,7 @@ INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
     r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_"
-    r"|pr_)"
+    r"|pr_)|\.harness\b"
 )
 RE_WRITE_CALL = re.compile(
     r"\b(write|write_text|write_bytes|unlink|remove|rename|replace|rmtree|truncate|chmod|"

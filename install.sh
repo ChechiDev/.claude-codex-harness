@@ -2,7 +2,8 @@
 # install.sh — installs the harness onto a target project (Model B).
 #
 #   install.sh <project-path> [--force] [--python <package-name>] [--src-dirs a,b]
-#   install.sh <project-path> --migrate   (once per existing project, see below)
+#   install.sh <project-path> --migrate [--apply] [--yes]   (existing project, see below)
+#   install.sh <project-path> --rollback <migration> [--apply] [--yes]
 #
 # --python delegates to lib/scaffold_python.sh (minimal Python layer) so the
 # project runs `make check` green without manual pyproject editing. install.sh
@@ -23,10 +24,13 @@
 # SHARED through the harness/ symlink: the harness Make targets (lib/harness.mk,
 # included by the copied Makefile) and the workflow rules (lib/WORKFLOW.md,
 # imported by the copied CLAUDE.md), so a change there reaches every project.
-# --migrate moves a project installed before that to this shape: it (re)links the
-# symlinks on this machine, drops the harness targets copied into its Makefile
-# (only when unchanged), adds the include and the import, and verifies the result
-# (lib/_upgrade.py). Idempotent; a customised harness target stops it untouched.
+# --migrate moves a project installed before that to this shape: it drops the
+# harness targets copied into its Makefile (only when unchanged), adds the include
+# and the import, and verifies the result (lib/_upgrade.py). It is a dry-run (diff
+# only) unless --apply; it never creates, deletes or retargets a link (the links
+# must already be right); an applied migration is all-or-nothing, backed up under
+# .harness/migrations/, and undone with --rollback <migration>. Human-only.
+# Idempotent; a customised harness target stops it untouched.
 #
 # --src-dirs writes harness.toml ([scope] src_dirs) for code outside src/.
 # Inside an existing repo (history, or a monorepo subdir) nothing is committed
@@ -38,6 +42,8 @@ TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${1:-}"; shift || true
 FORCE=0
 MIGRATE=0
+ROLLBACK=""
+APPLY=()          # --apply / --yes, passed to lib/_upgrade.py
 TPL_LANG="python"   # template set (python | c). Not LANG: that is the exported locale.
 PYPKG=""            # --python <pkg>: scaffold a Python layer (implies lang=python)
 CNAME=""            # --c <name>:     scaffold a C layer       (implies lang=c)
@@ -46,6 +52,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --force)  FORCE=1 ;;
     --migrate) MIGRATE=1 ;;
+    --rollback) shift; ROLLBACK="${1:-}"
+      [ -n "$ROLLBACK" ] || { echo "error: --rollback needs a migration id" >&2; exit 2; } ;;
+    --apply|--yes) APPLY+=("$1") ;;
     --lang)   shift; TPL_LANG="${1:-}" ;;
     --python) shift; PYPKG="${1:-}"; TPL_LANG="python" ;;
     --c)      shift; CNAME="${1:-}"; TPL_LANG="c" ;;
@@ -73,6 +82,20 @@ DEST="$(cd "$DEST" && pwd)"
 
 if [ "$TOOLKIT" = "$DEST" ]; then
   echo "error: the target cannot be the toolkit itself" >&2; exit 2
+fi
+
+# --- Migration / rollback of an existing project: no link, copy or commit step runs ---
+if [ "$MIGRATE" -eq 1 ] && [ -n "$ROLLBACK" ]; then
+  echo "error: --migrate and --rollback are exclusive" >&2; exit 2
+fi
+if [ "${#APPLY[@]}" -gt 0 ] && [ "$MIGRATE" -eq 0 ] && [ -z "$ROLLBACK" ]; then
+  echo "error: --apply/--yes only go with --migrate or --rollback" >&2; exit 2
+fi
+if [ "$MIGRATE" -eq 1 ]; then
+  exec python3 "$TOOLKIT/lib/_upgrade.py" migrate "$DEST" "${APPLY[@]}"
+fi
+if [ -n "$ROLLBACK" ]; then
+  exec python3 "$TOOLKIT/lib/_upgrade.py" rollback "$DEST" "$ROLLBACK" "${APPLY[@]}"
 fi
 
 . "$TOOLKIT/lib/_colors.sh"
@@ -104,11 +127,6 @@ link settings.json .claude/settings.json
 link lib           harness
 row "$GREEN" "[symlink]" "${LINKED[*]}"
 
-# --- Migration of an existing project (nothing else of the install runs) ---
-if [ "$MIGRATE" -eq 1 ]; then
-  exec python3 "$TOOLKIT/lib/_upgrade.py" migrate "$DEST"
-fi
-
 # --- Copies (customizable) ---
 copy CLAUDE.md          CLAUDE.md
 copy AGENTS.md          AGENTS.md
@@ -126,6 +144,9 @@ if [ -n "$SRC_DIRS" ]; then
     COPIED+=("harness.toml")
   fi
 fi
+# Versions of the harness-managed copied files (lib/_templates.py, M0a).
+python3 "$TOOLKIT/lib/_upgrade.py" register "$DEST" "$TPLSUB"
+COPIED+=(".harness/templates.json")
 [ ${#COPIED[@]} -gt 0 ] && row "$GREEN" "[copy]" "${COPIED[*]}"
 [ ${#KEPT[@]} -gt 0 ] && row "$ORANGE" "[SKIP]" "${KEPT[*]} (exist; --force to overwrite)"
 
@@ -142,7 +163,7 @@ fi
 ( cd "$DEST" && python3 "$TOOLKIT/lib/sync_plan.py" >/dev/null )
 
 # --- .gitignore: secrets and build artifacts never reach a commit ---
-IGNORES=(.env)
+IGNORES=(.env .harness/migrations/)  # migration backups are machine-local (M0a)
 if [ "$TPL_LANG" = "c" ]; then
   IGNORES+=("*.o" "*.bin")
 else
