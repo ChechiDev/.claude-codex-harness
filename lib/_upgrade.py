@@ -230,6 +230,11 @@ def _read_record(root: Path) -> dict[str, Any] | None:
         problems.append("templates is not an object")
     elif tset in _templates.SETS:
         problems += [p for rel, e in entries.items() if (p := _check_entry(str(tset), rel, e))]
+        problems += [
+            f"{t.path}: missing from the record"
+            for t in _templates.load(str(tset))
+            if t.path not in entries
+        ]
     if problems:
         raise MigrationError(f"{RECORD} is invalid: " + "; ".join(problems) + "; resolve by hand")
     return data
@@ -459,6 +464,14 @@ def _safe_target(root: Path, rel: str) -> Path:
     return path
 
 
+def _check_backup_dir(root: Path) -> None:
+    """.harness/ and .harness/migrations/ must be real dirs (or absent): a link there
+    would send the backups (and the record) outside the project."""
+    for rel in (MIGRATIONS.parent, MIGRATIONS):
+        if (root / rel).is_symlink():
+            raise MigrationError(f"{rel.as_posix()} is a link; refusing (nothing was changed)")
+
+
 def _confirm(yes: bool, what: str) -> None:
     if yes:
         return
@@ -545,6 +558,7 @@ def _apply(root: Path, planned: dict[str, str], name: str) -> Path:
 
 def migrate(root: Path, apply: bool = False, yes: bool = False) -> int:
     check_links(root)
+    _check_backup_dir(root)
     if not (root / "Makefile").is_file():
         raise MigrationError("the project has no Makefile")
     planned = _plan(root)
@@ -558,12 +572,60 @@ def migrate(root: Path, apply: bool = False, yes: bool = False) -> int:
         print(f"to write it: bash {TOOLKIT}/install.sh {root} --migrate --apply")
         return 0
     _confirm(yes, f"write {', '.join(planned)}?")
-    backup = _apply(root, planned, "templates")
     note = _exclude_plan(root)
-    _add_exclude(root)
+    try:  # before any project file: backups never appear unignored
+        _add_exclude(root)
+    except OSError as exc:
+        raise MigrationError(
+            f"cannot write the info/exclude entry ({exc}); nothing changed"
+        ) from exc
+    backup = _apply(root, planned, "templates")
     say("OK" if not note.startswith("not a git") else "WARN", f"backups: {note}")
     say("OK", f"migrated: {', '.join(planned)} (rollback: --rollback {backup.name})")
     return 0
+
+
+def _check_backup_parts(backup: Path, entries: dict[str, Any], files: list[str]) -> None:
+    """Every backed-up file is present and readable before anything is undone."""
+    missing = []
+    for rel in files:
+        if not entries[rel]["existed"]:
+            continue
+        try:
+            (backup / "files" / rel).read_bytes()
+        except OSError:
+            missing.append(rel)
+    if missing:
+        raise MigrationError(
+            f"backup incomplete or unreadable: {', '.join(missing)}; nothing undone"
+        )
+
+
+def _put_back(root: Path, applied: dict[str, bytes | None]) -> None:
+    """Write the applied state back (file contents in memory; None = was absent)."""
+    for rel, data in applied.items():
+        path = root / rel
+        if data is None:
+            path.unlink(missing_ok=True)
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.m0a-tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
+
+def _restore_all_or_nothing(
+    root: Path, backup: Path, entries: dict[str, Any], files: list[str]
+) -> None:
+    applied = {rel: (root / rel).read_bytes() if (root / rel).is_file() else None for rel in files}
+    before = link_snapshot(root)
+    try:
+        _restore(root, backup, entries, files)
+        if link_snapshot(root) != before:
+            raise MigrationError("links changed during the rollback")
+    except (OSError, MigrationError) as exc:
+        _put_back(root, applied)
+        raise MigrationError(f"{exc}; the migrated files were put back, nothing undone") from exc
 
 
 def rollback(root: Path, name: str, apply: bool = False, yes: bool = False) -> int:
@@ -575,6 +637,8 @@ def rollback(root: Path, name: str, apply: bool = False, yes: bool = False) -> i
         raise MigrationError(f"{name} is {manifest.get('status')!r}, not applied")
     entries: dict[str, Any] = manifest["entries"]
     files = [rel for rel in entries if rel != "__dirs__"]
+    _check_backup_dir(root)
+    _check_backup_parts(backup, entries, files)
     edited = []
     for rel in files:
         path = _safe_target(root, rel)
@@ -590,10 +654,7 @@ def rollback(root: Path, name: str, apply: bool = False, yes: bool = False) -> i
         print(f"to undo it: bash {TOOLKIT}/install.sh {root} --rollback {name} --apply")
         return 0
     _confirm(yes, f"undo {name}?")
-    before = link_snapshot(root)
-    _restore(root, backup, entries, files)
-    if link_snapshot(root) != before:
-        raise MigrationError("links changed during the rollback")
+    _restore_all_or_nothing(root, backup, entries, files)
     manifest["status"] = "rolled_back"
     (backup / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
     say("OK", f"rolled back {name}: {', '.join(files)}")
