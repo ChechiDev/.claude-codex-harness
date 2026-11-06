@@ -64,7 +64,9 @@ SKIP_DIRS = {"node_modules", "site-packages"}
 # narrative and every seal under progress/.
 RE_CODEX_OWNED = re.compile(
     r"^(progress/(plan_review|review|phase_review|issue_review)_[^/]+\.md"
-    r"|progress/(roadmap_review|issue_draft_review)\.md"
+    r"|progress/(roadmap_review|issue_draft_review|legacy_inventory_review)\.md"
+    # Sealed legacy inventory (M0b): written only by the human-run legacy_inventory.sh.
+    r"|progress/legacy_inventory\.json"
     r"|progress/review_history/[^/]+\.md|progress/pr_[^/]+\.md"
     r"|progress/issue_migrations_[^/]+\.json|progress/oracle_migrations/[^/]+\.json"
     r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+"
@@ -114,7 +116,8 @@ MSG_SHELL_OPAQUE = (
     "touching protected paths). Use the Edit/Write tools so the plan scope is enforced."
 )
 MSG_SEAL = (
-    "BLOCKED: sealing (acceptance tests, the approved roadmap or a phase) is done by the Codex "
+    "BLOCKED: sealing (acceptance tests, the approved roadmap, a phase or the legacy inventory) "
+    "is done by the Codex "
     "gate itself (or by the human in manual mode), never by Claude."
 )
 MSG_ATTRIBUTION = (
@@ -360,7 +363,7 @@ INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
     r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_"
-    r"|pr_)|\.harness\b"
+    r"|pr_|legacy_inventory)|\.harness\b"
 )
 RE_WRITE_CALL = re.compile(
     r"\b(write|write_text|write_bytes|unlink|remove|rename|replace|rmtree|truncate|chmod|"
@@ -368,14 +371,26 @@ RE_WRITE_CALL = re.compile(
     r"|open\([^)]*,\s*['\"][^'\"]*[wax+]"
 )
 
+SEALERS: dict[str, frozenset[str]] = {
+    "review_with_codex.sh": frozenset({"seal"}),
+    "_guard.py": frozenset({"seal"}),
+    "legacy_inventory.sh": frozenset({"create", "review", "seal"}),
+    "_legacy.py": frozenset({"create", "review", "seal"}),
+}
+
 
 def _is_seal(name: str, args: list[str]) -> bool:
-    """`review_with_codex.sh seal …` or `_guard.py seal …`, run directly or via python."""
-    if name in ("review_with_codex.sh", "_guard.py"):
-        return args[:1] == ["seal"]
-    if INTERPRETERS.match(name):
-        scripts = [i for i, a in enumerate(args) if os.path.basename(a) == "_guard.py"]
-        return any(args[i + 1 : i + 2] == ["seal"] for i in scripts)
+    """A sealing command, run directly or through a shell/python: `seal` of
+    review_with_codex.sh or _guard.py, and `create|review|seal` of the legacy
+    inventory (legacy_inventory.sh / _legacy.py; `verify` stays allowed)."""
+    if name in SEALERS:
+        return bool(args) and args[0] in SEALERS[name]
+    if name in SHELLS or INTERPRETERS.match(name):
+        return any(
+            i + 1 < len(args) and args[i + 1] in SEALERS[os.path.basename(a)]
+            for i, a in enumerate(args)
+            if os.path.basename(a) in SEALERS
+        )
     return False
 
 
