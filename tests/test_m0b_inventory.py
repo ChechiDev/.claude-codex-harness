@@ -744,3 +744,119 @@ def test_a_declared_spec_absent_at_the_commit_keeps_its_path(
     assert lib.is_legacy_unchanged(repo.root, "1.1.1") is True
     repo.write(MISSING_SPEC, "# appeared later\n")
     assert lib.is_legacy_unchanged(repo.root, "1.1.1") is False
+
+
+# ── Codex code review r1 (codex_verdict_m0b_review1.md) ──────────────────────
+
+
+def _sync(repo: Repo) -> None:
+    res = subprocess.run(
+        ["python3", "harness/sync_plan.py"],
+        cwd=repo.root,
+        env=repo.env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def _edit_spec(repo: Repo, rel: str, old: str, new: str) -> None:
+    path = repo.root / rel
+    text = path.read_text()
+    assert old in text
+    path.write_text(text.replace(old, new))
+    _sync(repo)
+
+
+def test_leaf_status_change_is_a_change(tmp_path: Path, lib: ModuleType) -> None:
+    repo = _basic(tmp_path)
+    _sealed(repo)
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is True
+    _edit_spec(repo, PHASE_SPEC, "- status: pending", "- status: in_progress")
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is False
+
+
+def test_leaf_declared_files_change_is_a_change(tmp_path: Path, lib: ModuleType) -> None:
+    repo = _basic(tmp_path)
+    _sealed(repo)
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is True
+    _edit_spec(repo, PHASE_SPEC, "- files:\n", "- files:\n  - src/app/extra.py\n")
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is False
+
+
+def test_leaf_spec_path_change_is_a_change(tmp_path: Path, lib: ModuleType) -> None:
+    repo = _basic(tmp_path)
+    _sealed(repo)
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is True
+    spec = repo.root / PHASE_SPEC
+    spec.rename(spec.with_name("1.1.1-renamed.md"))  # same content, new declared path
+    _sync(repo)
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is False
+
+
+def _edit_leaf_json(repo: Repo, sid: str, key: str, value: object) -> None:
+    """Only feature_list.json changes (what the harness reads); the spec is untouched."""
+    path = repo.root / "feature_list.json"
+    data = json.loads(path.read_text())
+    found = [
+        leaf for t in data["features"] for leaf in t.get("subtasks") or [] if leaf["id"] == sid
+    ]
+    assert len(found) == 1
+    found[0][key] = value
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("status", "done"), ("files", ["src/app/other.py"]), ("spec", "docs/plan/elsewhere.md")],
+)
+def test_leaf_change_only_in_feature_list_is_a_change(
+    tmp_path: Path, lib: ModuleType, key: str, value: object
+) -> None:
+    repo = _basic(tmp_path)
+    _sealed(repo)
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is True
+    _edit_leaf_json(repo, "1.1.1", key, value)
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is False
+
+
+def test_leaf_spec_moved_with_a_copy_left_behind_is_a_change(
+    tmp_path: Path, lib: ModuleType
+) -> None:
+    repo = _basic(tmp_path)
+    _sealed(repo)
+    spec = repo.root / PHASE_SPEC
+    spec.with_name("1.1.1-moved.md").write_text(spec.read_text())
+    _edit_leaf_json(repo, "1.1.1", "spec", str(Path(PHASE_SPEC).with_name("1.1.1-moved.md")))
+    assert lib.is_legacy_unchanged(repo.root, "1.1.1") is False
+
+
+REAPPROVALS = {
+    "01": ("progress/phase_review_01.md", "progress/plan_phase_01.sha256"),
+    "roadmap": ("progress/roadmap_review.md", "progress/plan_roadmap.sha256"),
+    "ISS-1": ("progress/issue_review_ISS-1.md", "progress/plan_issue_ISS-1.sha256"),
+    "issue_draft": ("progress/issue_draft_review.md", "progress/issue_draft.sha256"),
+}
+VERDICTS = {
+    "01": "PHASE_APPROVED",
+    "roadmap": "ROADMAP_APPROVED",
+    "ISS-1": "ISSUE_APPROVED",
+    "issue_draft": "DRAFT_APPROVED",
+}
+
+
+@pytest.mark.parametrize("item", list(REAPPROVALS))
+@pytest.mark.parametrize("which", ["review", "seal"])
+def test_plan_item_reapproved_with_same_content_is_a_change(
+    lrepo: Repo, lib: ModuleType, item: str, which: str
+) -> None:
+    _extend(lrepo)
+    _sealed(lrepo)
+    assert lib.is_legacy_unchanged(lrepo.root, item) is True
+    review, seal = REAPPROVALS[item]
+    if which == "review":  # a new gate run, same verdict, same approved content
+        lrepo.write(review, f"# Review (again)\n\n**Verdict:** {VERDICTS[item]}\n")
+    else:  # a new or different seal
+        lrepo.write(seal, "0" * 64 + "  resealed\n")
+    assert lib.is_legacy_unchanged(lrepo.root, item) is False

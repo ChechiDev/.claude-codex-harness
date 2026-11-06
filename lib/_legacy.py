@@ -136,15 +136,27 @@ def _leaf_entry(tree: Path, leaf: Item, approved_phases: set[str]) -> Item:
 
 
 def _approval(tree: Path, review: str, seal: str, approved: dict[str, str]) -> Item:
-    return {"verdict": _verdict(tree, review), "seal": _ref(tree, seal), "approved": approved}
+    return {
+        "verdict": _verdict(tree, review),
+        "review": _ref(tree, review),
+        "seal": _ref(tree, seal),
+        "approved": approved,
+    }
+
+
+def _approval_files(kind: str, item_id: str) -> tuple[str, str]:
+    """(review, seal) paths of a plan item: kind is phase, issue, roadmap or draft."""
+    return {
+        "phase": (f"progress/phase_review_{item_id}.md", f"progress/plan_phase_{item_id}.sha256"),
+        "issue": (f"progress/issue_review_{item_id}.md", f"progress/plan_issue_{item_id}.sha256"),
+        "roadmap": ("progress/roadmap_review.md", "progress/plan_roadmap.sha256"),
+        "draft": ("progress/issue_draft_review.md", "progress/issue_draft.sha256"),
+    }[kind]
 
 
 def _draft(tree: Path) -> Item | None:
-    draft, review, seal = (
-        "progress/issue_draft.md",
-        "progress/issue_draft_review.md",
-        ("progress/issue_draft.sha256"),
-    )
+    draft = "progress/issue_draft.md"
+    review, seal = _approval_files("draft", DRAFT_ID)
     digest = _sha_file(tree / draft)
     if digest is None:  # no draft: a review or seal left alone approves nothing
         return None
@@ -184,8 +196,7 @@ def build(tree: Path) -> Item:
     phases = {
         str(p["id"]): _approval(
             tree,
-            f"progress/phase_review_{p['id']}.md",
-            f"progress/plan_phase_{p['id']}.sha256",
+            *_approval_files("phase", str(p["id"])),
             _plan_seal.phase_entries(tree, str(p["id"])),
         )
         for p in data.get("phases", [])
@@ -195,16 +206,14 @@ def build(tree: Path) -> Item:
     issues = {
         str(i["id"]): _approval(
             tree,
-            f"progress/issue_review_{i['id']}.md",
-            f"progress/plan_issue_{i['id']}.sha256",
+            *_approval_files("issue", str(i["id"])),
             _plan_seal.issue_entries(tree, str(i["id"])),
         )
         for i in data.get("issues", [])
     }
     roadmap = _approval(
         tree,
-        "progress/roadmap_review.md",
-        "progress/plan_roadmap.sha256",
+        *_approval_files("roadmap", ROADMAP_ID),
         _plan_seal.roadmap_entries(tree),
     )
     return {
@@ -500,6 +509,8 @@ def _sha_of(ref: FileRef) -> str | None:
 
 def _leaf_evidence(entry: Item) -> Item:
     return {
+        "status": entry.get("status"),
+        "declared_files": list(entry.get("declared_files") or []),
         "spec": entry.get("spec"),
         "acceptance": list(entry.get("acceptance") or []),
         "seal": _sha_of(entry.get("seal")),
@@ -508,11 +519,25 @@ def _leaf_evidence(entry: Item) -> Item:
     }
 
 
-def _leaf_now(root: Path, entry: Item) -> Item:
+def _current_leaf(root: Path, sid: str) -> Item | None:
+    """The leaf as feature_list.json (what the harness reads) declares it now."""
+    try:
+        data: Item = json.loads((root / "feature_list.json").read_text(encoding="utf-8"))
+        found = [leaf for leaf in _harness.leaves(data) if str(leaf["id"]) == sid]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    return found[0] if len(found) == 1 else None
+
+
+def _leaf_now(root: Path, entry: Item) -> Item | None:
     sid = str(entry["id"])
-    spec = entry.get("spec")
+    leaf = _current_leaf(root, sid)
+    if leaf is None:
+        return None
     return {
-        "spec": _spec_ref(root, str(spec["path"])) if spec else None,
+        "status": leaf.get("status"),
+        "declared_files": list(leaf.get("files") or []),
+        "spec": _spec_ref(root, str(leaf.get("spec") or "")),
         "acceptance": _acceptance(root, sid),
         "seal": _sha_file(root / f"progress/acceptance_{sid}.sha256"),
         "plan_review": _sha_file(root / f"progress/plan_review_{sid}.md"),
@@ -528,8 +553,10 @@ def _draft_now(root: Path) -> dict[str, str]:
 
 def is_legacy_unchanged(root: Path, item_id: str) -> bool:
     """True only while ALL the item's recorded evidence is as recorded: same hashes, no
-    file gone, none that was absent (null) has appeared. Plan items compare with the seal
-    normalization (_plan_seal), so a `- status:` change alone is not a change."""
+    file gone, none that was absent (null) has appeared. A leaf also keeps the status,
+    declared files and spec path that feature_list.json gives it now. Plan items compare
+    their content with the seal normalization (_plan_seal), so a `- status:` change alone
+    is not a change, plus their review and seal files (a new approval is a change)."""
     entry = legacy_entry(root, item_id)
     if entry is None:
         return False
@@ -537,14 +564,19 @@ def is_legacy_unchanged(root: Path, item_id: str) -> bool:
     if item_id in data.get("leaves", {}):
         return bool(_leaf_evidence(entry) == _leaf_now(root, entry))
     if item_id == ROADMAP_ID:
-        now = _plan_seal.roadmap_entries(root)
+        kind, now = "roadmap", _plan_seal.roadmap_entries(root)
     elif item_id == DRAFT_ID:
-        now = _draft_now(root)
+        kind, now = "draft", _draft_now(root)
     elif item_id in data.get("phases", {}):
-        now = _plan_seal.phase_entries(root, item_id)
+        kind, now = "phase", _plan_seal.phase_entries(root, item_id)
     else:
-        now = _plan_seal.issue_entries(root, item_id)
-    return bool(now == entry["approved"])
+        kind, now = "issue", _plan_seal.issue_entries(root, item_id)
+    review, seal = _approval_files(kind, item_id)
+    return bool(
+        now == entry["approved"]
+        and _sha_file(root / review) == _sha_of(entry.get("review"))
+        and _sha_file(root / seal) == _sha_of(entry.get("seal"))
+    )
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
