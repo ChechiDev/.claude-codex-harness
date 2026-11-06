@@ -95,6 +95,32 @@ def test_verify_and_reads_stay_allowed(project: Project, cmd: str) -> None:
     assert res.returncode == 0, (cmd, res.stderr)
 
 
+# ── Codex code review r2: the `python -m` module form ────────────────────────
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "PYTHONPATH=harness python3 -m _legacy create --at HEAD",
+        "PYTHONPATH=harness python3 -m _legacy review",
+        "PYTHONPATH=harness python3 -m _legacy seal",
+        "cd harness && python3 -m _legacy seal",
+        "env PYTHONPATH=harness python -m _legacy seal",
+        "python3 -m _legacy seal",
+        "PYTHONPATH=harness python3 -m _guard seal 1.1.1",
+        "cd harness && python -m _guard seal roadmap",
+    ],
+)
+def test_claude_cannot_run_the_module_form(project: Project, cmd: str) -> None:
+    res = project.run("guard_bash.sh", bash_payload(cmd))
+    assert res.returncode == BLOCKED, (cmd, res.stderr)
+
+
+def test_the_module_form_of_verify_stays_allowed(project: Project) -> None:
+    res = project.run("guard_bash.sh", bash_payload("PYTHONPATH=harness python3 -m _legacy verify"))
+    assert res.returncode == 0, res.stderr
+
+
 # ── make check is unchanged without an inventory ─────────────────────────────
 
 

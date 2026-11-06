@@ -821,6 +821,32 @@ def test_leaf_change_only_in_feature_list_is_a_change(
     assert lib.is_legacy_unchanged(repo.root, "1.1.1") is False
 
 
+def _move_leaf(repo: Repo, sid: str, owner: str) -> None:
+    """Only feature_list.json changes: the leaf's task moves to phase 02, or the leaf
+    moves into a new issue ISS-9 (the owner the harness reads, _harness.leaves)."""
+    path = repo.root / "feature_list.json"
+    data = json.loads(path.read_text())
+    task = next(t for t in data["features"] if any(x["id"] == sid for x in t.get("subtasks") or []))
+    if owner == "phase":
+        task["phase"] = "02"
+    else:
+        leaf = next(x for x in task["subtasks"] if x["id"] == sid)
+        task["subtasks"].remove(leaf)
+        data.setdefault("issues", []).append({"id": "ISS-9", "subtasks": [leaf]})
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+@pytest.mark.parametrize("owner", ["phase", "issue"])
+def test_leaf_moved_to_another_owner_only_in_feature_list_is_a_change(
+    tmp_path: Path, lib: ModuleType, owner: str
+) -> None:
+    repo = _basic(tmp_path)
+    _sealed(repo)
+    assert lib.is_legacy_unchanged(repo.root, "1.1.2") is True  # baseline in approved 01
+    _move_leaf(repo, "1.1.2", owner)
+    assert lib.is_legacy_unchanged(repo.root, "1.1.2") is False
+
+
 def test_leaf_spec_moved_with_a_copy_left_behind_is_a_change(
     tmp_path: Path, lib: ModuleType
 ) -> None:

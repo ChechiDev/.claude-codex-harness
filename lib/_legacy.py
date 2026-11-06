@@ -510,6 +510,8 @@ def _sha_of(ref: FileRef) -> str | None:
 def _leaf_evidence(entry: Item) -> Item:
     return {
         "status": entry.get("status"),
+        "phase": entry.get("phase") or None,
+        "issue": entry.get("issue") or None,
         "declared_files": list(entry.get("declared_files") or []),
         "spec": entry.get("spec"),
         "acceptance": list(entry.get("acceptance") or []),
@@ -536,6 +538,8 @@ def _leaf_now(root: Path, entry: Item) -> Item | None:
         return None
     return {
         "status": leaf.get("status"),
+        "phase": leaf.get("phase") or None,
+        "issue": leaf.get("issue") or None,
         "declared_files": list(leaf.get("files") or []),
         "spec": _spec_ref(root, str(leaf.get("spec") or "")),
         "acceptance": _acceptance(root, sid),
@@ -554,9 +558,10 @@ def _draft_now(root: Path) -> dict[str, str]:
 def is_legacy_unchanged(root: Path, item_id: str) -> bool:
     """True only while ALL the item's recorded evidence is as recorded: same hashes, no
     file gone, none that was absent (null) has appeared. A leaf also keeps the status,
-    declared files and spec path that feature_list.json gives it now. Plan items compare
-    their content with the seal normalization (_plan_seal), so a `- status:` change alone
-    is not a change, plus their review and seal files (a new approval is a change)."""
+    owner (phase/issue), declared files and spec path that feature_list.json gives it
+    now. Plan items compare their content with the seal normalization (_plan_seal), so
+    a `- status:` change alone is not a change, plus their review and seal files (a
+    new approval is a change)."""
     entry = legacy_entry(root, item_id)
     if entry is None:
         return False

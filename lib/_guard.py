@@ -380,11 +380,16 @@ SEALERS: dict[str, frozenset[str]] = {
 
 
 def _is_seal(name: str, args: list[str]) -> bool:
-    """A sealing command, run directly or through a shell/python: `seal` of
+    """A sealing command, run directly, through a shell/python or as `python -m`: `seal` of
     review_with_codex.sh or _guard.py, and `create|review|seal` of the legacy
     inventory (legacy_inventory.sh / _legacy.py; `verify` stays allowed)."""
     if name in SEALERS:
         return bool(args) and args[0] in SEALERS[name]
+    if INTERPRETERS.match(name) and "-m" in args[:-1]:  # python -m _legacy seal
+        at = args.index("-m") + 1
+        module = f"{args[at]}.py"
+        if module in SEALERS:
+            return at + 1 < len(args) and args[at + 1] in SEALERS[module]
     if name in SHELLS or INTERPRETERS.match(name):
         return any(
             i + 1 < len(args) and args[i + 1] in SEALERS[os.path.basename(a)]
