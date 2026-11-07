@@ -214,6 +214,10 @@ def test_attached_module_flag_is_blocked(project: Project, flags: str, verb: str
         "PYTHONPATH=harness python -Im_guard seal roadmap",
         "PYTHONPATH=harness uv run python -Im_legacy seal",
         "PYTHONPATH=harness python3 -Z -m _legacy seal",  # unknown short flag: fail-closed
+        # Codex r5: fail-closed must also see a module name attached to -m
+        "PYTHONPATH=harness python3 -Z -m_legacy seal",
+        "PYTHONPATH=harness python3 --unknown -Im_legacy seal",
+        "PYTHONPATH=harness python3 -Z -m_guard seal 1.1.1",
     ],
 )
 def test_attached_module_flag_other_forms_are_blocked(project: Project, cmd: str) -> None:

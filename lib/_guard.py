@@ -334,6 +334,7 @@ UV_RUN_FLAGS = frozenset(
 )  # fmt: skip
 OPAQUE_FLAGS = frozenset({"-S", "--split-string"})  # env: the value is the command line
 RE_SEALER_NAME = re.compile(r"(^|[\s/'\"=])(_legacy|_guard|legacy_inventory|review_with_codex)\b")
+RE_SEALER_ANYWHERE = re.compile(r"(_legacy|_guard|legacy_inventory|review_with_codex)\b")
 
 
 def _skip_flags(
@@ -498,7 +499,7 @@ def _is_seal(name: str, args: list[str]) -> bool:
         return bool(args) and args[0] in SEALERS[name]
     if name.startswith("python") and INTERPRETERS.match(name):
         module, tail, unsure = _python_module(args)  # python -IBm_legacy seal
-        if unsure and RE_SEALER_NAME.search(" ".join(args)):
+        if unsure and RE_SEALER_ANYWHERE.search(" ".join(args)):  # also -m_legacy
             return True  # fail-closed: an unknown python flag may hide the module form
         if module is not None and f"{module}.py" in SEALERS:
             return bool(tail) and tail[0] in SEALERS[f"{module}.py"]
