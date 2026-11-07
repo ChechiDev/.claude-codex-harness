@@ -183,6 +183,58 @@ def test_wrapper_flags_with_harmless_commands_stay_allowed(project: Project, cmd
     assert res.returncode == 0, (cmd, res.stderr)
 
 
+# ── Codex code review r4: python short flags attached to -m ──────────────────
+
+
+@pytest.mark.parametrize("verb", ["create --at HEAD", "review", "seal"])
+@pytest.mark.parametrize(
+    "flags",
+    [
+        "-m_legacy",
+        "-Im_legacy",
+        "-IBm_legacy",
+        "-I -m_legacy",
+        "-Xdev -m_legacy",
+        "-X dev -Im_legacy",
+        "-W ignore -m_legacy",
+        "-Wignore -Em_legacy",
+        "-qm _legacy",
+    ],
+)
+def test_attached_module_flag_is_blocked(project: Project, flags: str, verb: str) -> None:
+    cmd = f"PYTHONPATH=harness python3 {flags} {verb}"
+    res = project.run("guard_bash.sh", bash_payload(cmd))
+    assert res.returncode == BLOCKED, (cmd, res.stderr)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "PYTHONPATH=harness python3 -m_guard seal 1.1.1",
+        "PYTHONPATH=harness python -Im_guard seal roadmap",
+        "PYTHONPATH=harness uv run python -Im_legacy seal",
+        "PYTHONPATH=harness python3 -Z -m _legacy seal",  # unknown short flag: fail-closed
+    ],
+)
+def test_attached_module_flag_other_forms_are_blocked(project: Project, cmd: str) -> None:
+    res = project.run("guard_bash.sh", bash_payload(cmd))
+    assert res.returncode == BLOCKED, (cmd, res.stderr)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "PYTHONPATH=harness python3 -m_legacy verify",
+        "PYTHONPATH=harness python3 -Im_legacy verify",
+        "python3 -Im pytest -q",
+        "python3 -X dev -c 'print(1)'",
+    ],
+)
+def test_attached_module_flag_harmless_forms_stay_allowed(project: Project, cmd: str) -> None:
+    res = project.run("guard_bash.sh", bash_payload(cmd))
+    assert res.returncode == 0, (cmd, res.stderr)
+
+
 # ── make check is unchanged without an inventory ─────────────────────────────
 
 

@@ -433,17 +433,75 @@ SEALERS: dict[str, frozenset[str]] = {
 }
 
 
+PY_NOVALUE_FLAGS = frozenset("bBdEhiIOPqsSuvVx?R")
+PY_VALUE_FLAGS = frozenset("XW")
+PY_LONG_VALUE_FLAGS = frozenset({"--check-hash-based-pycs"})
+PY_LONG_FLAGS = frozenset({"--help", "--version", "--help-env", "--help-xoptions", "--help-all"})
+
+
+def _py_short(arg: str) -> tuple[str, str]:
+    """Classify one combined short-flag token (`-IBm_legacy`).
+
+    Returns (kind, rest): kind is "m"/"c" (rest = attached value, may be empty),
+    "value" (an X/W flag; rest = attached value), "flags" or "unknown"."""
+    for j, ch in enumerate(arg[1:], start=1):
+        if ch in ("m", "c"):
+            return ch, arg[j + 1 :]
+        if ch in PY_VALUE_FLAGS:
+            return "value", arg[j + 1 :]
+        if ch not in PY_NOVALUE_FLAGS:
+            return "unknown", ""
+    return "flags", ""
+
+
+def _py_long(arg: str) -> int:
+    """Tokens a long python option consumes, or 0 if it is unknown."""
+    key = arg.split("=", 1)[0]
+    if key in PY_LONG_VALUE_FLAGS:
+        return 1 if "=" in arg else 2
+    return 1 if key in PY_LONG_FLAGS else 0
+
+
+def _python_module(args: list[str]) -> tuple[str | None, list[str], bool]:
+    """Parse python's options as CPython does: return (module of -m, its args, unsure).
+
+    Short flags may be combined (`-IBm_legacy`); `m` takes the rest of the token or the
+    next one; `X`/`W` take a value likewise. An unknown flag makes the result unsure."""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-", "--") or not arg.startswith("-"):
+            return None, [], False  # a script, stdin, or end of options
+        if arg.startswith("--"):
+            step = _py_long(arg)
+            if not step:
+                return None, [], True
+            i += step
+            continue
+        kind, rest = _py_short(arg)
+        if kind == "unknown":
+            return None, [], True
+        if kind in ("m", "c"):
+            if not rest and i + 1 >= len(args):
+                return None, [], False
+            value, tail = (rest, args[i + 1 :]) if rest else (args[i + 1], args[i + 2 :])
+            return (value, tail, False) if kind == "m" else (None, [], False)
+        i += 2 if kind == "value" and not rest else 1
+    return None, [], False
+
+
 def _is_seal(name: str, args: list[str]) -> bool:
     """A sealing command, run directly, through a shell/python or as `python -m`: `seal` of
     review_with_codex.sh or _guard.py, and `create|review|seal` of the legacy
     inventory (legacy_inventory.sh / _legacy.py; `verify` stays allowed)."""
     if name in SEALERS:
         return bool(args) and args[0] in SEALERS[name]
-    if INTERPRETERS.match(name) and "-m" in args[:-1]:  # python -m _legacy seal
-        at = args.index("-m") + 1
-        module = f"{args[at]}.py"
-        if module in SEALERS:
-            return at + 1 < len(args) and args[at + 1] in SEALERS[module]
+    if name.startswith("python") and INTERPRETERS.match(name):
+        module, tail, unsure = _python_module(args)  # python -IBm_legacy seal
+        if unsure and RE_SEALER_NAME.search(" ".join(args)):
+            return True  # fail-closed: an unknown python flag may hide the module form
+        if module is not None and f"{module}.py" in SEALERS:
+            return bool(tail) and tail[0] in SEALERS[f"{module}.py"]
     if name in SHELLS or INTERPRETERS.match(name):
         return any(
             i + 1 < len(args) and args[i + 1] in SEALERS[os.path.basename(a)]
