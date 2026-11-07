@@ -64,7 +64,9 @@ SKIP_DIRS = {"node_modules", "site-packages"}
 # narrative and every seal under progress/.
 RE_CODEX_OWNED = re.compile(
     r"^(progress/(plan_review|review|phase_review|issue_review)_[^/]+\.md"
-    r"|progress/(roadmap_review|issue_draft_review)\.md"
+    r"|progress/(roadmap_review|issue_draft_review|legacy_inventory_review)\.md"
+    # Sealed legacy inventory (M0b): written only by the human-run legacy_inventory.sh.
+    r"|progress/legacy_inventory\.json"
     r"|progress/review_history/[^/]+\.md|progress/pr_[^/]+\.md"
     r"|progress/issue_migrations_[^/]+\.json|progress/oracle_migrations/[^/]+\.json"
     r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+"
@@ -114,7 +116,8 @@ MSG_SHELL_OPAQUE = (
     "touching protected paths). Use the Edit/Write tools so the plan scope is enforced."
 )
 MSG_SEAL = (
-    "BLOCKED: sealing (acceptance tests, the approved roadmap or a phase) is done by the Codex "
+    "BLOCKED: sealing (acceptance tests, the approved roadmap, a phase or the legacy inventory) "
+    "is done by the Codex "
     "gate itself (or by the human in manual mode), never by Claude."
 )
 MSG_ATTRIBUTION = (
@@ -308,23 +311,78 @@ WRAPPERS = {"command", "builtin", "exec", "nohup", "time", "sudo", "nice", "stdb
 RE_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def strip_wrappers(words: list[str]) -> list[str]:
-    """Drop env assignments and transparent wrappers (env, command, uv run, …)."""
-    i = 0
+# Flags of `env` / `uv run` that take the next word as their value (the `--flag=value`
+# form is a single word). Any other flag is unknown: it may hide a value, so a command
+# behind it that names a sealer is blocked (fail-closed, see BashAnalyzer.run).
+ENV_VALUE_FLAGS = frozenset({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"})
+ENV_FLAGS = frozenset({"-i", "--ignore-environment", "-0", "--null", "-v", "--debug", "-"})
+UV_RUN_VALUE_FLAGS = frozenset(
+    {
+        "-p", "--python", "-w", "--with", "--with-editable", "--with-requirements",
+        "--project", "--directory", "--package", "--extra", "--group", "--only-group",
+        "--no-group", "--env-file", "--index", "--default-index", "--index-url",
+        "--extra-index-url", "-f", "--find-links", "--cache-dir", "--config-file",
+        "--python-preference", "--color",
+    }
+)  # fmt: skip
+UV_RUN_FLAGS = frozenset(
+    {
+        "--no-project", "--isolated", "--frozen", "--locked", "--no-sync", "--all-extras",
+        "--no-dev", "--dev", "-q", "--quiet", "-v", "--verbose", "--offline", "--no-cache",
+        "--active", "--no-env-file",
+    }
+)  # fmt: skip
+OPAQUE_FLAGS = frozenset({"-S", "--split-string"})  # env: the value is the command line
+RE_SEALER_NAME = re.compile(r"(^|[\s/'\"=])(_legacy|_guard|legacy_inventory|review_with_codex)\b")
+RE_SEALER_ANYWHERE = re.compile(r"(_legacy|_guard|legacy_inventory|review_with_codex)\b")
+
+
+def _skip_flags(
+    words: list[str], i: int, value_flags: frozenset[str], flags: frozenset[str]
+) -> tuple[int, bool]:
+    """Skip the flags of a wrapper from words[i]; True when one of them is unknown."""
+    unknown = False
+    while i < len(words) and words[i].startswith("-"):
+        flag = words[i].split("=", 1)[0]
+        unknown |= flag in OPAQUE_FLAGS or words[i].startswith("-S")  # value is a command
+        if "=" not in words[i] and flag in value_flags:
+            i += 2
+        else:
+            unknown |= flag not in value_flags and flag not in flags
+            i += 1
+    return i, unknown
+
+
+def strip_wrappers_checked(words: list[str]) -> tuple[list[str], bool]:
+    """Drop env assignments and transparent wrappers (env, command, uv run, …).
+    Also says whether a wrapper flag was unknown (its value may have been taken as the
+    command). `uv run -m mod` / `--module mod` becomes `python -m mod`."""
+    i, unknown = 0, False
     while i < len(words):
         word = words[i]
         name = os.path.basename(word)
         if RE_ASSIGNMENT.match(word) or name in WRAPPERS:
             i += 1
-        elif name == "env" or (name == "uv" and words[i + 1 : i + 2] == ["run"]):
-            i += 1 if name == "env" else 2
-            while i < len(words) and words[i].startswith("-"):
-                i += 1
+        elif name == "env":
+            i, unsure = _skip_flags(words, i + 1, ENV_VALUE_FLAGS, ENV_FLAGS)
+            unknown |= unsure
+        elif name == "uv" and words[i + 1 : i + 2] == ["run"]:
+            i, unsure = _skip_flags(
+                words, i + 2, UV_RUN_VALUE_FLAGS, UV_RUN_FLAGS | {"-m", "--module"}
+            )
+            unknown |= unsure
+            if words[i - 1 : i] in (["-m"], ["--module"]):
+                return ["python", "-m", *words[i:]], unknown
         elif name == "timeout" and i + 1 < len(words):
             i += 2
         else:
             break
-    return words[i:]
+    return words[i:], unknown
+
+
+def strip_wrappers(words: list[str]) -> list[str]:
+    """Drop env assignments and transparent wrappers (env, command, uv run, …)."""
+    return strip_wrappers_checked(words)[0]
 
 
 # ── Bash guard: analysis ─────────────────────────────────────────────────────
@@ -360,7 +418,7 @@ INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
     r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_"
-    r"|pr_)|\.harness\b"
+    r"|pr_|legacy_inventory)|\.harness\b"
 )
 RE_WRITE_CALL = re.compile(
     r"\b(write|write_text|write_bytes|unlink|remove|rename|replace|rmtree|truncate|chmod|"
@@ -368,14 +426,89 @@ RE_WRITE_CALL = re.compile(
     r"|open\([^)]*,\s*['\"][^'\"]*[wax+]"
 )
 
+SEALERS: dict[str, frozenset[str]] = {
+    "review_with_codex.sh": frozenset({"seal"}),
+    "_guard.py": frozenset({"seal"}),
+    "legacy_inventory.sh": frozenset({"create", "review", "seal"}),
+    "_legacy.py": frozenset({"create", "review", "seal"}),
+}
+
+
+PY_NOVALUE_FLAGS = frozenset("bBdEhiIOPqsSuvVx?R")
+PY_VALUE_FLAGS = frozenset("XW")
+PY_LONG_VALUE_FLAGS = frozenset({"--check-hash-based-pycs"})
+PY_LONG_FLAGS = frozenset({"--help", "--version", "--help-env", "--help-xoptions", "--help-all"})
+
+
+def _py_short(arg: str) -> tuple[str, str]:
+    """Classify one combined short-flag token (`-IBm_legacy`).
+
+    Returns (kind, rest): kind is "m"/"c" (rest = attached value, may be empty),
+    "value" (an X/W flag; rest = attached value), "flags" or "unknown"."""
+    for j, ch in enumerate(arg[1:], start=1):
+        if ch in ("m", "c"):
+            return ch, arg[j + 1 :]
+        if ch in PY_VALUE_FLAGS:
+            return "value", arg[j + 1 :]
+        if ch not in PY_NOVALUE_FLAGS:
+            return "unknown", ""
+    return "flags", ""
+
+
+def _py_long(arg: str) -> int:
+    """Tokens a long python option consumes, or 0 if it is unknown."""
+    key = arg.split("=", 1)[0]
+    if key in PY_LONG_VALUE_FLAGS:
+        return 1 if "=" in arg else 2
+    return 1 if key in PY_LONG_FLAGS else 0
+
+
+def _python_module(args: list[str]) -> tuple[str | None, list[str], bool]:
+    """Parse python's options as CPython does: return (module of -m, its args, unsure).
+
+    Short flags may be combined (`-IBm_legacy`); `m` takes the rest of the token or the
+    next one; `X`/`W` take a value likewise. An unknown flag makes the result unsure."""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-", "--") or not arg.startswith("-"):
+            return None, [], False  # a script, stdin, or end of options
+        if arg.startswith("--"):
+            step = _py_long(arg)
+            if not step:
+                return None, [], True
+            i += step
+            continue
+        kind, rest = _py_short(arg)
+        if kind == "unknown":
+            return None, [], True
+        if kind in ("m", "c"):
+            if not rest and i + 1 >= len(args):
+                return None, [], False
+            value, tail = (rest, args[i + 1 :]) if rest else (args[i + 1], args[i + 2 :])
+            return (value, tail, False) if kind == "m" else (None, [], False)
+        i += 2 if kind == "value" and not rest else 1
+    return None, [], False
+
 
 def _is_seal(name: str, args: list[str]) -> bool:
-    """`review_with_codex.sh seal …` or `_guard.py seal …`, run directly or via python."""
-    if name in ("review_with_codex.sh", "_guard.py"):
-        return args[:1] == ["seal"]
-    if INTERPRETERS.match(name):
-        scripts = [i for i, a in enumerate(args) if os.path.basename(a) == "_guard.py"]
-        return any(args[i + 1 : i + 2] == ["seal"] for i in scripts)
+    """A sealing command, run directly, through a shell/python or as `python -m`: `seal` of
+    review_with_codex.sh or _guard.py, and `create|review|seal` of the legacy
+    inventory (legacy_inventory.sh / _legacy.py; `verify` stays allowed)."""
+    if name in SEALERS:
+        return bool(args) and args[0] in SEALERS[name]
+    if name.startswith("python") and INTERPRETERS.match(name):
+        module, tail, unsure = _python_module(args)  # python -IBm_legacy seal
+        if unsure and RE_SEALER_ANYWHERE.search(" ".join(args)):  # also -m_legacy
+            return True  # fail-closed: an unknown python flag may hide the module form
+        if module is not None and f"{module}.py" in SEALERS:
+            return bool(tail) and tail[0] in SEALERS[f"{module}.py"]
+    if name in SHELLS or INTERPRETERS.match(name):
+        return any(
+            i + 1 < len(args) and args[i + 1] in SEALERS[os.path.basename(a)]
+            for i, a in enumerate(args)
+            if os.path.basename(a) in SEALERS
+        )
     return False
 
 
@@ -393,7 +526,9 @@ class BashAnalyzer:
         for simple in split_commands(self.raw if command is None else command):
             for target in simple.out_targets:
                 self._check(target, destructive=False)
-            words = strip_wrappers(simple.words)
+            words, unsure = strip_wrappers_checked(simple.words)
+            if unsure and RE_SEALER_NAME.search(" ".join(simple.words)):
+                raise Blocked(MSG_SEAL)  # fail-closed: an unknown wrapper flag may hide it
             if words:
                 self._command(words, depth)
         return self.found

@@ -289,6 +289,30 @@ implement, or only partly implements; that one is `pending`. After the
 approval, `status: baseline` is sealed: turning a subtask into baseline (or
 back) fails `make check`.
 
+## Legacy inventory
+
+On a project that already passed gates before a newer rule existed, the legacy
+inventory records what was approved or done at one commit, so later rules (I1, I4,
+I16) can tell old work from new. It is **human-only**: no make target, and Claude's
+hooks block `create`, `review` and `seal` (it may only run `verify` and read the files).
+
+```bash
+harness/legacy_inventory.sh create --at <commit>   # build from the tree at <commit>
+harness/legacy_inventory.sh review                 # Codex (read-only); needs network
+harness/legacy_inventory.sh seal                   # needs INVENTORY_APPROVED
+harness/legacy_inventory.sh verify                 # OK | WARN not created | FAIL <reason>
+```
+
+| File | Written by |
+|---|---|
+| `progress/legacy_inventory.json` | `create` (from `git archive <commit>`, never the working tree) |
+| `progress/legacy_inventory_review.md` | `review`, from the captured Codex output |
+| `progress/legacy_inventory.sha256` | `seal`, only if the review says `INVENTORY_APPROVED` for this exact JSON hash |
+
+The inventory is closed: `create` refuses while any of the three files exists, and
+nothing rewrites it. An item stops being legacy as soon as its files change. Without
+an inventory, `make check` is unchanged.
+
 ## Manual Codex mode
 
 With `HARNESS_CODEX_MODE=manual` (see [configuration](configuration.md)), each
