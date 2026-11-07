@@ -121,6 +121,68 @@ def test_the_module_form_of_verify_stays_allowed(project: Project) -> None:
     assert res.returncode == 0, res.stderr
 
 
+# ── Codex code review r3: wrapper flags that take a value ────────────────────
+
+WRAPPER_PREFIXES = [
+    "env -u DUMMY PYTHONPATH=harness",
+    "env --unset DUMMY PYTHONPATH=harness",
+    "env --unset=DUMMY PYTHONPATH=harness",
+    "env -C . PYTHONPATH=harness",
+    "env -S 'x' PYTHONPATH=harness",
+    "PYTHONPATH=harness uv run --python 3.12",
+    "PYTHONPATH=harness uv run --with pytest",
+    "PYTHONPATH=harness uv run --project . --python 3.12",
+    "PYTHONPATH=harness uv run -p 3.12",
+    "PYTHONPATH=harness uv run --unknown-flag value",  # fail-closed
+    "env --some-new-flag value PYTHONPATH=harness",  # fail-closed
+]
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "PYTHONPATH=harness uv run -m _legacy seal",
+        "PYTHONPATH=harness uv run --module _legacy create --at HEAD",
+        "PYTHONPATH=harness uv run --python 3.12 -m _guard seal 1.1.1",
+        "env -S 'python -m _legacy seal'",
+    ],
+)
+def test_uv_run_module_and_env_split_string_are_blocked(project: Project, cmd: str) -> None:
+    res = project.run("guard_bash.sh", bash_payload(cmd))
+    assert res.returncode == BLOCKED, (cmd, res.stderr)
+
+
+@pytest.mark.parametrize("verb", ["create --at HEAD", "review", "seal"])
+@pytest.mark.parametrize("prefix", WRAPPER_PREFIXES)
+def test_wrapper_flag_values_do_not_hide_the_module_form(
+    project: Project, prefix: str, verb: str
+) -> None:
+    cmd = f"{prefix} python -m _legacy {verb}"
+    res = project.run("guard_bash.sh", bash_payload(cmd))
+    assert res.returncode == BLOCKED, (cmd, res.stderr)
+
+
+@pytest.mark.parametrize("prefix", WRAPPER_PREFIXES[:9])
+def test_wrapper_flag_values_do_not_hide_guard_seal(project: Project, prefix: str) -> None:
+    cmd = f"{prefix} python -m _guard seal 1.1.1"
+    res = project.run("guard_bash.sh", bash_payload(cmd))
+    assert res.returncode == BLOCKED, (cmd, res.stderr)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "env -u DUMMY PYTHONPATH=harness python -m _legacy verify",
+        "PYTHONPATH=harness uv run --python 3.12 python -m _legacy verify",
+        "uv run --with pytest pytest -q",
+        "env -u DUMMY ls",
+    ],
+)
+def test_wrapper_flags_with_harmless_commands_stay_allowed(project: Project, cmd: str) -> None:
+    res = project.run("guard_bash.sh", bash_payload(cmd))
+    assert res.returncode == 0, (cmd, res.stderr)
+
+
 # ── make check is unchanged without an inventory ─────────────────────────────
 
 
