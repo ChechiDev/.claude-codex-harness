@@ -45,6 +45,7 @@ Commands:
 
 from __future__ import annotations
 
+import glob
 import json
 import re
 import subprocess
@@ -240,6 +241,14 @@ def read_verdict(path: Path) -> str:
 
 
 # ── plan rules ───────────────────────────────────────────────────────────────
+
+
+def acceptance_files(root: Path, leaf: str) -> list[Path]:
+    """The acceptance tests of a leaf: exact stem, since the glob alone also matches
+    longer ids (test_1.1.1.* finds test_1.1.1.2.py)."""
+    folder = root / "tests" / "acceptance"
+    found = folder.glob(f"test_{glob.escape(leaf)}.*")
+    return sorted(p for p in found if p.is_file() and p.stem == f"test_{leaf}")
 
 
 def _phase_leaves(pid: str) -> list[Item]:

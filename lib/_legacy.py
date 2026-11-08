@@ -100,13 +100,10 @@ def _verdict(tree: Path, rel: str) -> str | None:
 
 
 def _acceptance(tree: Path, sid: str) -> list[dict[str, str]]:
-    folder = tree / "tests" / "acceptance"
-    found = []
-    for path in sorted(folder.glob(f"test_{sid}*")):
-        if path.is_file() and (path.stem == f"test_{sid}" or path.stem.startswith(f"test_{sid}_")):
-            rel = path.relative_to(tree).as_posix()
-            found.append({"path": rel, "sha256": _sha_bytes(path.read_bytes())})
-    return found
+    return [
+        {"path": path.relative_to(tree).as_posix(), "sha256": _sha_bytes(path.read_bytes())}
+        for path in _harness.acceptance_files(tree, sid)
+    ]
 
 
 def _spec_ref(tree: Path, spec: str) -> Item | None:

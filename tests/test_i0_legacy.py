@@ -14,6 +14,7 @@ import pytest
 from i0_cycle import SID, git, hook
 from i0_legacy import BASELINE_SPEC, ORACLE, build_legacy, copy_legacy
 from i0_projects import Installed
+from test_m0b_inventory import Repo, _fake_codex, _sealed
 
 STATUS = "feature_list.json"
 
@@ -41,7 +42,9 @@ def _leaves(project: Installed) -> dict[str, str]:
 # ── the healthy legacy state ─────────────────────────────────────────────────
 
 
-def test_legacy_project_is_green_without_warnings(project: Installed) -> None:
+def test_legacy_project_is_green_without_warnings(project: Installed, tmp_path: Path) -> None:
+    """With its sealed legacy inventory (plan 0.6), as real projects will have it."""
+    _sealed(Repo(project.root, project.repo, _fake_codex(tmp_path, project.env)))
     code, out = _check(project)
     assert code == 0, out
     assert "[WARN]" not in out and "[FAIL]" not in out, out
@@ -80,7 +83,7 @@ def test_guard_keeps_the_legacy_oracle_read_only(project: Installed) -> None:
     ],
 )
 def test_a_missing_plan_seal_only_warns_today(project: Installed, seal: str, warning: str) -> None:
-    """Known wrong: an approved roadmap/phase without its seal is green (WARN only)."""
+    """I1 keeps this as WARN (plan 0.5); the later FAIL issue flips it."""
     (project.root / f"progress/{seal}.sha256").unlink()
     git(project, "commit", "-qam", f"drop {seal}")
     code, out = _check(project)
@@ -93,13 +96,14 @@ def test_a_missing_plan_seal_only_warns_today(project: Installed, seal: str, war
 def test_a_deleted_oracle_seal_of_a_done_leaf_passes_today(
     project: Installed, committed: bool
 ) -> None:
-    """Known wrong: the done leaf loses its oracle seal and the check counts 0 seals."""
+    """I1 reports the lost seal as WARN (plan 0.5); the later FAIL issue flips it."""
     (project.root / f"progress/acceptance_{SID}.sha256").unlink()
     if committed:
         git(project, "commit", "-qam", "drop the oracle seal")
     code, out = _check(project)
     assert code == 0, out
     assert "sealed acceptance tests intact (0 seal(s))" in out
+    assert f"acceptance tests of {SID} are not sealed" in out
 
 
 # ── I4: oracle execution integrity ───────────────────────────────────────────

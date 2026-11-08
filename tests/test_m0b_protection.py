@@ -239,10 +239,10 @@ def test_attached_module_flag_harmless_forms_stay_allowed(project: Project, cmd:
     assert res.returncode == 0, (cmd, res.stderr)
 
 
-# ── make check is unchanged without an inventory ─────────────────────────────
+# ── make check and a missing inventory (I1 is the first rule that reads it) ───────
 
 
-def test_make_check_does_not_mention_a_missing_inventory(project: Project) -> None:
+def _check_output(project: Project) -> str:
     env = {**os.environ, **project.env, "CLAUDE_PROJECT_DIR": str(project.root)}
     res = subprocess.run(
         ["bash", str(TOOLKIT / "lib/check.sh")],
@@ -253,8 +253,16 @@ def test_make_check_does_not_mention_a_missing_inventory(project: Project) -> No
         env=env,
         stdin=subprocess.DEVNULL,
     )
-    out = (res.stdout + res.stderr).replace(str(TOOLKIT), "<toolkit>")
-    assert "legacy" not in out.lower() and "inventory" not in out.lower(), out
+    return (res.stdout + res.stderr).replace(str(TOOLKIT), "<toolkit>").lower()
+
+
+def test_make_check_mentions_a_missing_inventory_only_with_a_seal_gap(project: Project) -> None:
+    assert _check_output(project).count("legacy inventory not created") == 1
+    assert project.run("review_with_codex.sh", None, "seal", "roadmap").returncode == 0
+    # The fixture approves phase 01 without a plan file, which is a gap too.
+    (project.root / "progress/phase_review_01.md").unlink()
+    out = _check_output(project)
+    assert "legacy" not in out and "inventory" not in out, out
 
 
 # ── docs ─────────────────────────────────────────────────────────────────────
