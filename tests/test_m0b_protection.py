@@ -259,6 +259,8 @@ def _check_output(project: Project) -> str:
 def test_make_check_mentions_a_missing_inventory_only_with_a_seal_gap(project: Project) -> None:
     assert _check_output(project).count("legacy inventory not created") == 1
     assert project.run("review_with_codex.sh", None, "seal", "roadmap").returncode == 0
+    # The fixture approves phase 01 without a plan file, which is a gap too.
+    (project.root / "progress/phase_review_01.md").unlink()
     out = _check_output(project)
     assert "legacy" not in out and "inventory" not in out, out
 

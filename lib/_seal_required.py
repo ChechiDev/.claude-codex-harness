@@ -15,6 +15,7 @@ from typing import Any
 
 import _harness
 import _legacy
+import _plan_seal
 
 Item = dict[str, Any]
 
@@ -108,18 +109,16 @@ def _check_leaf(root: Path, leaf: Item, out: Findings, exempt: Exemptions) -> No
         leaf["status"] == "done" or (leaf["status"] == "baseline" and _harness.complete(leaf))
     )
     approved = _harness.read_verdict(root / f"progress/plan_review_{sid}.md") == "PLAN_APPROVED"
-    tests = _harness.acceptance_files(root, sid)
-    if (root / manifest_rel(sid)).exists() or not (finished or (approved and tests)):
+    if not _harness.acceptance_files(root, sid):
+        if finished and not exempt(sid):
+            out.warnings.append(
+                f"leaf {sid} is {leaf['status']} with no acceptance test "
+                f"(add tests/acceptance/test_{sid}.py, then human: {SEAL_CMD} {sid})"
+            )
         return
-    if exempt(sid):
+    if (root / manifest_rel(sid)).exists() or not (finished or approved) or exempt(sid):
         return
-    if tests:
-        out.warnings.append(f"acceptance tests of {sid} are not sealed (human: {SEAL_CMD} {sid})")
-    else:
-        out.warnings.append(
-            f"leaf {sid} is {leaf['status']} with no acceptance test "
-            f"(add tests/acceptance/test_{sid}.py, then human: {SEAL_CMD} {sid})"
-        )
+    out.warnings.append(f"acceptance tests of {sid} are not sealed (human: {SEAL_CMD} {sid})")
 
 
 def _check_draft(root: Path, out: Findings, exempt: Exemptions) -> None:
@@ -143,6 +142,16 @@ def _check_draft(root: Path, out: Findings, exempt: Exemptions) -> None:
         )
 
 
+def _check_plan_files(root: Path, out: Findings, exempt: Exemptions) -> None:
+    """Never exempt: a legacy item that is unchanged still has its plan file."""
+    for item in _plan_seal.approved_without_plan_file(root):
+        exempt.gap_found = True
+        out.warnings.append(
+            f"{item} is approved but its plan file is missing (restore it from git, "
+            "or re-run its Codex gate and seal it)"
+        )
+
+
 def check(root: Path, exempt: Exemptions) -> Findings:
     """Every gap between the seals the state requires and the seals on disk."""
     out = Findings()
@@ -152,6 +161,7 @@ def check(root: Path, exempt: Exemptions) -> Findings:
         _check_leaf(root, leaf, out, exempt)
     _check_completeness(root, out, exempt)
     _check_draft(root, out, exempt)
+    _check_plan_files(root, out, exempt)
     if exempt.status == "WARN" and exempt.gap_found:
         out.warnings.append(
             "legacy inventory not created "

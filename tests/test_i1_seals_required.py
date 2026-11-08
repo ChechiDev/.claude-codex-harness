@@ -169,6 +169,54 @@ def test_baseline_leaf_of_unapproved_phase_is_not_reported(proj: Installed) -> N
     assert not _warned(res, "1.2.1"), res.stdout
 
 
+def test_done_leaf_with_empty_manifest_and_no_tests_warns(proj: Installed) -> None:
+    (proj.root / ORACLE).unlink()
+    (proj.root / ACC_SEAL).write_text("")
+    res = _integrity(proj)
+    assert res.returncode == 0, res.stdout
+    assert _warned(res, SID, "no acceptance test"), res.stdout
+
+
+def test_baseline_leaf_with_empty_manifest_and_no_tests_warns(proj: Installed) -> None:
+    _write(proj, "progress/acceptance_1.2.1.sha256", "")
+    res = _integrity(proj)
+    assert res.returncode == 0, res.stdout
+    assert _warned(res, "1.2.1", "no acceptance test"), res.stdout
+
+
+# ── A. approved items whose plan file is gone ────────────────────────────────
+
+
+PHASE_FILE = "docs/plan/phase-01-greetings.md"
+ISSUE_FILE = "docs/plan/issues/ISS-1-i1.md"
+
+
+@pytest.mark.parametrize("keep_seal", [False, True])
+def test_approved_phase_without_plan_file_warns(proj: Installed, keep_seal: bool) -> None:
+    (proj.root / PHASE_FILE).unlink()
+    if not keep_seal:
+        (proj.root / PHASE_SEAL).unlink()
+    res = _integrity(proj)
+    assert res.returncode == 1, res.stdout  # the roadmap seal already covers this file
+    assert _failed(res, PHASE_FILE, "removed"), res.stdout
+    assert _warned(res, "phase 01", "plan file"), res.stdout
+
+
+def test_approved_issue_without_plan_file_warns(proj: Installed) -> None:
+    _approved_issue(proj)
+    (proj.root / ISSUE_FILE).unlink()
+    res = _integrity(proj)
+    assert res.returncode == 0, res.stdout
+    assert _warned(res, "issue ISS-1", "plan file"), res.stdout
+
+
+def test_unapproved_issue_without_plan_file_is_not_reported(proj: Installed) -> None:
+    _approved_issue(proj)
+    (proj.root / "progress/issue_review_ISS-1.md").unlink()
+    (proj.root / ISSUE_FILE).unlink()
+    assert not _warned(_integrity(proj), "plan file")
+
+
 # ── B. manifest completeness ─────────────────────────────────────────────────
 
 

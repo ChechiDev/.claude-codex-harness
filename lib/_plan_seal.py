@@ -165,6 +165,25 @@ def _open_plan_gate_spec(root: Path) -> str | None:
     return next((str(s["spec"]) for s in _harness.leaves() if s["id"] == leaf), None)
 
 
+def approved_without_plan_file(root: Path) -> list[str]:
+    """Approved phases and issues of feature_list.json whose plan file is gone: `verify`
+    walks the plan files, so it never sees them."""
+    found = []
+    files = _phase_files(root)
+    for phase in _harness.phases():
+        pid = str(phase["id"])
+        verdict = _harness.read_verdict(root / _harness.phase_review(pid))
+        if pid not in files and verdict == "PHASE_APPROVED":
+            found.append(f"phase {pid}")
+    issue_files = _issue_files(root)
+    for issue in _harness.issues():
+        iid = str(issue["id"])
+        verdict = _harness.read_verdict(root / _harness.issue_review(iid))
+        if iid not in issue_files and verdict == "ISSUE_APPROVED":
+            found.append(f"issue {iid}")
+    return found
+
+
 def verify(root: Path, exempt: Callable[[str], bool] | None = None) -> tuple[list[str], list[str]]:
     """(problems, warnings) of the plan seals against docs/plan/ as it is now. `exempt`
     tells whether a missing seal of that item (roadmap, NN, ISS-n) is legacy (plan 0.6)."""
