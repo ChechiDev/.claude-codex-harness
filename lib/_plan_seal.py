@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import _harness
@@ -164,15 +165,19 @@ def _open_plan_gate_spec(root: Path) -> str | None:
     return next((str(s["spec"]) for s in _harness.leaves() if s["id"] == leaf), None)
 
 
-def verify(root: Path) -> tuple[list[str], list[str]]:
-    """(problems, warnings) of the plan seals against docs/plan/ as it is now."""
+def verify(root: Path, exempt: Callable[[str], bool] | None = None) -> tuple[list[str], list[str]]:
+    """(problems, warnings) of the plan seals against docs/plan/ as it is now. `exempt`
+    tells whether a missing seal of that item (roadmap, NN, ISS-n) is legacy (plan 0.6)."""
+    is_exempt = exempt or (lambda _: False)
     problems: list[str] = []
     warnings: list[str] = []
     gate = " (re-run its Codex gate: ./harness/review_with_codex.sh {})"
     if roadmap_manifest(root).is_file():
         for _, msg in _diff(read(roadmap_manifest(root)), roadmap_entries(root), "the roadmap"):
             problems.append(msg + gate.format("roadmap"))
-    elif _harness.read_verdict(root / _harness.ROADMAP_REVIEW) == "ROADMAP_APPROVED":
+    elif _harness.read_verdict(
+        root / _harness.ROADMAP_REVIEW
+    ) == "ROADMAP_APPROVED" and not is_exempt("roadmap"):
         warnings.append(
             "the roadmap is approved but not sealed (human: review_with_codex.sh seal roadmap)"
         )
@@ -180,7 +185,8 @@ def verify(root: Path) -> tuple[list[str], list[str]]:
     for pid in _phase_files(root):
         manifest = phase_manifest(root, pid)
         if not manifest.is_file():
-            if _harness.read_verdict(root / _harness.phase_review(pid)) == "PHASE_APPROVED":
+            approved = _harness.read_verdict(root / _harness.phase_review(pid))
+            if approved == "PHASE_APPROVED" and not is_exempt(pid):
                 warnings.append(
                     f"phase {pid} is approved but not sealed "
                     f"(human: review_with_codex.sh seal phase {pid})"
@@ -191,18 +197,23 @@ def verify(root: Path) -> tuple[list[str], list[str]]:
                 warnings.append(f"{msg}: its subtask is still in its plan gate")
             else:
                 problems.append(msg + gate.format(f"phase {pid}"))
-    _verify_issues(root, open_spec, problems, warnings)
+    _verify_issues(root, open_spec, problems, warnings, is_exempt)
     return problems, warnings
 
 
 def _verify_issues(
-    root: Path, open_spec: str | None, problems: list[str], warnings: list[str]
+    root: Path,
+    open_spec: str | None,
+    problems: list[str],
+    warnings: list[str],
+    is_exempt: Callable[[str], bool],
 ) -> None:
     gate = " (re-run its Codex gate: ./harness/review_with_codex.sh issue {})"
     for iid in _issue_files(root):
         manifest = issue_manifest(root, iid)
         if not manifest.is_file():
-            if _harness.read_verdict(root / _harness.issue_review(iid)) == "ISSUE_APPROVED":
+            approved = _harness.read_verdict(root / _harness.issue_review(iid))
+            if approved == "ISSUE_APPROVED" and not is_exempt(iid):
                 warnings.append(
                     f"issue {iid} is approved but not sealed "
                     f"(human: review_with_codex.sh seal issue {iid})"

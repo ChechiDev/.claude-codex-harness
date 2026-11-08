@@ -47,6 +47,7 @@ import _config
 import _harness
 import _migrate
 import _plan_seal
+import _seal_required
 from _attribution import RE_ATTRIBUTION
 from _status import say
 
@@ -784,10 +785,11 @@ def check_seals() -> int:
     rc = 0
     manifests = sorted((ROOT / "progress").glob("acceptance_*.sha256"))
     for manifest in manifests:
-        for line in manifest.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            digest, rel = line.split(maxsplit=1)
+        entries, malformed = _seal_required.read_manifest(manifest)
+        for problem in malformed:
+            say("FAIL", problem)
+            rc = 1
+        for rel, digest in entries.items():
             target = ROOT / rel
             if not target.is_file() or _sha256(target) != digest:
                 say(
@@ -796,25 +798,13 @@ def check_seals() -> int:
                     "acceptance tests are Codex-owned and must not change",
                 )
                 rc = 1
-    leaf = _current_leaf()
-    if (
-        leaf
-        and _harness.read_verdict(ROOT / f"progress/plan_review_{leaf}.md") == "PLAN_APPROVED"
-        and _acceptance_files(leaf)
-        and not (ROOT / _manifest_rel(leaf)).exists()
-    ):
-        say(
-            "WARN",
-            f"acceptance tests of {leaf} are not sealed "
-            f"(human: ./harness/review_with_codex.sh seal {leaf})",
-        )
-    if rc == 0:
+    if rc == 0 and not _seal_required.has_unlisted_tests(ROOT):
         say("OK", f"sealed acceptance tests intact ({len(manifests)} seal(s))")
     return rc
 
 
-def check_plan_seals() -> int:
-    problems, warnings = _plan_seal.verify(ROOT)
+def check_plan_seals(exempt: _seal_required.Exemptions) -> int:
+    problems, warnings = _plan_seal.verify(ROOT, exempt)
     for msg in problems:
         say("FAIL", msg)
     for msg in warnings:
@@ -866,8 +856,28 @@ def check_branch() -> int:
     return 0
 
 
+def check_required_seals(exempt: _seal_required.Exemptions) -> int:
+    """Seals the state requires (I1): gaps WARN first (plan 0.5)."""
+    findings = _seal_required.check(ROOT, exempt)
+    for msg in findings.problems:
+        say("FAIL", msg)
+    for msg in findings.warnings:
+        say("WARN", msg)
+    return 1 if findings.problems else 0
+
+
 def integrity() -> int:
-    return check_scope() | check_branch() | check_seals() | check_plan_seals()
+    exempt = _seal_required.Exemptions(ROOT)
+    rc = (
+        check_scope()
+        | check_branch()
+        | check_seals()
+        | check_plan_seals(exempt)
+        | check_required_seals(exempt)
+    )
+    if exempt.exempt:
+        say("OK", f"{len(exempt.exempt)} legacy item(s) exempt (legacy_inventory)")
+    return rc
 
 
 def setup_pending() -> int:
@@ -890,15 +900,22 @@ def setup_pending() -> int:
 
 
 def _acceptance_files(leaf: str) -> list[Path]:
-    return sorted((ROOT / "tests" / "acceptance").glob(f"test_{glob.escape(leaf)}.*"))
+    return _harness.acceptance_files(ROOT, leaf)
 
 
 def _manifest_rel(leaf: str) -> str:
     return f"progress/acceptance_{leaf}.sha256"
 
 
+def _is_approved_baseline(leaf: str) -> bool:
+    item = next((x for x in _harness.leaves() if str(x["id"]) == leaf), None)
+    return item is not None and item["status"] == "baseline" and _harness.complete(item)
+
+
 def seal(leaf: str) -> int:
-    if _harness.read_verdict(ROOT / f"progress/plan_review_{leaf}.md") != "PLAN_APPROVED":
+    baseline = _is_approved_baseline(leaf)
+    plan = _harness.read_verdict(ROOT / f"progress/plan_review_{leaf}.md")
+    if plan != "PLAN_APPROVED" and not baseline:
         say("FAIL", f"cannot seal {leaf}: its plan review is not PLAN_APPROVED", sys.stderr)
         return 1
     files = _acceptance_files(leaf)
@@ -913,6 +930,8 @@ def seal(leaf: str) -> int:
     lines = [f"{_sha256(f)}  {f.relative_to(ROOT).as_posix()}\n" for f in files]
     (ROOT / _manifest_rel(leaf)).write_text("".join(lines), encoding="utf-8")
     say("OK", f"sealed {len(files)} acceptance file(s) -> {_manifest_rel(leaf)}")
+    if baseline:
+        return 0  # no plan gate approved a spec change: its phase seal stays as it is
     spec, phase = _leaf_spec(leaf)
     if spec and _plan_seal.reseal_spec(ROOT, spec, phase):
         say("OK", f"re-sealed its approved spec {spec}")
