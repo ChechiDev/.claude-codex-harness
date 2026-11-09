@@ -49,7 +49,7 @@ case "$phase" in
   plan)    mkdir -p "$(dirname "$I0_ACCEPTANCE")"
            printf '%s' "$I0_ACCEPTANCE_BODY" > "$I0_ACCEPTANCE"
            verdict "progress/plan_review_$id.md" PLAN_APPROVED ;;
-  code)    verdict "progress/review_$id.md" APPROVED ;;
+  code)    verdict "progress/review_$id.md" "${I0_CODE_VERDICT:-APPROVED}" ;;
   doc)     sed -i 's/^- status: in_progress$/- status: done/' "$I0_SPEC"
            mkdir -p docs/reference
            cat > "docs/reference/$id-greet.md" <<DOC
