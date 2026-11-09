@@ -184,8 +184,12 @@ case "$PHASE" in
     VERDICT_FILE="progress/issue_draft_review.md"; SEAL_ARGS=(draft); SEAL_ON="DRAFT_APPROVED" ;;
   *)
     TARGET="subtask $ID, spec: $(python3 "$HARNESS_PY" spec "$ID" 2>/dev/null)"
-    VERDICT_FILE="progress/plan_review_$ID.md"; SEAL_ARGS=("$ID"); SEAL_ON="PLAN_APPROVED"
-    [ "$PHASE" = "plan" ] || SEAL_ON="" ;;
+    SEAL_ARGS=("$ID"); SEAL_ON=""
+    case "$PHASE" in
+      plan) VERDICT_FILE="progress/plan_review_$ID.md"; SEAL_ON="PLAN_APPROVED" ;;
+      code) VERDICT_FILE="progress/review_$ID.md" ;;
+      doc)  VERDICT_FILE="" ;;
+    esac ;;
 esac
 FEATURE_NAME="$(python3 "$HARNESS_PY" feature-name "$ID" 2>/dev/null)"
 
@@ -256,7 +260,7 @@ if [ "$MODE_EXEC" = "manual" ]; then
   printf 'codex exec'; printf ' %q' "${CODEX_ARGS[@]}"; echo
   echo "--- prompt ---"
   echo "$PROMPT"
-  echo "--- verdict file: $VERDICT_FILE ---"
+  [ -z "$VERDICT_FILE" ] || echo "--- verdict file: $VERDICT_FILE ---"
   if [ -n "$SEAL_ON" ]; then
     echo "--- after $SEAL_ON, seal what was approved (human only) ---"
     echo "./harness/review_with_codex.sh seal ${SEAL_ARGS[*]}"
