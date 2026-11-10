@@ -44,7 +44,9 @@ OK, roadmap approved. Break down phase 01 and run the phase gate.
 
 The leader writes the tasks into the phase file and one spec per subtask
 (`docs/plan/phase-01-<slug>/<N.M.K>-<slug>.md`: `files:` with 1-3 paths,
-acceptance criteria, description), then runs:
+or an empty `files:` only for a spec declaring
+`Test-only verification (no production behaviour change)`
+that changes no production file, acceptance criteria, description), then runs:
 
 ```bash
 ./harness/review_with_codex.sh phase 01
@@ -72,12 +74,13 @@ created from `main` for the first subtask of a task), sets the subtask to `in_pr
 
 | Produces | Check |
 |----------|-------|
-| `tests/acceptance/test_1.1.1.py`, one test per acceptance criterion, **red** | the tests match the spec |
+| `tests/acceptance/test_1.1.1.py`, one test per acceptance criterion, **red** (or already passing under a confirmed marker) | the tests match the spec |
 | `progress/plan_review_1.1.1.md` (`PLAN_APPROVED`) | the verdict line |
 | `progress/acceptance_1.1.1.sha256` | `sha256sum -c progress/acceptance_1.1.1.sha256` |
 
 `make check` is **red** from here until the code exists: the acceptance tests
-fail by design. The Stop hook reports it when the session pauses; that is
+fail by design, unless the spec declares a confirmed marker (structural refactor
+or test-only verification), whose tests may already pass. The Stop hook reports it when the session pauses; that is
 expected, not a harness fault.
 
 ## 4. Implement and code gate
@@ -389,7 +392,7 @@ instead, yourself, from a shell outside Claude:
 | `BLOCKED: there is no in_progress feature` on a `src/` write | no subtask started | let the leader start one (step 3) |
 | `BLOCKED: '<path>' is NOT in the declared 'files:'` | the code needs a file the plan did not declare | the leader adds it to the spec, `make plan`, and the plan gate runs again |
 | `[FAIL] … no longer matches its seal` | a sealed acceptance test or plan file changed | revert it, or re-run the gate that approved it |
-| `make check` red right after the plan gate | acceptance tests are red until the code exists | expected; continue to step 4 |
+| `make check` red right after the plan gate | acceptance tests are red until the code exists (unless under a confirmed marker) | expected; continue to step 4 |
 | The close says `blocked -> see progress/current.md` | Codex could not finish the close | fix the cause recorded there, then re-run `doc <N.M.K>` |
 | `<N.M.K> is already closed (status: done)` on `doc` | the close already ran (even if it looked interrupted) | do not close again; if only the PR is missing, `./harness/review_with_codex.sh pr <N.M>` |
 | `<N.M.K> has no APPROVED code review` on `doc` | the close needs the code gate first | run `./harness/review_with_codex.sh code <N.M.K>` |

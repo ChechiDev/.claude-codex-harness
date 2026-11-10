@@ -14,7 +14,7 @@ each project, so `git pull` here updates all of them.
 ```
 [leader]      discovery → PLAN.md + every phase      → [Codex] roadmap gate → you approve
 [leader]      break down one phase into subtasks      → [Codex] phase gate   → you approve
-per subtask:  [Codex] plan gate (writes acceptance tests, red)
+per subtask:  [Codex] plan gate (writes acceptance tests, red unless a confirmed marker)
               → [implementer] TDD until make verify is green
               → [Codex] code gate → [Codex] close: docs + status done + ONE commit
               → you approve the next subtask
@@ -122,7 +122,8 @@ cd /path/to/project && claude
    writes the roadmap and runs the roadmap gate.
 2. **Approve the roadmap:** `OK, break down phase 01 and run the phase gate.`
 3. **Approve the phase:** `OK, start the first subtask and run its plan gate.`
-   Codex writes the acceptance tests, which stay red until the code exists.
+   Codex writes the acceptance tests, which stay red until the code exists
+   (unless the spec declares a confirmed marker, whose tests may already pass).
 4. **Approve the plan:** `OK, launch the implementer, then the code gate.`
 5. **Approve the code:** `OK, run the close.` Codex documents the subtask and
    makes one commit on the task branch (`feat/<N.M>-<slug>`, or your team's

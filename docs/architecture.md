@@ -75,7 +75,7 @@ docs/plan/
   PLAN.md                               vision, goals, scope, architecture + generated index
   phase-NN-<slug>.md                    one per phase: title, goal, its tasks N.M
   phase-NN-<slug>/<N.M.K>-<slug>.md     one spec per subtask: status, layer, depends,
-                                        files (1-3), acceptance, description
+                                        files (1-3, or none if test-only), acceptance, description
 ```
 
 - **Every phase is planned up front** (title + goal), so the whole scope is
@@ -158,7 +158,7 @@ Enforced by the hooks in `settings.json` and by `make check`:
    `PLAN_APPROVED`. A review that merely mentions the word does not count.
 2. **Micro-tasks.** A write to `src/` (or `include/` for C headers, or the dirs
    in `harness.toml`, see [configuration](configuration.md)) must target
-   a file declared in the subtask's `files:` (1-3 files). Paths are resolved
+   a file declared in the subtask's `files:` (1-3 files; none for a test-only subtask). Paths are resolved
    (symlinks, `..`, `./`) before matching. Anything else is blocked until the
    plan is updated and re-approved.
 3. **The oracle is read-only.** Claude never writes to `tests/acceptance/` or

@@ -26,7 +26,10 @@ subagent) writes the code.
 - ✅ Plan by discovery (one question at a time) → PLAN.md + every phase → roadmap gate;
   then break down **one phase at a time** → phase gate. Stop for the user's OK at each level.
 - ✅ **Micro-tasks**: each subtask is one atomic unit and declares a `files:` list
-  of 1-3 production files. The harness blocks writes outside it.
+  of 1-3 production files. The harness blocks writes outside it. A non-baseline
+  subtask may have an empty `files:` only if its spec declares
+  `Test-only verification (no production behaviour change)` and it changes no
+  production file.
 
 ### Commit authorization (within the harness)
 
@@ -40,7 +43,7 @@ always the user's call.
 ### Startup protocol
 
 1. Read `AGENTS.md`, `docs/plan/PLAN.md`, `progress/current.md`.
-2. Run `make check`. If it fails, stop and report (red plan-gate oracles are expected).
+2. Run `make check`. If it fails, stop and report (red plan-gate oracles are expected, except those passing under a confirmed marker).
 3. Run `make status` and continue from its `Next:` line (flow in `.claude/agents/leader.md`).
 
 ### When the leader role does NOT apply

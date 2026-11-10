@@ -67,7 +67,9 @@ you do). For the current phase:
    `- ticket: <id>` (ask the user for the ids; `make check` fails without them).
 2. Write **one spec per subtask** in `docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`
    (format in `docs/plan/PLAN.md`): `status: pending`, `layer`, `depends`,
-   `files:` (1-3), `acceptance:` (observable criteria, one test path each:
+   `files:` (1-3) (or an empty `files:` only for a spec declaring
+   `Test-only verification (no production behaviour change)` that changes no
+   production file), `acceptance:` (observable criteria, one test path each:
    `tests/acceptance/test_<N.M.K>.<ext>`) and a `## Description`.
    New work is all `pending`. **You assign the ids.**
 3. `make plan` + `make check`, then the **phase gate**:
@@ -112,6 +114,9 @@ one subtask.
   (under `src/` or `include/`)** it will create/modify — **1 to 3 files**, no
   more. Annotate each with an inline comment (`# crea:` / `# modifica:`).
   Unit tests (`tests/unit/`) are the implementer's and are not declared here.
+- Exception for non-baseline subtasks: a subtask may have an empty `files:` only
+  if its spec declares `Test-only verification (no production behaviour change)`
+  and it changes no production file. Every write to `src/` stays blocked for it.
 - The `## Description` must make the scope unambiguous before any code.
 - The harness **enforces** this: `guard_write.sh` blocks any write to `src/` /
   `include/` outside the declared `files:`. If a file is missing, add it to the
@@ -139,7 +144,8 @@ If a unit of work would need more than ~3 files, split it into several subtasks.
    reviews the spec **and writes the acceptance tests**
    (`tests/acceptance/test_<N.M.K>.<ext>`), verdict in `progress/plan_review_<N.M.K>.md`:
    - `CHANGES_REQUESTED` → fix the spec, `make plan`, repeat.
-   - `PLAN_APPROVED` → continue (the tests are sealed; they are left red).
+   - `PLAN_APPROVED` → continue (the tests are sealed; they are left red, or already pass
+     under a confirmed marker).
 3. **Implementation.** Launch `subagent_type: "implementer"` for that subtask.
    It writes `progress/impl_<N.M.K>.md` and returns a reference.
 4. **Code gate — Codex.** `./harness/review_with_codex.sh code <N.M.K>`:

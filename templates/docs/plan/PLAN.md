@@ -85,7 +85,9 @@ Immutable value object that validates and normalizes an email address…
 - `layer` ∈ `domain | application | infrastructure | interfaces`.
 - `depends`: `none` or subtask ids (`1.1.1, 1.2.3`) that must be `done` first.
 - `files:` the **1-3 production files under `src/`** it creates/modifies (the
-  harness blocks writes outside them). Unit tests (`tests/unit/`) are not declared.
+  harness blocks writes outside them), or an empty `files:` only for a spec declaring
+  `Test-only verification (no production behaviour change)` that changes no
+  production file. Unit tests (`tests/unit/`) are not declared.
 - `acceptance:` observable criteria, one test each; Codex writes those tests.
 
 <!-- plan:index:start -->

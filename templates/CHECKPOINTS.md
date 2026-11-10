@@ -29,7 +29,7 @@
 - [ ] `make verify` green (ruff + strict mypy + pytest).
 - [ ] **SOLID / clean code**: single responsibility; no monster functions (ruff
       C90/PLR09xx caps pass); **DRY** — no duplicated logic, reuses what exists.
-- [ ] **Micro-task scope**: only the subtask's declared `files:` (1-3) were touched.
+- [ ] **Micro-task scope**: only the subtask's declared `files:` (1-3, or none for a confirmed test-only subtask) were touched.
 - [ ] No debug `print()`; structured logging.
 - [ ] Boundary validation (Pydantic v2 / serializers).
 - [ ] No concatenated SQL, no secrets in code, no logging of PII/tokens.

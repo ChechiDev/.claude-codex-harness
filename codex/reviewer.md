@@ -44,12 +44,16 @@ Common criteria (what a senior engineer would look at):
   `files:` declares the **1-3 production files (under `src/` or `include/`)** it creates/modifies.
   The accompanying `tests/unit/` are the implementer's and are **expected** — they
   do not need to be declared. Reject only when a subtask bundles several concerns
-  or touches `src/` files outside its declared `files:`.
+  or touches `src/` files outside its declared `files:`. The 1-3 limit has one
+  exception for non-baseline subtasks: a subtask may have an empty `files:` only
+  if its spec declares `Test-only verification (no production behaviour change)`
+  and it changes no production file.
 - **Toolchain**: never run `make check`, `make verify` or the tests yourself: your
   sandbox blocks local sockets, so test clients hang. The harness runs `make check`
   outside the sandbox before your session and the prompt gives you its exit code
   and log. It must be green **in `code` mode**. In `plan` mode the acceptance tests
-  you write are left **red** by design (see the plan-gate exception in `AGENTS.md`).
+  you write are left **red** by design (see the plan-gate exception in `AGENTS.md`),
+  except for the two declared markers described in `plan` mode.
 - Objective criteria from `docs/architecture.md`, `docs/conventions.md`, and `CHECKPOINTS.md`.
 - For **Python** projects the shared-standard skills apply: read `py-pytest`,
   `py-style`, `py-pydantic`, `py-typing` as authoritative. For **C** projects use
@@ -99,8 +103,15 @@ every subtask spec in `docs/plan/phase-NN-<slug>/` (format in `docs/plan/PLAN.md
 Check:
 - **Coverage**: the tasks deliver the phase goal; the subtasks deliver each task.
 - **Micro-task scope** (common criteria above) for **every** subtask: atomic,
-  1-3 declared `files:`, no bundled concerns, no file claimed by two subtasks
-  without an explicit `depends`.
+  1-3 declared `files:` (or the confirmed test-only exception below), no bundled
+  concerns, no file claimed by two subtasks without an explicit `depends`.
+- **`Structural refactor (no behaviour change)`**: if a spec claims it, confirm
+  nothing observable changes; its oracles are regression tests.
+- **`Test-only verification (no production behaviour change)`**: if a spec claims
+  it, confirm it changes no production file and nothing observable changes; its
+  oracles are regression tests. For non-baseline subtasks, an empty `files:` is
+  permitted only for a confirmed test-only claim; otherwise the 1-3 `files:` limit
+  applies.
 - **Dependencies**: `depends` form no cycles and follow the layers.
 - **Acceptance**: every subtask has observable criteria, one test path each
   (`tests/acceptance/test_<N.M.K>.<ext>`); no criterion that only an
@@ -163,6 +174,11 @@ Check:
   to change. The list is frozen by your approval.
 - **Structural refactor (no behaviour change)**: if a spec claims it, confirm
   nothing observable changes; its oracles are regression tests.
+- **Test-only verification (no production behaviour change)**: if a spec claims
+  it, confirm it changes no production file and nothing observable changes; its
+  oracles are regression tests. For non-baseline subtasks, an empty `files:` is
+  permitted only for a confirmed test-only claim; otherwise the 1-3 `files:` limit
+  applies.
 
 Verdict in `progress/issue_review_ISS-<n>.md`:
 
@@ -237,14 +253,27 @@ You do **two things**:
 1. **Review the subtask plan**: does the approach respect the layers? does it put
    domain logic in infra? is the test strategy real TDD? are ports/adapters missing?
    **Scope check (reject if it fails):** the subtask must be atomic (one
-   class/function/method) and declare a `files:` list of **1-3 files**; if it has
-   no `files:`, declares >3, or clearly bundles several units of work →
-   `CHANGES_REQUESTED` asking the leader to split it and declare the files.
+   class/function/method) and declare a `files:` list of **1-3 files**. For
+   non-baseline subtasks, an empty `files:` is permitted only when you confirm,
+   against the final spec, a `Test-only verification (no production behaviour change)`
+   claim. If `files:` is missing or empty without that confirmed claim, declares >3,
+   or the subtask clearly bundles several units of work → `CHANGES_REQUESTED` asking
+   the leader to split it and declare the files.
+
+   **Claims without a red state:** confirm them again against the final spec. For
+   `Structural refactor (no behaviour change)`, confirm nothing observable changes;
+   for the test-only marker, confirm it changes no production file and nothing
+   observable changes. In both cases the oracles are regression tests.
 2. **Write the acceptance tests** in `tests/acceptance/test_<N.M.K>.<ext>` (`.py`
    for Python, `.c` for C): black box, derived from the subtask's acceptance
    criteria, **not from any implementation** (none exists yet). They test
    observable behavior (the public API only, in C). These tests are the oracle;
    Claude cannot edit them. Leave them **red**.
+
+   Acceptance tests may already pass only when the spec declares
+   `Structural refactor (no behaviour change)` or
+   `Test-only verification (no production behaviour change)` and you confirmed that
+   claim. Never add a failing assertion just to obtain a red state.
 
    **Criterion↔test traceability (mandatory):** for each acceptance criterion
    `ACn`, write **exactly one** test `test_ac<n>_<slug>` and cite the criterion in
@@ -261,7 +290,7 @@ Verdict in `progress/plan_review_<N.M.K>.md`:
 - Layers / scope / test strategy: ...
 
 ## Acceptance tests (traceability)
-- AC1 → test_ac1_<slug>  (red)
+- AC1 → test_ac1_<slug>  (red, or passing under a confirmed marker)
 
 ## Requested changes (if CHANGES_REQUESTED)
 1. ...
@@ -282,7 +311,8 @@ Input: the files changed by the implementer (see `progress/impl_<N.M.K>.md`).
    Check **DRY/SOLID** actively (duplicated or misplaced logic → `CHANGES_REQUESTED`
    citing `file:line`).
 3. **Scope check**: the changed **`src/` files** must match the subtask's declared
-   `files:` (1-3). Unit tests under `tests/unit/` are expected and not part of the
+   `files:` (1-3, or none for a confirmed test-only subtask: then no production file may
+   change). Unit tests under `tests/unit/` are expected and not part of the
    declared scope. If the implementation touched **`src/`** files outside the plan
    → `CHANGES_REQUESTED`.
 4. Walk through `CHECKPOINTS.md` marking `[x]`/`[ ]` with a reason.
