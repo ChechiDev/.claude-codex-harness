@@ -28,7 +28,7 @@
 ## C4 — Quality and security
 - [ ] `make verify` green: warning-clean compile (`-Wall -Wextra -Werror -pedantic`) + tests.
 - [ ] **Clean code / SOLID**: single responsibility; no monster functions; **DRY**.
-- [ ] **Micro-task scope**: only the subtask's declared `files:` (1-3 under `src/`/`include/`) were touched.
+- [ ] **Micro-task scope**: only the subtask's declared `files:` (1-3 under `src/`/`include/`, or none for a confirmed test-only subtask) were touched.
 - [ ] Explicit error handling; every allocation checked and freed on all paths (no leaks).
 - [ ] Bounds-checked buffers (no `gets`/unbounded `strcpy`/`sprintf`); external input validated.
 - [ ] No secrets in code, no logging of sensitive data.

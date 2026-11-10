@@ -10,7 +10,9 @@ Code, names, and comments in **English**.
 - **Clean-code caps enforced by ruff** (C90 + PLR09xx in `pyproject.toml`): bounded
   complexity, function length, args and branches. A monster function fails `make verify`.
 - **Micro-task discipline**: one subtask = one atomic unit (class/function/method),
-  1-3 files declared in the plan's `files:`. Enforced by the harness.
+  1-3 files declared in the plan's `files:`, or an empty `files:` only for a spec
+  declaring `Test-only verification (no production behaviour change)` that changes no
+  production file. Enforced by the harness.
 
 ## Naming
 

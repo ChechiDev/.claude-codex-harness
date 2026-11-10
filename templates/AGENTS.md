@@ -16,6 +16,12 @@
    subtask, they are intentionally **red**, so `make verify`/`make check` are
    expected to fail on *those* tests. That is the correct state at the plan phase,
    not a harness failure. Green is required at session start, the code gate, and close.
+   Exceptions to the red state — acceptance tests may already pass only when the
+   spec declares `Structural refactor (no behaviour change)` or
+   `Test-only verification (no production behaviour change)` and the gates confirm
+   the claim; its tests are regression oracles. A test-only subtask may have an
+   empty `files:` if it changes no production file. Never add a failing assertion
+   just to obtain a red state.
 2. Read `progress/current.md` (where the last session left off).
 3. Run `make status`: the whole plan, every gate verdict and the **next step**.
 

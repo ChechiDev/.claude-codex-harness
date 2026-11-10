@@ -16,7 +16,7 @@ How to prove a subtask works, before declaring `done`.
 ## Acceptance tests (Codex oracle)
 
 - Live in `tests/acceptance/test_<N.M.K>.c`, written by Codex at the plan gate and
-  **left red**. They are black-box: they exercise only the public API in
+  **left red** (or already passing under a confirmed marker). They are black-box: they exercise only the public API in
   `include/<name>/`, one test program per subtask, one check per acceptance criterion.
 
 ## Recommended extra checks (when the tools exist)

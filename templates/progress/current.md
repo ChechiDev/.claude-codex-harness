@@ -21,7 +21,7 @@ boundaries. The plan itself lives in docs/plan/; no code until PLAN_APPROVED._
 ## Gate status
 
 - [ ] **Plan approved by Codex** → `progress/plan_review_<N.M.K>.md` = `PLAN_APPROVED`
-- [ ] **Acceptance tests written** (Codex) → `tests/acceptance/test_<N.M.K>.py` (red)
+- [ ] **Acceptance tests written** (Codex) → `tests/acceptance/test_<N.M.K>.py` (red, or already passing under a confirmed marker)
 - [ ] **Implementation** → `progress/impl_<N.M.K>.md`, `make verify` green
 - [ ] **Code approved by Codex** → `progress/review_<N.M.K>.md` = `APPROVED`
 - [ ] **Closed by Codex** → `docs/reference/<N.M.K>-<name>.md` + `status: done` + single commit
