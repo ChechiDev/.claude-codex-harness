@@ -48,6 +48,7 @@ import _harness
 import _migrate
 import _plan_seal
 import _seal_required
+import _verdict
 from _attribution import RE_ATTRIBUTION
 from _status import say
 
@@ -154,7 +155,8 @@ def _protected_roots() -> tuple[str, ...]:
 
 def _mentions_protected(command: str) -> bool:
     dirs = "|".join(re.escape(d) + "/" for d in src_dirs() or DEFAULT_SRC_DIRS)
-    return re.search(rf"(^|[\s'\"(=/])({dirs}|{RE_MENTIONS_STATE})", command) is not None
+    # `<>`: a perl mode glued to the path, open(F, ">progress/x")
+    return re.search(rf"(^|[\s'\"(=/<>])({dirs}|{RE_MENTIONS_STATE})", command) is not None
 
 
 # ── Path classification ──────────────────────────────────────────────────────
@@ -334,8 +336,9 @@ UV_RUN_FLAGS = frozenset(
     }
 )  # fmt: skip
 OPAQUE_FLAGS = frozenset({"-S", "--split-string"})  # env: the value is the command line
-RE_SEALER_NAME = re.compile(r"(^|[\s/'\"=])(_legacy|_guard|legacy_inventory|review_with_codex)\b")
-RE_SEALER_ANYWHERE = re.compile(r"(_legacy|_guard|legacy_inventory|review_with_codex)\b")
+SEALER_NAMES = r"(_legacy|_guard|_verdict|legacy_inventory|review_with_codex)\b"
+RE_SEALER_NAME = re.compile(r"(^|[\s/'\"=])" + SEALER_NAMES)
+RE_SEALER_ANYWHERE = re.compile(SEALER_NAMES)
 
 
 def _skip_flags(
@@ -419,12 +422,13 @@ INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
     r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_"
-    r"|pr_|legacy_inventory)|\.harness\b"
+    r"|pr_|legacy_inventory|issue_review|issue_draft_review|verdict_)|\.harness\b"
 )
 RE_WRITE_CALL = re.compile(
     r"\b(write|write_text|write_bytes|unlink|remove|rename|replace|rmtree|truncate|chmod|"
     r"makedirs|mkdir|touch|copy|copyfile|copy2|move|symlink|rmdir)\b"
-    r"|open\([^)]*,\s*['\"][^'\"]*[wax+]"
+    r"|open\([^)]*,\s*['\"][rbt]*[wax+][rbtwax+]*['\"]"  # a whole mode string: 'w', 'rb+'
+    r"|open\([^)]*,\s*['\"](?:>>?|\+<)"  # perl: open(F, ">path"), open(F, '>', $p)
 )
 
 SEALERS: dict[str, frozenset[str]] = {
@@ -432,6 +436,7 @@ SEALERS: dict[str, frozenset[str]] = {
     "_guard.py": frozenset({"seal"}),
     "legacy_inventory.sh": frozenset({"create", "review", "seal"}),
     "_legacy.py": frozenset({"create", "review", "seal"}),
+    "_verdict.py": frozenset({"begin", "commit", "abort", "receipt"}),
 }
 
 
@@ -502,8 +507,9 @@ def _is_seal(name: str, args: list[str]) -> bool:
         module, tail, unsure = _python_module(args)  # python -IBm_legacy seal
         if unsure and RE_SEALER_ANYWHERE.search(" ".join(args)):  # also -m_legacy
             return True  # fail-closed: an unknown python flag may hide the module form
-        if module is not None and f"{module}.py" in SEALERS:
-            return bool(tail) and tail[0] in SEALERS[f"{module}.py"]
+        script = f"{module.rpartition('.')[2]}.py" if module is not None else ""
+        if script in SEALERS:  # also a dotted name: python -m lib._verdict
+            return bool(tail) and tail[0] in SEALERS[script]
     if name in SHELLS or INTERPRETERS.match(name):
         return any(
             i + 1 < len(args) and args[i + 1] in SEALERS[os.path.basename(a)]
@@ -866,14 +872,24 @@ def check_required_seals(exempt: _seal_required.Exemptions) -> int:
     return 1 if findings.problems else 0
 
 
+def check_verdict_receipts(warnings: list[str]) -> int:
+    """Verdict receipts (I2): WARN only, the exit code never changes."""
+    for msg in warnings:
+        say("WARN", msg)
+    return 0
+
+
 def integrity() -> int:
     exempt = _seal_required.Exemptions(ROOT)
+    # Before the required seals: a receipt gap must count for their legacy inventory WARN.
+    receipts = _verdict.receipt_warnings(ROOT, exempt)
     rc = (
         check_scope()
         | check_branch()
         | check_seals()
         | check_plan_seals(exempt)
         | check_required_seals(exempt)
+        | check_verdict_receipts(receipts)
     )
     if exempt.exempt:
         say("OK", f"{len(exempt.exempt)} legacy item(s) exempt (legacy_inventory)")

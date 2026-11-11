@@ -102,14 +102,24 @@ def test_plan_gate_still_records_and_seals_its_verdict(cycle: Cycle) -> None:
     assert (cycle.project.root / SEAL).is_file()
 
 
+def _seals(progress: Path) -> dict[str, bytes]:
+    """Every seal in progress/; verdict receipts (I2) only detect changes, they seal nothing."""
+    return {
+        p.name: p.read_bytes()
+        for p in progress.glob("*.sha256")
+        if not p.name.startswith("verdict_")
+    }
+
+
 def test_code_gate_never_seals(cycle: Cycle) -> None:
     progress = cycle.project.root / "progress"
-    before = {p.name: p.read_bytes() for p in progress.glob("*.sha256")}
+    before = _seals(progress)
     assert SEAL.rsplit("/", 1)[1] in before
     (cycle.project.root / SEAL).unlink()
     before.pop(SEAL.rsplit("/", 1)[1])
     cycle.run_gate("code")
-    assert {p.name: p.read_bytes() for p in progress.glob("*.sha256")} == before
+    assert _seals(progress) == before
+    assert (progress / f"verdict_review_{SID}.md.sha256").is_file()
 
 
 def test_manual_code_names_its_own_verdict_file(cycle: Cycle) -> None:
