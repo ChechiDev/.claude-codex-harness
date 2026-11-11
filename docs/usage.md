@@ -254,6 +254,31 @@ ls -lt ~/.codex/sessions/$(date +%Y/%m/%d)/ | head
 Claude cannot fake a verdict: writing any Codex-owned file in `progress/` is
 blocked by `guard_write.sh` and `guard_bash.sh`.
 
+## Verdict receipts
+
+A gate succeeds, records and seals only on a valid verdict written during that
+run: the previous verdict is set aside first and restored byte-identical if the
+reviewer fails or writes no valid verdict for that gate. Each accepted verdict
+gets a receipt, `progress/verdict_<verdict-file>.sha256`
+(`<sha256>  <path>  <gate>`). In manual mode the printed steps include the
+human-only `python3 harness/_verdict.py receipt <gate> <id>`.
+
+`make check` reports, as WARN only (the exit code does not change), a receipt
+that does not exactly match its verdict, verdicts without a matching receipt
+(one summary line) and receipts without a verdict. The remedy is to re-run that
+gate. Legacy items are exempt while the legacy inventory verifies.
+
+Known limits:
+
+- After a SIGKILL of the gate, an orphaned reviewer can still write a verdict
+  later. It is reported if it lacks a matching receipt; a verdict byte-identical
+  to the previous one still matches the previous receipt.
+- A crash between accepting a verdict and sealing it leaves an approved verdict
+  unsealed. The seal checks report it; re-running the gate fixes it.
+- In a linked worktree the verdict slot lives outside the project root, so the
+  guards do not protect it.
+- A receipt detects later byte changes; it does not prove who wrote the bytes.
+
 ## Existing project: register what is already built
 
 On a repository that already has working code, the first phases record that

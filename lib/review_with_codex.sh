@@ -273,7 +273,9 @@ if [ "$MODE_EXEC" = "manual" ]; then
       echo "./harness/review_with_codex.sh pr $LAST_TASK"
     fi
   else
-    echo "--- after Codex writes the verdict, keep it in the review history ---"
+    echo "--- after Codex writes the verdict, write its receipt (human only) ---"
+    echo "python3 harness/_verdict.py receipt $PHASE $ID"
+    echo "--- then keep it in the review history ---"
     echo "python3 harness/_pr.py record $PHASE $ID $VERDICT_FILE"
   fi
   exit 0
@@ -284,8 +286,26 @@ if ! command -v codex >/dev/null 2>&1; then
   exit 1
 fi
 
-# Non-interactive execution via `codex exec`.
-printf '%s\n' "$PROMPT" | codex exec "${CODEX_ARGS[@]}"
+# A review gate only succeeds on a verdict written by this run (I2): the previous
+# verdict is set aside first and restored on any failure; see _verdict.py.
+VERDICT_PY="$HARNESS_DIR/_verdict.py"
+verdict_abort() { python3 "$VERDICT_PY" abort --owner $$ "$PHASE" "$VERDICT_FILE"; }
+if [ "$PHASE" != "doc" ]; then
+  PREV_COPY="$(python3 "$VERDICT_PY" begin --owner $$ "$PHASE" "$VERDICT_FILE")" || exit 1
+  # The reviewer runs in the foreground, so bash runs these after it exits.
+  trap verdict_abort EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  if [ -n "$PREV_COPY" ]; then
+    PROMPT="$PROMPT
+Previous verdict (read-only copy): $PREV_COPY
+It is the last round of this gate; write the new verdict to $VERDICT_FILE."
+  fi
+fi
+
+# Non-interactive execution via `codex exec`. The prompt goes in as a here-string,
+# not through a pipeline, so RC is the reviewer's own exit status.
+codex exec "${CODEX_ARGS[@]}" <<<"$PROMPT"
 RC=$?
 
 if [ "$PHASE" = "doc" ]; then
@@ -295,17 +315,24 @@ if [ "$PHASE" = "doc" ]; then
   exit 0
 fi
 
-# Keep every round, rejected ones included: the next verdict overwrites the file.
-if [ $RC -eq 0 ] && [ -f "$VERDICT_FILE" ]; then
-  python3 "$PR_PY" record "$PHASE" "$ID" "$VERDICT_FILE" ||
-    warn "could not record $VERDICT_FILE in progress/review_history/" >&2
+if [ $RC -ne 0 ]; then
+  fail "the reviewer exited $RC: $VERDICT_FILE not accepted, nothing recorded or sealed" >&2
+  exit $RC
 fi
+# Validate and make the verdict final (receipt included); an invalid one is undone.
+TOKEN="$(python3 "$VERDICT_PY" commit --owner $$ "$PHASE" "$VERDICT_FILE")" || exit 1
+trap - EXIT TERM INT
+
+# From here the verdict is final and never undone; re-running the gate repairs a
+# failed record or seal.
+# Keep every round, rejected ones included: the next verdict overwrites the file.
+python3 "$PR_PY" record "$PHASE" "$ID" "$VERDICT_FILE" ||
+  warn "could not record $VERDICT_FILE in progress/review_history/" >&2
 
 # Seal what Codex just approved (roadmap, phase breakdown, or the subtask's
 # acceptance tests + spec): check.sh then fails if it changes afterwards,
 # whichever tool changed it.
-if [ -n "$SEAL_ON" ] && [ $RC -eq 0 ] &&
-   [ "$(python3 "$HARNESS_PY" verdict "$VERDICT_FILE")" = "$SEAL_ON" ]; then
-  python3 "$HARNESS_DIR/_guard.py" seal "${SEAL_ARGS[@]}" || RC=1
+if [ -n "$SEAL_ON" ] && [ "$TOKEN" = "$SEAL_ON" ]; then
+  python3 "$HARNESS_DIR/_guard.py" seal "${SEAL_ARGS[@]}" || exit 1
 fi
-exit $RC
+exit 0

@@ -261,6 +261,16 @@ def test_make_check_mentions_a_missing_inventory_only_with_a_seal_gap(project: P
     assert project.run("review_with_codex.sh", None, "seal", "roadmap").returncode == 0
     # The fixture approves phase 01 without a plan file, which is a gap too.
     (project.root / "progress/phase_review_01.md").unlink()
+    # Its hand-written verdicts lack receipts (I2), also a gap: the human writes them.
+    for args in (("roadmap",), ("plan", "1.1.1")):
+        res = subprocess.run(
+            ["python3", "harness/_verdict.py", "receipt", *args],
+            cwd=project.root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert res.returncode == 0, res.stdout + res.stderr
     out = _check_output(project)
     assert "legacy" not in out and "inventory" not in out, out
 
