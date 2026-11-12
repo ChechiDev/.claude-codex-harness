@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import re
 import subprocess
 import sys
@@ -231,6 +232,16 @@ def branch_merged(tip: str, base: str, cwd: Path | None = None) -> bool:
     return _git(cwd, "diff", "--quiet", tip, base, "--", *files).returncode == 0
 
 
+ASSUME_VAR = "HARNESS_ASSUME_APPROVED"
+
+
+def assumed(kind: str, ident: str = "") -> bool:
+    """True when the gate's counterfactual run assumes this exact target approved
+    (HARNESS_ASSUME_APPROVED=roadmap | phase:NN | issue:ISS-n), issue #27."""
+    target = f"{kind}:{ident}" if ident else kind
+    return os.environ.get(ASSUME_VAR, "") == target
+
+
 def read_verdict(path: Path) -> str:
     """The verdict token of a Codex review file, or "" if missing/unparseable."""
     try:
@@ -278,7 +289,7 @@ def _done(pid: str) -> bool:
 
 
 def _roadmap_problems() -> list[str]:
-    if read_verdict(ROADMAP_REVIEW) == "ROADMAP_APPROVED":
+    if read_verdict(ROADMAP_REVIEW) == "ROADMAP_APPROVED" or assumed("roadmap"):
         return []
     return [
         f"phase {p['id']} is broken down but the roadmap is not ROADMAP_APPROVED ({ROADMAP_REVIEW})"
@@ -307,14 +318,14 @@ def _gate_problems(leaf: Item) -> list[str]:
     """The breakdown gate a started leaf needs: its phase's, or its issue's."""
     if leaf.get("issue"):
         iid = str(leaf["issue"])
-        if read_verdict(issue_review(iid)) == "ISSUE_APPROVED":
+        if read_verdict(issue_review(iid)) == "ISSUE_APPROVED" or assumed("issue", iid):
             return []
         return [
             f"{leaf['id']} is {leaf['status']} but issue {iid} is not ISSUE_APPROVED "
             f"({issue_review(iid)})"
         ]
     pid = leaf["phase"]
-    if read_verdict(phase_review(pid)) == "PHASE_APPROVED":
+    if read_verdict(phase_review(pid)) == "PHASE_APPROVED" or assumed("phase", pid):
         return []
     return [
         f"{leaf['id']} is {leaf['status']} but phase {pid} is not PHASE_APPROVED "

@@ -133,6 +133,12 @@ MSG_COMMIT = (
 )
 
 
+MSG_ASSUME = (
+    "BLOCKED: HARNESS_ASSUME_APPROVED is set only by the roadmap/phase/issue gate for its "
+    "counterfactual run (review_with_codex.sh). Run `make check` without it."
+)
+
+
 class Blocked(Exception):
     """A guard decision to block, carrying the message Claude reads."""
 
@@ -692,6 +698,8 @@ def guard_bash(payload: object) -> None:
         raise ValueError("the Bash payload has no command string")
     if not command.strip():
         return
+    if "HARNESS_ASSUME_APPROVED" in command:  # best effort (issue #27)
+        raise Blocked(MSG_ASSUME)
     found = BashAnalyzer(command).run()
     if (found.commits or found.publishes) and RE_ATTRIBUTION.search(command):
         raise Blocked(MSG_ATTRIBUTION)

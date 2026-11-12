@@ -60,7 +60,14 @@ GH="${HARNESS_GH:-gh}"
 CHECK_CMD="${HARNESS_CHECK_CMD:-make check}"
 
 # Run the project check outside the sandbox; $1 = log file. Returns its exit code.
-run_check() { bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null; }
+# Every decision-making run drops HARNESS_ASSUME_APPROVED (issue #27): only the
+# gate's counterfactual run sets it, for exactly the reviewed target.
+run_check() { env -u HARNESS_ASSUME_APPROVED bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null; }
+# $1 = log file, $2 = target (roadmap | phase:NN | issue:ISS-n).
+run_check_assuming() {
+  env -u HARNESS_ASSUME_APPROVED HARNESS_ASSUME_APPROVED="$2" bash -c "$CHECK_CMD" \
+    >"$1" 2>&1 </dev/null
+}
 new_log() { mktemp "${TMPDIR:-/tmp}/harness-check-$1.XXXXXX"; }
 
 # Commit a close: the documenter's message, only with the check green.
@@ -196,6 +203,32 @@ FEATURE_NAME="$(python3 "$HARNESS_PY" feature-name "$ID" 2>/dev/null)"
 CHECK_LOG="$(new_log "$PHASE")"
 run_check "$CHECK_LOG"
 CHECK_RC=$?
+
+# Re-gate (issue #27): a red check of an approved roadmap/phase/issue may come only
+# from failures this same approval clears (its seal, its plan-rule lines). Run the
+# check again assuming exactly this target approved; the reviewer may approve a red
+# first run only if this one is green. A HARNESS_CHECK_CMD override gets no second
+# run (fail-closed: the harness cannot know what it checks).
+ASSUME_STEP=""
+if [ "$CHECK_RC" -ne 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ]; then
+  ASSUME=""
+  case "$PHASE" in
+    roadmap) ASSUME="roadmap" ;;
+    phase)   ASSUME="phase:$ID" ;;
+    issue)   ASSUME="issue:$ID" ;;
+  esac
+  if [ -n "$ASSUME" ]; then
+    ASSUME_LOG="$(new_log "$PHASE-assumed")"
+    run_check_assuming "$ASSUME_LOG" "$ASSUME"
+    ASSUME_RC=$?
+    ASSUME_STEP="
+Counterfactual run (re-gate): \`$CHECK_CMD\` again with HARNESS_ASSUME_APPROVED=$ASSUME
+(only this target's verdict reads approved and only its seal reads matching):
+exit code $ASSUME_RC, full output in $ASSUME_LOG.
+With the first run red you may approve only if this run is green; list the first
+run's FAIL lines in your verdict."
+  fi
+fi
 CLOSE_STEP=""
 if [ "$PHASE" = "doc" ]; then
   CLOSE_STEP="
@@ -227,7 +260,7 @@ Test suite: this sandbox cannot run it (local sockets are blocked).
 Do NOT run \`make check\`, \`make verify\`, the tests or anything that runs them.
 The harness ran \`$CHECK_CMD\` outside the sandbox just before this session:
 exit code $CHECK_RC, full output in $CHECK_LOG.
-That result is the one AGENTS.md step 1 asks for.$CLOSE_STEP
+That result is the one AGENTS.md step 1 asks for.$ASSUME_STEP$CLOSE_STEP
 
 Respect your role's output contract (write the verdict/result to the indicated
 progress/ file and return a single reference line).

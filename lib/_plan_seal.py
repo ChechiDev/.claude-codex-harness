@@ -184,6 +184,13 @@ def approved_without_plan_file(root: Path) -> list[str]:
     return found
 
 
+def _roadmap_problems(root: Path, gate: str) -> list[str]:
+    if _harness.assumed("roadmap"):
+        return []
+    diffs = _diff(read(roadmap_manifest(root)), roadmap_entries(root), "the roadmap")
+    return [msg + gate.format("roadmap") for _, msg in diffs]
+
+
 def verify(root: Path, exempt: Callable[[str], bool] | None = None) -> tuple[list[str], list[str]]:
     """(problems, warnings) of the plan seals against docs/plan/ as it is now. `exempt`
     tells whether a missing seal of that item (roadmap, NN, ISS-n) is legacy (plan 0.6)."""
@@ -191,9 +198,10 @@ def verify(root: Path, exempt: Callable[[str], bool] | None = None) -> tuple[lis
     problems: list[str] = []
     warnings: list[str] = []
     gate = " (re-run its Codex gate: ./harness/review_with_codex.sh {})"
+    # The counterfactual run of a re-gate (issue #27) reads the reviewed target's seal
+    # as matching the current specs; every other seal is checked as usual.
     if roadmap_manifest(root).is_file():
-        for _, msg in _diff(read(roadmap_manifest(root)), roadmap_entries(root), "the roadmap"):
-            problems.append(msg + gate.format("roadmap"))
+        problems.extend(_roadmap_problems(root, gate))
     elif _harness.read_verdict(
         root / _harness.ROADMAP_REVIEW
     ) == "ROADMAP_APPROVED" and not is_exempt("roadmap"):
@@ -210,6 +218,8 @@ def verify(root: Path, exempt: Callable[[str], bool] | None = None) -> tuple[lis
                     f"phase {pid} is approved but not sealed "
                     f"(human: review_with_codex.sh seal phase {pid})"
                 )
+            continue
+        if _harness.assumed("phase", pid):
             continue
         for rel, msg in _diff(read(manifest), phase_entries(root, pid), f"phase {pid}"):
             if rel == open_spec:
@@ -237,6 +247,8 @@ def _verify_issues(
                     f"issue {iid} is approved but not sealed "
                     f"(human: review_with_codex.sh seal issue {iid})"
                 )
+            continue
+        if _harness.assumed("issue", iid):
             continue
         for rel, msg in _diff(read(manifest), issue_entries(root, iid), f"issue {iid}"):
             if rel == open_spec:

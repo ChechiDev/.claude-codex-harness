@@ -11,6 +11,13 @@ cd "$PROJECT_DIR" || exit 1
 
 EXIT=0
 
+# The gate's counterfactual run (issue #27): label it so its log is never taken
+# for a real result.
+if [ -n "${HARNESS_ASSUME_APPROVED:-}" ]; then
+  echo "[ASSUMED] HARNESS_ASSUME_APPROVED=$HARNESS_ASSUME_APPROVED: its verdict reads approved and its seal matching; counterfactual run, not a real result"
+  echo ""
+fi
+
 echo "── 1. Environment ──────────────────────────────────────"
 # Language-agnostic: delegate the toolchain check to the Makefile's env-check
 # target. Fall back to the uv check for older Makefiles without that target.
