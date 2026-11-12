@@ -54,6 +54,8 @@ Common criteria (what a senior engineer would look at):
   and log. It must be green **in `code` mode**. In `plan` mode the acceptance tests
   you write are left **red** by design (see the plan-gate exception in `AGENTS.md`),
   except for the two declared markers described in `plan` mode.
+  Re-gate exception, in `roadmap`, `phase` and `issue` modes only: with the check red you may approve only when the prompt reports the gate's counterfactual run (`HARNESS_ASSUME_APPROVED=<target>`) green,
+  and you list the first run's FAIL lines in your verdict. A red counterfactual run, or none, means the red check blocks.
 - Objective criteria from `docs/architecture.md`, `docs/conventions.md`, and `CHECKPOINTS.md`.
 - For **Python** projects the shared-standard skills apply: read `py-pytest`,
   `py-style`, `py-pydantic`, `py-typing` as authoritative. For **C** projects use
@@ -340,6 +342,7 @@ or `CHANGES_REQUESTED -> progress/review_<N.M.K>.md`.
 
 ## Hard rules
 
-- ❌ Never approve with the harness check red.
+- ❌ Never approve with the harness check red. Only exceptions: the red acceptance tests of `plan` mode (see Toolchain),
+  and the re-gate exception of `roadmap`, `phase` and `issue` modes when the counterfactual run (`HARNESS_ASSUME_APPROVED`) is green.
 - ❌ Never edit the implementer's production code.
 - ✅ Be specific: cite `file:line`.

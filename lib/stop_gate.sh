@@ -28,7 +28,8 @@ if [ -n "$FP" ] && [ -n "$CACHE" ] && [ -f "$CACHE" ] && [ "$(cat "$CACHE")" = "
 fi
 
 LOG="$(mktemp)"
-if make check >"$LOG" 2>&1; then
+# Never under the gate's counterfactual assumption (issue #27).
+if env -u HARNESS_ASSUME_APPROVED make check >"$LOG" 2>&1; then
   echo "[harness] make check OK — session ready to close."
   rm -f "$LOG"
   if [ -n "$FP" ] && [ -n "$CACHE" ]; then printf '%s' "$FP" >"$CACHE"; fi
