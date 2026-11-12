@@ -48,6 +48,7 @@ import _harness
 import _migrate
 import _plan_seal
 import _seal_required
+import _upgrade
 import _verdict
 from _attribution import RE_ATTRIBUTION
 from _status import say
@@ -76,6 +77,19 @@ RE_CODEX_OWNED = re.compile(
     r"|\.harness(/.*)?)$"
 )
 
+# Harness-owned entries (I3a): the links install.sh creates plus the local settings,
+# matched lexically (links NOT followed). A fixed list: expected_links() raises in
+# the per-skill shape, so the guard never calls it.
+HARNESS_ENTRIES = (*_upgrade.LINKS, ".claude/settings.local.json")
+HARNESS_GLOBAL = ("skills", "CLAUDE.md")  # machine-level links under $CLAUDE_HOME
+TOOLKIT = _upgrade.TOOLKIT  # the checkout that supplies the running guard
+VERDICT_SLOTS = ("harness-verdict-slot", "harness-verdict-partial")
+
+MSG_HARNESS = (
+    "BLOCKED: '{target}' is harness-owned (toolkit links, hook settings or the toolkit files "
+    "behind them). Claude never changes it: ask the human; changes go through the toolkit "
+    "repository."
+)
 MSG_ACCEPTANCE = (
     "BLOCKED: tests/acceptance/ is the independent oracle written by Codex and is READ-ONLY "
     "for Claude. If you think an acceptance test is wrong, stop and report it as a blocker in "
@@ -165,6 +179,18 @@ def _mentions_protected(command: str) -> bool:
     return re.search(rf"(^|[\s'\"(=/<>])({dirs}|{RE_MENTIONS_STATE})", command) is not None
 
 
+def _mentions_harness(command: str) -> bool:
+    """The command text names a harness-owned path (interpreter writes: opaque targets)."""
+    entries = "|".join(re.escape(e) for e in HARNESS_ENTRIES)
+    home = os.path.abspath(_upgrade._claude_home())
+    globs = "|".join(re.escape(f"{home}/{g}") for g in HARNESS_GLOBAL)
+    root = re.escape(f"{ROOT}/")
+    lexical = rf"(^|[\s'\"(=<>]|\./|{root})({entries})($|[/\s'\")])"
+    if re.search(lexical, command) or re.search(globs, command):
+        return True
+    return not ROOT.is_relative_to(TOOLKIT) and str(TOOLKIT) in command
+
+
 # ── Path classification ──────────────────────────────────────────────────────
 
 
@@ -213,7 +239,9 @@ def protected_kind(path: Path, destructive: bool = False) -> str | None:
     """Why `path` is protected, or None. Destructive ops also protect ancestors."""
     rel = project_rel(path)
     if rel is None:
-        return "ancestor" if destructive and ROOT.is_relative_to(path) else None
+        if destructive and ROOT.is_relative_to(path):
+            return "ancestor"
+        return "codex-owned" if in_verdict_slot(path) else None
     kind = classify(rel) if rel != "." else None
     if kind or not destructive:
         return kind
@@ -221,6 +249,56 @@ def protected_kind(path: Path, destructive: bool = False) -> str | None:
         if (ROOT / root).is_relative_to(path):
             return f"ancestor of {root}/"
     return None
+
+
+@cache
+def verdict_slots() -> tuple[Path, ...]:
+    """Resolved verdict slot dirs of this checkout (outside the root in a linked worktree)."""
+    slots = []
+    for name in VERDICT_SLOTS:
+        raw = _git_out("rev-parse", "--git-path", name)
+        if raw is not None and raw.strip():
+            slots.append(resolve(raw.strip(), ROOT))
+    return tuple(slots)
+
+
+def in_verdict_slot(path: Path) -> bool:
+    """`path` (resolved) is a verdict slot dir or lies under one."""
+    return any(path.is_relative_to(slot) for slot in verdict_slots())
+
+
+def _lexical(raw: str, cwd: Path) -> Path:
+    """Absolute, ..-free path WITHOUT following links (the shell's view of `raw`)."""
+    path = Path(os.path.expanduser(raw))
+    return Path(os.path.normpath(path if path.is_absolute() else cwd / path))
+
+
+def _lstat_spellings(raw: str, cwd: Path) -> set[Path]:
+    """The lexical path, and the same with every component but the last resolved (lstat)."""
+    lex = _lexical(raw, cwd)
+    return {lex, Path(os.path.realpath(lex.parent)) / lex.name}
+
+
+def _harness_bases() -> list[Path]:
+    home = Path(os.path.abspath(_upgrade._claude_home()))
+    homes = {home, Path(os.path.realpath(home))}
+    return [ROOT / e for e in HARNESS_ENTRIES] + [h / g for h in homes for g in HARNESS_GLOBAL]
+
+
+def harness_kind(raw: str, cwd: Path, destructive: bool = False) -> bool:
+    """True when `raw` names a harness-owned path (I3a). Lexical: a harness entry or
+    under one (links not followed), and destructive ops also on an ancestor (.claude/,
+    $CLAUDE_HOME). Resolved: the local settings through an alias, or anything inside
+    the toolkit unless the project itself lies inside it."""
+    spellings = _lstat_spellings(raw, cwd)
+    for base in _harness_bases():
+        for path in spellings:
+            if path.is_relative_to(base) or (destructive and base.is_relative_to(path)):
+                return True
+    real = resolve(raw, cwd)
+    if real == resolve(".claude/settings.local.json", ROOT):
+        return True
+    return real.is_relative_to(TOOLKIT) and not ROOT.is_relative_to(TOOLKIT)
 
 
 # ── Write guard ──────────────────────────────────────────────────────────────
@@ -241,8 +319,13 @@ def guard_write(payload: object) -> None:
     raw = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not isinstance(raw, str) or not raw:
         raise ValueError("the write payload has no file_path/notebook_path string")
-    rel = project_rel(resolve(str(raw), ROOT))
+    if harness_kind(raw, ROOT):
+        raise Blocked(MSG_HARNESS.format(target=raw))
+    path = resolve(raw, ROOT)
+    rel = project_rel(path)
     if rel is None:
+        if in_verdict_slot(path):
+            raise Blocked(MSG_CODEX_OWNED.format(rel=raw))
         return
     kind = classify(rel)
     if kind == "acceptance":
@@ -547,18 +630,21 @@ class BashAnalyzer:
         return self.found
 
     def _check(self, raw: str, destructive: bool) -> None:
-        for path in self._expand(raw):
-            kind = protected_kind(path, destructive)
+        for spelled in self._expand(raw):
+            kind = protected_kind(resolve(spelled, self.cwd), destructive)
             if kind:
                 raise Blocked(MSG_SHELL_WRITE.format(target=raw, kind=kind))
+            if harness_kind(spelled, self.cwd, destructive):
+                raise Blocked(MSG_HARNESS.format(target=raw))
 
-    def _expand(self, raw: str) -> Iterator[Path]:
+    def _expand(self, raw: str) -> Iterator[str]:
+        """The spellings `raw` stands for: its glob matches, or itself."""
         if any(ch in raw for ch in "*?["):
             matches = glob.glob(raw, root_dir=self.cwd)
             if matches:
-                yield from (resolve(m, self.cwd) for m in matches)
+                yield from matches
                 return
-        yield resolve(raw, self.cwd)
+        yield raw
 
     def _command(self, words: list[str], depth: int) -> None:
         name, args = os.path.basename(words[0]), words[1:]
@@ -586,7 +672,9 @@ class BashAnalyzer:
 
     def _is_protected(self, arg: str) -> bool:
         return not arg.startswith("-") and any(
-            protected_kind(p, destructive=True) for p in self._expand(arg)
+            protected_kind(resolve(p, self.cwd), destructive=True)
+            or harness_kind(p, self.cwd, destructive=True)
+            for p in self._expand(arg)
         )
 
     def _file_verbs(self, name: str, args: list[str]) -> None:
@@ -597,13 +685,36 @@ class BashAnalyzer:
             for arg in operands:
                 self._check(arg, destructive=name in DESTRUCTIVE_VERBS)
         elif name in DEST_ARG_VERBS:
-            self._check(_destination(args), destructive=False)
-        elif (
-            INTERPRETERS.match(name)
-            and _mentions_protected(self.raw)
-            and RE_WRITE_CALL.search(self.raw)
-        ):
-            raise Blocked(MSG_SHELL_OPAQUE.format(cmd=name))
+            for target in self._destinations(name, args):
+                self._check(target, destructive=False)
+        elif INTERPRETERS.match(name) and RE_WRITE_CALL.search(self.raw):
+            if _mentions_harness(self.raw):
+                raise Blocked(MSG_HARNESS.format(target=name))
+            if _mentions_protected(self.raw):
+                raise Blocked(MSG_SHELL_OPAQUE.format(cmd=name))
+
+    def _destinations(self, name: str, args: list[str]) -> list[str]:
+        """The destination of cp/install/ln/rsync, plus `dir/<source name>` for each
+        source when it is a directory (`-t`, a trailing `/` or an existing dir).
+        A copy whose names cannot be known (any rsync, a `src/.` contents copy) into a
+        dir that directly holds a harness entry is blocked outright (fail-closed)."""
+        dest, sources, is_dir = _destination(args, target_flag=name != "rsync")
+        if not dest:
+            return []
+        if is_dir or dest.endswith("/") or resolve(dest, self.cwd).is_dir():
+            opaque = name == "rsync" or any(s == "." or s.endswith("/.") for s in sources)
+            if opaque and self._holds_harness(dest):
+                raise Blocked(MSG_HARNESS.format(target=dest))
+            base = dest.rstrip("/") or "/"
+            names = (os.path.basename(s.rstrip("/")) for s in sources)
+            return [dest, *(f"{base}/{n}" for n in names if n)]
+        return [dest]
+
+    def _holds_harness(self, raw: str) -> bool:
+        """`raw` (as spelled, or through a directory alias) is the directory that
+        directly contains a harness entry."""
+        spellings = _lstat_spellings(raw, self.cwd) | {resolve(raw, self.cwd)}
+        return any(base.parent in spellings for base in _harness_bases())
 
     def _cd(self, args: list[str], depth: int) -> None:
         self.cwd = resolve(args[0], self.cwd) if args else Path.home()
@@ -667,14 +778,18 @@ class BashAnalyzer:
                     self._check(path, destructive=True)
 
 
-def _destination(args: list[str]) -> str:
-    for i, arg in enumerate(args):
+def _destination(args: list[str], target_flag: bool = True) -> tuple[str, list[str], bool]:
+    """(destination, source operands, destination given as a target directory).
+    `target_flag`: `-t`/`--target-directory` name the destination (cp, install, ln;
+    not rsync, where `-t` preserves times)."""
+    for i, arg in enumerate(args if target_flag else []):
         if arg in ("-t", "--target-directory") and i + 1 < len(args):
-            return args[i + 1]
+            rest = args[:i] + args[i + 2 :]
+            return args[i + 1], [a for a in rest if not a.startswith("-")], True
         if arg.startswith("--target-directory="):
-            return arg.split("=", 1)[1]
+            return arg.split("=", 1)[1], [a for a in args if not a.startswith("-")], True
     operands = [a for a in args if not a.startswith("-")]
-    return operands[-1] if operands else ""
+    return (operands[-1], operands[:-1], False) if operands else ("", [], False)
 
 
 def _git_alias(sub: str) -> str:
@@ -887,6 +1002,69 @@ def check_verdict_receipts(warnings: list[str]) -> int:
     return 0
 
 
+# Base links whose absence check.sh / the project Makefile already FAIL (unchanged).
+BASE_LINKS = frozenset({"harness", ".claude/agents", ".claude/codex"})
+
+
+def _link_warnings() -> list[str]:
+    """Link set vs what install.sh creates (I3a, the check_links() comparison)."""
+    skills = ROOT / ".claude/skills"
+    if skills.is_dir() and not skills.is_symlink():
+        return [
+            ".claude/skills is a real directory (per-skill shape): links not checkable until T2-S"
+        ]
+    fix = f"run bash {TOOLKIT}/install.sh {ROOT}"
+    found = []
+    for rel, target in _upgrade.expected_links(ROOT).items():
+        path = ROOT / rel
+        if rel in BASE_LINKS and not path.exists():
+            continue  # already a FAIL elsewhere
+        if not path.is_symlink():
+            state = "missing" if not os.path.lexists(path) else "not a symlink"
+            found.append(f"{rel}: {state} (expected a link to {target}); {fix}")
+        elif path.resolve() != target.resolve():
+            found.append(f"{rel}: points to {os.readlink(path)} (expected {target}); {fix}")
+    return found
+
+
+def _local_settings_warnings() -> list[str]:
+    path = ROOT / ".claude/settings.local.json"
+    if not os.path.lexists(path):
+        return []
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict):
+        return ["settings.local.json (.claude/): cannot verify local settings (not a JSON object)"]
+    if data.get("disableAllHooks") or "hooks" in data:
+        return [
+            "settings.local.json (.claude/) disables or overrides the harness hooks "
+            "(disableAllHooks / hooks): remove those keys"
+        ]
+    return []
+
+
+def _templates_record_warnings() -> list[str]:
+    path = ROOT / _upgrade.RECORD
+    if not os.path.lexists(path):
+        return []
+    if path.is_symlink() or not path.is_file():
+        return ["templates.json record (.harness/) is not a regular file; resolve by hand"]
+    try:
+        _upgrade._read_record(ROOT)
+    except _upgrade.MigrationError as exc:
+        return [f"templates.json record: {exc}"]
+    return []
+
+
+def check_harness_state() -> int:
+    """Links, local settings and templates record (I3a): WARN only (plan 0.5)."""
+    for msg in _link_warnings() + _local_settings_warnings() + _templates_record_warnings():
+        say("WARN", msg)
+    return 0
+
+
 def integrity() -> int:
     exempt = _seal_required.Exemptions(ROOT)
     # Before the required seals: a receipt gap must count for their legacy inventory WARN.
@@ -898,6 +1076,7 @@ def integrity() -> int:
         | check_plan_seals(exempt)
         | check_required_seals(exempt)
         | check_verdict_receipts(receipts)
+        | check_harness_state()
     )
     if exempt.exempt:
         say("OK", f"{len(exempt.exempt)} legacy item(s) exempt (legacy_inventory)")
