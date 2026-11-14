@@ -582,11 +582,18 @@ def _begin(slot: Slot) -> int:
 
 def _commit(slot: Slot) -> int:
     try:
-        print(slot.commit())
+        token = slot.commit()
     except InvalidVerdict as exc:
         say("FAIL", f"{exc}: nothing recorded or sealed, previous verdict restored", sys.stderr)
         _say_partial(slot.abort())
         return 1
+    try:  # the one-use evidence of this fresh approval (issue #30)
+        import _supersede
+
+        _supersede.write_after_commit(slot.root, slot.verdict, token)
+    except (OSError, ValueError, KeyError) as exc:
+        say("WARN", f"no supersede ticket for {slot.verdict}: {exc}", sys.stderr)
+    print(token)
     return 0
 
 
