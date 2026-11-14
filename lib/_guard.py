@@ -48,6 +48,7 @@ import _harness
 import _migrate
 import _plan_seal
 import _seal_required
+import _supersede
 import _upgrade
 import _verdict
 from _attribution import RE_ATTRIBUTION
@@ -72,7 +73,7 @@ RE_CODEX_OWNED = re.compile(
     r"|progress/legacy_inventory\.json"
     r"|progress/review_history/[^/]+\.md|progress/pr_[^/]+\.md"
     r"|progress/issue_migrations_[^/]+\.json|progress/oracle_migrations/[^/]+\.json"
-    r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+"
+    r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+(/.*)?"
     # Migration record and backups (M0a): written only by the human-run migrator.
     r"|\.harness(/.*)?)$"
 )
@@ -83,7 +84,8 @@ RE_CODEX_OWNED = re.compile(
 HARNESS_ENTRIES = (*_upgrade.LINKS, ".claude/settings.local.json")
 HARNESS_GLOBAL = ("skills", "CLAUDE.md")  # machine-level links under $CLAUDE_HOME
 TOOLKIT = _upgrade.TOOLKIT  # the checkout that supplies the running guard
-VERDICT_SLOTS = ("harness-verdict-slot", "harness-verdict-partial")
+# The supersede tickets (issue #30) share the mechanism: codex-owned in every worktree.
+VERDICT_SLOTS = ("harness-verdict-slot", "harness-verdict-partial", "harness-supersede-ticket")
 
 MSG_HARNESS = (
     "BLOCKED: '{target}' is harness-owned (toolkit links, hook settings or the toolkit files "
@@ -1125,7 +1127,14 @@ def seal(leaf: str) -> int:
     if not files:
         say("FAIL", f"cannot seal {leaf}: no tests/acceptance/test_{leaf}.*", sys.stderr)
         return 1
-    problems = _migrate.seal(ROOT, leaf, ROOT / _manifest_rel(leaf))
+    ticket = _supersede.read(leaf, ROOT / f"progress/plan_review_{leaf}.md")
+    fresh = None
+    if ticket is not None:
+        if ticket.get("entries") == _supersede.plan_entries(ROOT, leaf):
+            fresh = dict(ticket.get("files") or {})
+        else:
+            _supersede.remove(leaf)  # spec or acceptance changed after the commit
+    problems = _migrate.seal(ROOT, leaf, ROOT / _manifest_rel(leaf), fresh)
     for problem in problems:
         say("FAIL", f"cannot seal {leaf}: {problem}", sys.stderr)
     if problems:
@@ -1133,6 +1142,8 @@ def seal(leaf: str) -> int:
     lines = [f"{_sha256(f)}  {f.relative_to(ROOT).as_posix()}\n" for f in files]
     (ROOT / _manifest_rel(leaf)).write_text("".join(lines), encoding="utf-8")
     say("OK", f"sealed {len(files)} acceptance file(s) -> {_manifest_rel(leaf)}")
+    if ticket is not None:
+        _supersede.remove(leaf)
     if baseline:
         return 0  # no plan gate approved a spec change: its phase seal stays as it is
     spec, phase = _leaf_spec(leaf)
@@ -1179,9 +1190,30 @@ def seal_issue(iid: str) -> int:
     if not _plan_seal.issue_entries(ROOT, iid):
         say("FAIL", f"cannot seal issue {iid}: no docs/plan/issues/{iid}-*.md", sys.stderr)
         return 1
-    _migrate.write_snapshot(ROOT, iid)  # freeze its migrates: lists with the breakdown
-    entries = _plan_seal.issue_entries(ROOT, iid)
+    ticket = _supersede.read(iid, ROOT / _harness.issue_review(iid))
+    lists = None
+    if ticket is not None:  # a fresh gate approval (issue #30): read everything once
+        leaves, lists = _supersede.issue_subtasks(iid)
+        base = _supersede.issue_entries(ROOT, iid)
+        bound = _supersede.issue_digests(base, leaves, lists)
+        if {k: ticket.get(k) for k in bound} != bound:
+            _supersede.remove(iid)
+            say("FAIL", f"issue {iid} changed after its approval; re-run its gate", sys.stderr)
+            return 1
+        problems = _migrate.supersede(ROOT, leaves, lists)
+        for problem in problems:
+            say("FAIL", f"cannot seal issue {iid}: {problem}", sys.stderr)
+        if problems:
+            return 1
+    _migrate.write_snapshot(ROOT, iid, lists)  # freeze its migrates: lists with the breakdown
+    if lists is None:
+        entries = _plan_seal.issue_entries(ROOT, iid)
+    else:
+        snapshot = _migrate.snapshot_path(ROOT, iid)
+        entries = {**base, snapshot.relative_to(ROOT).as_posix(): _supersede.text_digest(snapshot)}
     _plan_seal.write(_plan_seal.issue_manifest(ROOT, iid), entries)
+    if ticket is not None:
+        _supersede.remove(iid)  # only once the seal is written
     say("OK", f"sealed the approved issue {iid} ({len(entries)} file(s))")
     return 0
 
