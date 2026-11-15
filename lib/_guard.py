@@ -29,6 +29,7 @@ outcome from disk and git, independently of how the write happened.
 
 from __future__ import annotations
 
+import fnmatch
 import glob
 import hashlib
 import json
@@ -47,7 +48,9 @@ import _config
 import _harness
 import _migrate
 import _plan_seal
+import _pywrites
 import _seal_required
+import _shell
 import _supersede
 import _upgrade
 import _verdict
@@ -178,7 +181,7 @@ def _protected_roots() -> tuple[str, ...]:
 def _mentions_protected(command: str) -> bool:
     dirs = "|".join(re.escape(d) + "/" for d in src_dirs() or DEFAULT_SRC_DIRS)
     # `<>`: a perl mode glued to the path, open(F, ">progress/x")
-    return re.search(rf"(^|[\s'\"(=/<>])({dirs}|{RE_MENTIONS_STATE})", command) is not None
+    return re.search(rf"(^|[\s'\"(=/<>`])({dirs}|{RE_MENTIONS_STATE})", command) is not None
 
 
 def _mentions_harness(command: str) -> bool:
@@ -187,7 +190,7 @@ def _mentions_harness(command: str) -> bool:
     home = os.path.abspath(_upgrade._claude_home())
     globs = "|".join(re.escape(f"{home}/{g}") for g in HARNESS_GLOBAL)
     root = re.escape(f"{ROOT}/")
-    lexical = rf"(^|[\s'\"(=<>]|\./|{root})({entries})($|[/\s'\")])"
+    lexical = rf"(^|[\s'\"(=<>`]|\./|{root})({entries})($|[/\s'\")`])"
     if re.search(lexical, command) or re.search(globs, command):
         return True
     return not ROOT.is_relative_to(TOOLKIT) and str(TOOLKIT) in command
@@ -366,39 +369,39 @@ def _check_src_scope(rel: str) -> None:
 
 
 @dataclass
-class SimpleCommand:
-    words: list[str] = field(default_factory=list)
-    out_targets: list[str] = field(default_factory=list)
+class Frame:
+    """One shell's state while the analyser walks a call (I3b): cwd and variables."""
+
+    cwd: Path
+    vars: dict[str, str | None] = field(default_factory=dict)  # None: unresolved
+    exported: set[str] = field(default_factory=set)
+    tainted: bool = False  # after `source`: every variable is unresolved
+    cwd_dynamic: bool = False  # after a `cd` to an unresolved directory
+
+    def lookup(self, name: str) -> str | None:
+        if self.tainted:
+            return None
+        if name in self.vars:
+            return self.vars[name]
+        if name == "PWD":
+            return None if self.cwd_dynamic else str(self.cwd)
+        return os.environ.get(name) if name in ENV_VARS else None
+
+    def child(self, everything: bool) -> Frame:
+        """A substitution (`everything`: all variables) or a nested shell (exported only)."""
+        names = self.vars if everything else {n for n in self.vars if n in self.exported}
+        return Frame(
+            self.cwd,
+            {n: self.vars[n] for n in names},
+            set(self.exported),
+            self.tainted,
+            self.cwd_dynamic,
+        )
 
 
-def _lexer(command: str) -> shlex.shlex:
-    lex = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
-    lex.whitespace = " \t\r"
-    lex.whitespace_split = True
-    return lex
-
-
-def split_commands(command: str) -> list[SimpleCommand]:
-    """Split a shell line into simple commands, collecting output-redirect targets."""
-    try:
-        tokens = list(_lexer(command))
-    except ValueError:  # unbalanced quotes: fall back to plain splitting
-        tokens = command.split()
-    out: list[SimpleCommand] = [SimpleCommand()]
-    pending_redirect: str | None = None
-    for tok in tokens:
-        if pending_redirect is not None:
-            if ">" in pending_redirect and not (pending_redirect.endswith("&") and tok.isdigit()):
-                out[-1].out_targets.append(tok)
-            pending_redirect = None
-        elif tok and set(tok) <= set("();<>|&\n"):
-            if "<" in tok or ">" in tok:
-                pending_redirect = tok
-            else:
-                out.append(SimpleCommand())
-        else:
-            out[-1].words.append(tok)
-    return [c for c in out if c.words or c.out_targets]
+# D2: the only variables resolved from the guard's environment ($PWD tracks `cd`).
+ENV_VARS = frozenset({"HOME", "CLAUDE_PROJECT_DIR", "CLAUDE_HOME"})
+DECLARERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
 
 
 WRAPPERS = {"command", "builtin", "exec", "nohup", "time", "sudo", "nice", "stdbuf"}
@@ -513,13 +516,38 @@ INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
     r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_"
-    r"|pr_|legacy_inventory|issue_review|issue_draft_review|verdict_)|\.harness\b"
+    r"|pr_|legacy_inventory|issue_review|issue_draft_review|verdict_|review_history/"
+    r"|issue_migrations_|oracle_migrations/|close_|[^/\s'\"]*\.sha256)|\.harness\b"
+    r"|\.git/harness-"
 )
 RE_WRITE_CALL = re.compile(
     r"\b(write|write_text|write_bytes|unlink|remove|rename|replace|rmtree|truncate|chmod|"
     r"makedirs|mkdir|touch|copy|copyfile|copy2|move|symlink|rmdir)\b"
     r"|open\([^)]*,\s*['\"][rbt]*[wax+][rbtwax+]*['\"]"  # a whole mode string: 'w', 'rb+'
     r"|open\([^)]*,\s*['\"](?:>>?|\+<)"  # perl: open(F, ">path"), open(F, '>', $p)
+    r"|\.open\(|\bmode\s*="  # Path(p).open(...), open(p, mode=…)
+    # Node fs (also the Sync and promise forms)
+    r"|\b(writeFile|appendFile|createWriteStream|rm|unlink|rename|copyFile|cp|symlink|mkdir"
+    r"|chmod|truncate|rmdir)(Sync)?\s*\("
+)
+# Unmatched glob targets (I3b B) are matched lexically against these templates, one
+# fnmatch pattern per component; `**` spans any number of components. Keep in sync with
+# RE_CODEX_OWNED / classify / HARNESS_ENTRIES.
+PROTECTED_TEMPLATES = (
+    *(f"progress/{n}_*.md" for n in ("plan_review", "review", "phase_review", "issue_review")),
+    "progress/roadmap_review.md",
+    "progress/issue_draft_review.md",
+    "progress/legacy_inventory_review.md",
+    "progress/legacy_inventory.json",
+    "progress/review_history/*.md",
+    "progress/pr_*.md",
+    "progress/issue_migrations_*.json",
+    "progress/oracle_migrations/*.json",
+    "progress/*.sha256",
+    "progress/close_*.msg",
+    ".git/harness-*/**",
+    ".harness/**",
+    "**/tests/acceptance/**",
 )
 
 SEALERS: dict[str, frozenset[str]] = {
@@ -610,34 +638,401 @@ def _is_seal(name: str, args: list[str]) -> bool:
     return False
 
 
+RE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+XARGS_OPERAND = "__XARGS_OPERAND__"  # never assigned: an operand xargs reads from stdin
+XARGS_VALUE_FLAGS = frozenset({"-n", "-L", "-s", "-d", "-E", "-P", "-a"})
+XARGS_LONG_VALUE_FLAGS = frozenset(
+    {"--arg-file", "--delimiter", "--max-args", "--max-lines", "--max-chars", "--max-procs",
+     "--eof", "--process-slot-var"}
+)  # fmt: skip
+
+
+def _inplace_files(args: list[str]) -> list[str]:
+    """The files `sed -i` / `perl -i` edit: the operands, minus the script. The script is
+    the value of -e/-f (or --expression/--file), or else the first operand."""
+    files: list[str] = []
+    script_given, i = False, 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-e", "-f", "--expression", "--file"):
+            script_given, i = True, i + 2
+            continue
+        if arg.startswith(("--expression=", "--file=")):
+            script_given, i = True, i + 1
+            continue
+        if re.match(r"-[a-zA-Z]*[ef]", arg):
+            # a bundle ending in e/f (`-pie`) takes the next word; `-eSCRIPT` carries it.
+            # `-ie` (GNU sed: suffix "e") is read as a script too: stricter, never looser.
+            script_given = True
+            i += 2 if re.fullmatch(r"-[a-zA-Z]*[ef]", arg) else 1
+            continue
+        if not arg.startswith("-"):
+            files.append(arg)
+        i += 1
+    return files if script_given else files[1:]
+
+
+def _shell_body(args: list[str]) -> int | None:
+    """Index of the command string of `bash|sh|… [options] -c… string`, or None.
+    `c` may sit in any short-flag bundle (`-lc`, `-ec`, `-xc`, `-e -c`)."""
+    has_c, i = False, 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            i += 1
+            break
+        if arg in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):
+            i += 2
+        elif arg.startswith("--"):
+            i += 1
+        elif len(arg) > 1 and arg[0] in "-+":
+            has_c |= arg[0] == "-" and "c" in arg[1:]
+            i += 1
+        else:
+            break
+    return i if has_c and i < len(args) else None
+
+
+def _xargs_options(args: list[str]) -> tuple[int, str | None]:
+    """(index of the verb, replacement string of -I/-i/--replace or None)."""
+    i, replace = 0, None
+    while i < len(args) and args[i].startswith("-"):
+        arg = args[i]
+        if arg == "--":
+            return i + 1, replace
+        if arg.startswith("-I"):
+            replace = arg[2:] or (args[i + 1] if i + 1 < len(args) else "")
+            i += 1 if arg[2:] else 2
+        elif arg.startswith("-i") or arg.startswith("--replace"):
+            replace = (arg[2:] if arg.startswith("-i") else arg.partition("=")[2]) or "{}"
+            i += 1
+        elif arg in XARGS_VALUE_FLAGS or (arg in XARGS_LONG_VALUE_FLAGS and "=" not in arg):
+            i += 2
+        else:
+            i += 1
+    return i, replace
+
+
+# ── Unmatched globs: lexical matching against protected / harness names (I3b B) ──
+
+
+def _glob_tokens(pattern: str) -> list[str]:
+    tokens, i = [], 0
+    while i < len(pattern):
+        if pattern[i] == "[":
+            end = pattern.find("]", i + 2)
+            if end > 0:
+                tokens.append(pattern[i : end + 1])
+                i = end + 1
+                continue
+        tokens.append(pattern[i])
+        i += 1
+    return tokens
+
+
+def _token_meet(a: str, b: str) -> bool:
+    if a == "?" or b == "?" or (a.startswith("[") and b.startswith("[") and len(a) > 1):
+        return True
+    if a.startswith("[") and len(a) > 1:
+        return fnmatch.fnmatchcase(b, a)
+    if b.startswith("[") and len(b) > 1:
+        return fnmatch.fnmatchcase(a, b)
+    return a == b
+
+
+def _glob_meet(a: str, b: str) -> bool:
+    """Some string matches both fnmatch patterns `a` and `b` (one path component)."""
+    ta, tb = _glob_tokens(a), _glob_tokens(b)
+
+    @cache
+    def go(i: int, j: int) -> bool:
+        if i == len(ta) and j == len(tb):
+            return True
+        if i < len(ta) and ta[i] == "*":
+            return go(i + 1, j) or (j < len(tb) and go(i, j + 1))
+        if j < len(tb) and tb[j] == "*":
+            return go(i, j + 1) or (i < len(ta) and go(i + 1, j))
+        if i == len(ta) or j == len(tb):
+            return False
+        return _token_meet(ta[i], tb[j]) and go(i + 1, j + 1)
+
+    return go(0, 0)
+
+
+def _path_meet(parts: tuple[str, ...], template: tuple[str, ...]) -> bool:
+    """A path matching the pattern components `parts` can match `template` (`**` in the
+    template spans any number of components)."""
+
+    @cache
+    def go(i: int, j: int) -> bool:
+        if j == len(template):
+            return i == len(parts)
+        if template[j] == "**":
+            return go(i, j + 1) or (i < len(parts) and go(i + 1, j))
+        return i < len(parts) and _glob_meet(parts[i], template[j]) and go(i + 1, j + 1)
+
+    return go(0, 0)
+
+
+@cache
+def _template_parts(template: str) -> tuple[str, ...]:
+    return tuple(template.split("/"))
+
+
+def _protected_templates() -> tuple[str, ...]:
+    dirs = src_dirs()
+    sources = (
+        tuple(f"{d}/**" for d in dirs)
+        if dirs is not None
+        else tuple(f"**/{d}/**" for d in DEFAULT_SRC_DIRS)
+    )
+    return (*PROTECTED_TEMPLATES, CONFIG_FILE, *sources)
+
+
+def _harness_templates() -> tuple[str, ...]:
+    return tuple(f"{e}/**" for e in HARNESS_ENTRIES)
+
+
+def _executed_harness(command: str, depth: int = 0) -> list[str]:
+    """Spellings of harness paths the line runs as a command or as a script operand
+    of a shell/interpreter, including inside `$(…)`."""
+    found: list[str] = []
+    if depth > 4:
+        return found
+    for cmd in _shell.split(command):
+        for word in (*cmd.words, *cmd.out_targets, *cmd.in_targets):
+            for part in word.parts:
+                if part.kind in (_shell.CMD, _shell.PROC):
+                    found += _executed_harness(part.text, depth + 1)
+        words = strip_wrappers([w.raw for w in cmd.words if not RE_ASSIGNMENT.match(w.raw)])
+        if not words:
+            continue
+        name = os.path.basename(words[0])
+        if name in SHELLS or INTERPRETERS.match(name):
+            script = _script_operand(name, words[1:])
+            runs = [script] if script is not None else []
+        else:
+            runs = [words[0]]
+        found += [w for w in runs if _mentions_harness(w)]
+    return found
+
+
+def _script_operand(name: str, args: list[str]) -> str | None:
+    """The script file a shell or interpreter runs, past its options; None for
+    `-c`/`-m`/stdin or options the guard cannot parse."""
+    if name in SHELLS:
+        return _shell_script(args)
+    if name.startswith("python"):
+        return _python_script(args)
+    return args[0] if args and not args[0].startswith("-") else None
+
+
+def _shell_script(args: list[str]) -> str | None:
+    if _shell_body(args) is not None:
+        return None
+    i = 0
+    while i < len(args) and args[i][:1] in "-+" and args[i] != "--":
+        if args[i].startswith("-") and "n" in args[i][1:] and not args[i].startswith("--"):
+            return None  # -n: syntax check only, nothing runs
+        i += 2 if args[i] in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file") else 1
+    i += 1 if i < len(args) and args[i] == "--" else 0
+    return args[i] if i < len(args) else None
+
+
+def _python_script(args: list[str]) -> str | None:
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-h", "-?", "--help", "--help-all", "-V", "--version"):
+            return None  # prints and exits: the script never runs
+        if arg == "--" or not arg.startswith("-"):
+            script = i + 1 if arg == "--" else i
+            return args[script] if script < len(args) else None
+        step = _py_long(arg) if arg.startswith("--") else 0
+        kind, rest = ("long", "") if step else _py_short(arg)
+        if arg == "-" or kind in ("c", "m", "unknown") or (arg.startswith("--") and not step):
+            return None
+        i += step or (2 if kind == "value" and not rest else 1)
+    return None
+
+
+def _mask_executed(text: str, executed: list[str]) -> str:
+    """Blank one whole-word occurrence of `text` per executed harness path. Any other
+    occurrence (an argument, a string) still counts as a mention."""
+    for spelled in executed:
+        text = re.sub(rf"(?<![\w./-]){re.escape(spelled)}(?![\w./-])", " ", text, count=1)
+    return text
+
+
 class BashAnalyzer:
-    """Walks the simple commands of one Bash call, tracking `cd`, and raises Blocked."""
+    """Walks the simple commands of one Bash call, tracking `cd` and variables per shell
+    frame (I3b), and raises Blocked."""
 
     def __init__(self, command: str) -> None:
         self.raw = command
-        self.cwd = ROOT
+        self.frame = Frame(ROOT)
         self.found = Findings()
+        self._dynamic: set[str] = set()  # spellings of the current command's dynamic words
+        self._stdin: list[str] = []  # here-doc / here-string bodies of the current command
+        self._stdin_expands: list[bool] = []  # per body: Bash expands `$…` in it
+        self._stdin_code: str | None = None  # the stdin code _python_code returned
+
+    @property
+    def cwd(self) -> Path:
+        return self.frame.cwd
+
+    @cwd.setter
+    def cwd(self, value: Path) -> None:
+        self.frame.cwd = value
 
     def run(self, command: str | None = None, depth: int = 0) -> Findings:
         if depth > 4:
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd="deeply nested shell"))
-        for simple in split_commands(self.raw if command is None else command):
-            for target in simple.out_targets:
-                self._check(target, destructive=False)
-            words, unsure = strip_wrappers_checked(simple.words)
-            if unsure and RE_SEALER_NAME.search(" ".join(simple.words)):
-                raise Blocked(MSG_SEAL)  # fail-closed: an unknown wrapper flag may hide it
-            if words:
-                self._command(words, depth)
+        commands, unsure = _shell.split_checked(self.raw if command is None else command)
+        if unsure or (command is not None and _shell.RE_UNSURE_BODY.search(command)):
+            self._unfollowed()
+        for simple in commands:
+            self._simple(simple, depth)
         return self.found
 
+    def _unfollowed(self) -> None:
+        """Fail closed like D1: a construct the lexer may misread, on a call that names
+        a protected or harness path."""
+        what = "shell construct the guard cannot follow"
+        if _mentions_harness(_mask_executed(self.raw, _executed_harness(self.raw))):
+            raise Blocked(MSG_HARNESS.format(target=what))
+        if _mentions_protected(self.raw):
+            raise Blocked(MSG_SHELL_OPAQUE.format(cmd=what))
+
+    def _nested(self, body: str, depth: int, everything: bool) -> None:
+        """Analyse `body` in its own frame: its `cd` and assignments do not leak."""
+        saved, dynamic, stdin = self.frame, self._dynamic, (self._stdin, self._stdin_expands)
+        self.frame = saved.child(everything)
+        try:
+            self.run(body, depth + 1)
+        finally:
+            self.frame, self._dynamic, (self._stdin, self._stdin_expands) = saved, dynamic, stdin
+
+    def _word(self, word: _shell.Word, depth: int) -> tuple[str, bool]:
+        """(text, dynamic): the word expanded in the current frame. Substitutions are
+        analysed as nested commands; a dynamic word keeps its spelling."""
+        text: list[str] = []
+        dynamic = False
+        for part in word.parts:
+            if part.kind in (_shell.LIT, _shell.QUOTED):
+                text.append(part.text)
+            elif part.kind == _shell.VAR:
+                value = self.frame.lookup(part.text) if part.text else None
+                dynamic |= value is None
+                text.append("" if value is None else value)
+            else:  # CMD / PROC: substitutions see every variable of the parent (C)
+                self._nested(part.text, depth, everything=True)
+                dynamic = True
+        return (word.raw, True) if dynamic else ("".join(text), False)
+
+    def _words(
+        self, simple: _shell.Command, depth: int, frame: Frame
+    ) -> tuple[list[str], set[str], dict[str, str | None]]:
+        """(words, dynamic spellings, prefix assignments). Prefix assignments go to a
+        temporary frame that the rest of the command (and its children) sees."""
+        words: list[str] = []
+        dynamic: set[str] = set()
+        prefix: dict[str, str | None] = {}
+        for word in simple.words:
+            text, is_dynamic = self._word(word, depth)
+            if word.is_proc:  # <(…) / >(…) operand: a nested command, not a file
+                continue
+            if not words and RE_ASSIGNMENT.match(word.raw):
+                name, _, value = (word.raw if is_dynamic else text).partition("=")
+                prefix[name] = None if is_dynamic else value
+                if self.frame is frame:  # later prefix words see it (`D=x F=$D/y cmd`)
+                    self.frame = frame.child(everything=True)
+                self.frame.vars[name] = prefix[name]
+                self.frame.exported.add(name)
+            else:
+                words.append(text)
+                if is_dynamic:
+                    dynamic.add(text)
+        return words, dynamic, prefix
+
+    def _targets(self, simple: _shell.Command, depth: int) -> list[tuple[str, bool]]:
+        """Expanded output targets; `> >(cmd)` is analysed as a command, not a file."""
+        for word in simple.in_targets:
+            self._word(word, depth)
+        targets = [(word, self._word(word, depth)) for word in simple.out_targets]
+        return [expanded for word, expanded in targets if not word.is_proc]
+
+    def _simple(self, simple: _shell.Command, depth: int) -> None:
+        frame = self.frame
+        words, dynamic, prefix = self._words(simple, depth, frame)
+        targets = self._targets(simple, depth)
+        if not words:  # a plain assignment statement: it stays in this shell
+            self.frame = frame
+            frame.vars.update(prefix)
+        self._dynamic = dynamic | {t for t, d in targets if d}
+        self._stdin = simple.stdin
+        self._stdin_expands = simple.stdin_expands
+        for body, expands in zip(simple.stdin, simple.stdin_expands, strict=True):
+            for inner in _shell.substitutions(body) if expands else ():
+                self._nested(inner, depth, everything=True)  # Bash runs them first
+        try:
+            for target, _ in targets:
+                self._check(target, destructive=False)
+            if words:
+                stripped, unsure = strip_wrappers_checked(words)
+                if unsure and RE_SEALER_NAME.search(" ".join(words)):
+                    raise Blocked(MSG_SEAL)  # fail-closed: an unknown wrapper flag may hide it
+                if stripped:
+                    self._command(stripped, depth)
+        finally:
+            if self.frame is not frame:  # prefix assignments end with the command
+                frame.cwd, frame.cwd_dynamic = self.frame.cwd, self.frame.cwd_dynamic
+                self.frame = frame
+
+    # ── targets ──────────────────────────────────────────────────────────────
+
     def _check(self, raw: str, destructive: bool) -> None:
+        relative = not os.path.isabs(os.path.expanduser(raw))
+        if raw in self._dynamic or (self.frame.cwd_dynamic and relative):
+            self._unresolved(raw)
+            return
         for spelled in self._expand(raw):
             kind = protected_kind(resolve(spelled, self.cwd), destructive)
             if kind:
                 raise Blocked(MSG_SHELL_WRITE.format(target=raw, kind=kind))
             if harness_kind(spelled, self.cwd, destructive):
                 raise Blocked(MSG_HARNESS.format(target=raw))
+        if any(ch in raw for ch in "*?[") and not glob.glob(raw, root_dir=self.cwd):
+            self._unmatched_glob(raw)
+
+    def _unresolved(self, raw: str, text: str | None = None) -> None:
+        """D1: a target the guard cannot resolve blocks only when the call (or the
+        interpreter code) names a harness or protected path. Running a harness script
+        (`./harness/x.sh`, `python3 harness/x.py`) does not count as naming it."""
+        text = self.raw if text is None else text
+        if _mentions_harness(_mask_executed(text, _executed_harness(self.raw))):
+            raise Blocked(MSG_HARNESS.format(target=raw))
+        if _mentions_protected(text):
+            raise Blocked(MSG_SHELL_WRITE.format(target=raw, kind="unresolved target"))
+
+    def _unmatched_glob(self, raw: str) -> None:
+        """B: a pattern with no match blocks when it could name a protected or harness path."""
+        lexical = _lexical(raw, self.cwd)
+        rel = project_rel(lexical)
+        if rel is not None:
+            parts = tuple(Path(rel).parts)
+            if any(_path_meet(parts, _template_parts(t)) for t in _harness_templates()):
+                raise Blocked(MSG_HARNESS.format(target=raw))
+            if any(_path_meet(parts, _template_parts(t)) for t in _protected_templates()):
+                raise Blocked(
+                    MSG_SHELL_WRITE.format(target=raw, kind="pattern of a protected path")
+                )
+        home = Path(os.path.abspath(_upgrade._claude_home()))
+        if lexical.is_relative_to(home):
+            parts = tuple(lexical.relative_to(home).parts)
+            for name in HARNESS_GLOBAL:
+                if _path_meet(parts, (name, "**")):
+                    raise Blocked(MSG_HARNESS.format(target=raw))
 
     def _expand(self, raw: str) -> Iterator[str]:
         """The spellings `raw` stands for: its glob matches, or itself."""
@@ -647,6 +1042,8 @@ class BashAnalyzer:
                 yield from matches
                 return
         yield raw
+
+    # ── commands ─────────────────────────────────────────────────────────────
 
     def _command(self, words: list[str], depth: int) -> None:
         name, args = os.path.basename(words[0]), words[1:]
@@ -659,18 +1056,54 @@ class BashAnalyzer:
             "dd": self._dd,
         }.get(name)
         self.found.mentions_protected |= any(self._is_protected(a) for a in args)
+        body = _shell_body(args) if name in SHELLS else None
         if handler:
             handler(args, depth)
-        elif name in SHELLS and "-c" in args[:-1]:
-            self.run(args[args.index("-c") + 1], depth + 1)
+        elif body is not None:
+            if args[body] in self._dynamic:
+                self._unresolved(args[body])
+            self._nested(args[body], depth, everything=False)
         elif name == "eval":
             self.run(" ".join(args), depth + 1)
         elif name in ("patch",):
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd=name))
         elif _is_seal(name, args):
             raise Blocked(MSG_SEAL)
+        elif name in DECLARERS or name in ("unset", "read", "printf", "for", "select"):
+            self._variables(name, args)
+            self._file_verbs(name, args)
+        elif name in ("source", "."):
+            self.frame.tainted = True
         else:
             self._file_verbs(name, args)
+
+    def _variables(self, name: str, args: list[str]) -> None:
+        """Track declarations and the builtins that set a variable at runtime."""
+        frame = self.frame
+        if name in DECLARERS:
+            self._declare(name, args)
+        elif name == "unset":
+            for arg in args:
+                frame.vars.pop(arg, None)
+        elif name == "read":
+            for arg in (a for a in args if RE_NAME.fullmatch(a)):
+                frame.vars[arg] = None
+        elif name == "printf" and "-v" in args[:-1]:
+            frame.vars[args[args.index("-v") + 1]] = None
+        elif name in ("for", "select") and args and RE_NAME.fullmatch(args[0]):
+            frame.vars[args[0]] = None
+
+    def _declare(self, name: str, args: list[str]) -> None:
+        """export / declare / typeset / local / readonly NAME[=value] (-x exports)."""
+        export = name == "export" or any(a.startswith("-") and "x" in a for a in args)
+        for arg in (a for a in args if not a.startswith("-")):
+            var, eq, value = arg.partition("=")
+            if not RE_NAME.fullmatch(var):
+                continue
+            if eq:
+                self.frame.vars[var] = None if arg in self._dynamic else value
+            if export:
+                self.frame.exported.add(var)
 
     def _is_protected(self, arg: str) -> bool:
         return not arg.startswith("-") and any(
@@ -681,19 +1114,109 @@ class BashAnalyzer:
 
     def _file_verbs(self, name: str, args: list[str]) -> None:
         operands = [a for a in args if not a.startswith("-")]
-        if name in ANY_ARG_VERBS or (
-            name in INPLACE_VERBS and any(RE_INPLACE_FLAG.match(a) for a in args)
-        ):
+        if name in INPLACE_VERBS and any(RE_INPLACE_FLAG.match(a) for a in args):
+            for arg in _inplace_files(args):
+                self._check(arg, destructive=False)
+        elif name in ANY_ARG_VERBS:
             for arg in operands:
                 self._check(arg, destructive=name in DESTRUCTIVE_VERBS)
         elif name in DEST_ARG_VERBS:
             for target in self._destinations(name, args):
                 self._check(target, destructive=False)
-        elif INTERPRETERS.match(name) and RE_WRITE_CALL.search(self.raw):
+        elif INTERPRETERS.match(name):
+            self._interpreter(name, args)
+
+    def _interpreter(self, name: str, args: list[str]) -> None:
+        """E: Python code is parsed and its write calls checked; anything else (other
+        interpreters, `-m`, code that does not parse) keeps the fail-closed regex rule."""
+        code = self._python_code(args) if name.startswith("python") else None
+        dynamic = False
+        if code is not None and code is self._stdin_code:
+            code, dynamic = self._expand_body(code)
+        writes = _pywrites.analyze(code) if code is not None else None
+        if code is not None and writes is not None:
+            for write in writes:
+                if dynamic and write.writes is not False:
+                    # Bash rewrote the code before Python ran: no target is trusted
+                    write = _pywrites.Write(write.op, None, write.writes, write.destructive)
+                self._python_write(name, write, code)
+            return
+        if RE_WRITE_CALL.search(self.raw):
             if _mentions_harness(self.raw):
                 raise Blocked(MSG_HARNESS.format(target=name))
             if _mentions_protected(self.raw):
                 raise Blocked(MSG_SHELL_OPAQUE.format(cmd=name))
+
+    def _python_write(self, name: str, write: _pywrites.Write, code: str) -> None:
+        if write.writes is False:
+            return  # a read
+        if write.target is None:
+            # the call and the code: a target may arrive as an argument (sys.argv)
+            self._unresolved(f"{name}: {write.op}(…)", f"{self.raw}\n{code}")
+            return
+        kind = protected_kind(resolve(write.target, self.cwd), write.destructive)
+        if kind:
+            raise Blocked(MSG_SHELL_WRITE.format(target=write.target, kind=kind))
+        if harness_kind(write.target, self.cwd, write.destructive):
+            raise Blocked(MSG_HARNESS.format(target=write.target))
+
+    def _python_code(self, args: list[str]) -> str | None:
+        """The code python runs: `-c` text, stdin (`-` or no script) from a here-doc or
+        here-string, or a literal script file inside the project. None: not analysable."""
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg == "-":
+                break
+            if arg == "--" or not arg.startswith("-"):
+                script = args[i + 1] if arg == "--" and i + 1 < len(args) else arg
+                return self._script(script)
+            if arg.startswith("--"):
+                step = _py_long(arg)
+                if not step:
+                    return None
+                i += step
+                continue
+            kind, rest = _py_short(arg)
+            if kind == "c":
+                return rest or (args[i + 1] if i + 1 < len(args) else None)
+            if kind in ("m", "unknown"):
+                return None
+            i += 2 if kind == "value" and not rest else 1
+        if not self._stdin:
+            return None
+        self._stdin_code = "\n".join(self._stdin)
+        return self._stdin_code
+
+    def _expand_body(self, code: str) -> tuple[str, bool]:
+        """Expand an unquoted here-doc / here-string the way Bash does before Python
+        reads it: `$NAME`/`${NAME}` from the frame. Anything else (`$(…)`, backticks,
+        `${X%y}`, an unknown name) leaves the body dynamic."""
+        if not any(self._stdin_expands):
+            return code, False
+        dynamic = "`" in code or "$(" in code or re.search(r"\$[0-9@*#?$!-]", code) is not None
+
+        def sub(match: re.Match[str]) -> str:
+            nonlocal dynamic
+            value = self.frame.lookup(match.group(1) or match.group(2))
+            if value is None:
+                dynamic = True
+                return match.group(0)
+            return value
+
+        code = re.sub(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)", sub, code)
+        return code, dynamic or "${" in code
+
+    def _script(self, raw: str) -> str | None:
+        if raw in self._dynamic:
+            return None
+        path = resolve(raw, self.cwd)
+        if project_rel(path) is None or not path.is_file():
+            return None
+        try:
+            return path.read_text(errors="replace")
+        except OSError:
+            return None
 
     def _destinations(self, name: str, args: list[str]) -> list[str]:
         """The destination of cp/install/ln/rsync, plus `dir/<source name>` for each
@@ -719,7 +1242,13 @@ class BashAnalyzer:
         return any(base.parent in spellings for base in _harness_bases())
 
     def _cd(self, args: list[str], depth: int) -> None:
-        self.cwd = resolve(args[0], self.cwd) if args else Path.home()
+        target = args[0] if args else str(Path.home())
+        if target in self._dynamic:
+            self.frame.cwd_dynamic = True
+            return
+        if os.path.isabs(os.path.expanduser(target)):
+            self.frame.cwd_dynamic = False
+        self.cwd = resolve(target, self.cwd)
 
     def _dd(self, args: list[str], depth: int) -> None:
         for arg in args:
@@ -738,8 +1267,19 @@ class BashAnalyzer:
             self._check(root, destructive=True)
 
     def _xargs(self, args: list[str], depth: int) -> None:
-        verb = next((os.path.basename(a) for a in args if not a.startswith("-")), "echo")
-        writes = verb in ANY_ARG_VERBS | DEST_ARG_VERBS | INPLACE_VERBS
+        i, replace = _xargs_options(args)
+        words = strip_wrappers(args[i:]) or ["echo"]
+        verb, verb_args = os.path.basename(words[0]), words[1:]
+        body = _shell_body(verb_args) if verb in SHELLS else None
+        if body is not None:  # C: the shell body runs with operands we cannot know
+            text = verb_args[body]
+            if replace:
+                text = text.replace(replace, "$" + XARGS_OPERAND)
+            self._nested(text, depth, everything=False)
+            return
+        writes = verb in ANY_ARG_VERBS | DEST_ARG_VERBS | INPLACE_VERBS | SHELLS
+        if writes and _mentions_harness(self.raw):
+            raise Blocked(MSG_HARNESS.format(target=f"xargs {verb}"))
         # xargs takes its operands from stdin, so judge by what the whole line touches.
         if writes and (self.found.mentions_protected or _mentions_protected(self.raw)):
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd=f"xargs {verb}"))
