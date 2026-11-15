@@ -82,6 +82,19 @@ def test_guard_bash_is_alive_and_blocks_a_claude_commit(project: Project) -> Non
     assert project.run("guard_bash.sh", bash_payload("git commit -m x")).returncode == 2
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "bash -lc 'echo x > progress/review_1.md'",
+        "F=progress/review_1.md; echo x > $F",
+    ],
+)
+def test_guard_bash_blocks_dynamic_writes_to_protected_state(project: Project, cmd: str) -> None:
+    """I3b (#32): nested shells and variables reach protected state like a literal target."""
+    project.write("progress/review_1.md", "# Review\n")
+    assert project.run("guard_bash.sh", bash_payload(cmd)).returncode == 2
+
+
 @pytest.mark.parametrize("stdin", MALFORMED)
 def test_guard_bash_fails_closed_on_a_malformed_payload(project: Project, stdin: str) -> None:
     """I9: a guard that cannot read its input blocks the action (exit 2)."""
