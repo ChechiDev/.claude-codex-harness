@@ -17,6 +17,11 @@ if [ -n "${HARNESS_ASSUME_APPROVED:-}" ]; then
   echo "[ASSUMED] HARNESS_ASSUME_APPROVED=$HARNESS_ASSUME_APPROVED: its verdict reads approved and its seal matching; counterfactual run, not a real result"
   echo ""
 fi
+# The issue gate's third run (issue #31): the gate excluded these test files.
+if [ -n "${HARNESS_EXPECT_RED:-}" ]; then
+  echo "[ASSUMED] HARNESS_EXPECT_RED=$HARNESS_EXPECT_RED: the gate excluded these test files from this run; not a real result"
+  echo ""
+fi
 
 echo "── 1. Environment ──────────────────────────────────────"
 # Language-agnostic: delegate the toolchain check to the Makefile's env-check
