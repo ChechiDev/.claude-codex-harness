@@ -4,6 +4,11 @@ description: Code worker (Claude). Implements ONE subtask N.M.K whose plan is ap
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 effort: medium
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: 'cd "${CLAUDE_PROJECT_DIR:-.}" && [ -f Makefile ] || exit 0; python3 -c "import json,sys; sys.exit(1 if json.load(sys.stdin).get(\"stop_hook_active\") else 0)" || exit 0; out=$(make verify 2>&1) && exit 0; printf "make verify is red; fix it before stopping (one nudge only, the code gate still decides):\n%s\n" "$(printf "%s" "$out" | tail -n 40)" >&2; exit 2'
 ---
 
 # Implementer agent (Claude — code and unit tests)
