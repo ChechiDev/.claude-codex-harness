@@ -152,6 +152,29 @@ MSG_COMMIT = (
 )
 
 
+# Exporting a shell function hands it to every child Bash, the harness scripts
+# included, where it could replace a command of a decision-making check.
+RE_EXPORT_FUNCTION = re.compile(
+    r"BASH_FUNC_|\bexport\s+(?:-\w*\s+)*-\w*f|\b(?:declare|typeset|local)\s+(?:-\w*\s+)*-\w*(?:fx|xf)"
+)
+# A Bash startup file runs in every child Bash before its first line.
+RE_STARTUP = re.compile(r"\bBASH_ENV\b")
+MSG_STARTUP = (
+    "BLOCKED: BASH_ENV is not allowed: the startup file it names runs inside the "
+    "harness scripts before their first line."
+)
+MSG_EXPORT_FUNCTION = (
+    "BLOCKED: exporting shell functions (export -f, declare -fx, BASH_FUNC_*) is not "
+    "allowed: they reach the harness scripts and could replace a command of the check."
+)
+
+
+MSG_EXPECT_RED = (
+    "BLOCKED: HARNESS_EXPECT_RED is set only by the issue gate for its third run "
+    "(review_with_codex.sh). Run `make check` without it."
+)
+
+
 MSG_ASSUME = (
     "BLOCKED: HARNESS_ASSUME_APPROVED is set only by the roadmap/phase/issue gate for its "
     "counterfactual run (review_with_codex.sh). Run `make check` without it."
@@ -1357,6 +1380,12 @@ def guard_bash(payload: object) -> None:
         return
     if "HARNESS_ASSUME_APPROVED" in command:  # best effort (issue #27)
         raise Blocked(MSG_ASSUME)
+    if "HARNESS_EXPECT_RED" in command:  # best effort (issue #31)
+        raise Blocked(MSG_EXPECT_RED)
+    if RE_STARTUP.search(command):  # best effort (issue #31)
+        raise Blocked(MSG_STARTUP)
+    if RE_EXPORT_FUNCTION.search(command):  # best effort (issue #31)
+        raise Blocked(MSG_EXPORT_FUNCTION)
     found = BashAnalyzer(command).run()
     if (found.commits or found.publishes) and RE_ATTRIBUTION.search(command):
         raise Blocked(MSG_ATTRIBUTION)

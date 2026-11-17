@@ -37,4 +37,4 @@ max-complexity = 10
 strict = true
 python_version = "3.12"
 mypy_path = "lib"
-files = ["lib/_attribution.py", "lib/_config.py", "lib/_guard.py", "lib/_harness.py", "lib/_issue.py", "lib/_legacy.py", "lib/_migrate.py", "lib/_plan_seal.py", "lib/_seal_required.py", "lib/_pr.py", "lib/_status.py", "lib/_upgrade.py", "lib/_verdict.py", "lib/plan_status.py", "lib/sync_plan.py", "compat/_compat.py", "compat/_rehearse.py", "tests"]
+files = ["lib/_attribution.py", "lib/_close_scope.py", "lib/_config.py", "lib/_expect_red.py", "lib/_guard.py", "lib/_harness.py", "lib/_issue.py", "lib/_legacy.py", "lib/_migrate.py", "lib/_plan_seal.py", "lib/_seal_required.py", "lib/_pr.py", "lib/_status.py", "lib/_upgrade.py", "lib/_verdict.py", "lib/plan_status.py", "lib/sync_plan.py", "compat/_compat.py", "compat/_rehearse.py", "tests"]
