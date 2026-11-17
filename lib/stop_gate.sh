@@ -8,6 +8,12 @@
 # Cache: a green result is remembered per working-tree fingerprint (git state +
 # untracked contents), so an unchanged tree does not re-run the whole suite.
 set -uo pipefail
+# Inherited exported functions could stand in for any command this script runs
+# (issue #31): drop them all before anything else.
+for _f in $(builtin compgen -A function); do builtin unset -f "$_f"; done; builtin unset _f
+if [ -n "$(builtin compgen -A function)" ]; then
+  echo "[FAIL] inherited shell functions remain: refusing to run" >&2; exit 1
+fi
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 cd "$PROJECT_DIR" || exit 0
@@ -29,7 +35,8 @@ fi
 
 LOG="$(mktemp)"
 # Never under the gate's counterfactual assumption (issue #27).
-if env -u HARNESS_ASSUME_APPROVED make check >"$LOG" 2>&1; then
+. "$HARNESS_DIR/_clean_env.sh"
+if "${CLEAN_ENV[@]}" make check >"$LOG" 2>&1; then
   echo "[harness] make check OK — session ready to close."
   rm -f "$LOG"
   if [ -n "$FP" ] && [ -n "$CACHE" ]; then printf '%s' "$FP" >"$CACHE"; fi
