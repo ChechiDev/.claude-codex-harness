@@ -56,6 +56,7 @@ Common criteria (what a senior engineer would look at):
   except for the two declared markers described in `plan` mode.
   Re-gate exception, in `roadmap`, `phase` and `issue` modes only: with the check red you may approve only when the prompt reports the gate's counterfactual run (`HARNESS_ASSUME_APPROVED=<target>`) green,
   and you list the first run's FAIL lines in your verdict. A red counterfactual run, or none, means the red check blocks.
+  In-progress re-gate, in `issue` mode only: with the counterfactual run red you may approve only when the prompt reports the gate's third run (`HARNESS_EXPECT_RED=<T>`) green and your verdict accounts for every test in every file of T, not only the failures in the logs (a C test binary stops at its first failure). For each file of T read it and the subtask's changes, and state why each of its tests may fail now: an acceptance test of its own in-progress subtask (red by design) or a migrated oracle whose expectation the issue's declared behaviour change replaces; also account for every lint or build failure of those files in the first and second runs. A test or failure you cannot tie to one of these blocks approval. List T, the first run's FAIL lines and that per-file accounting in your verdict. No third run, or a red one, means the red check blocks.
 - Objective criteria from `docs/architecture.md`, `docs/conventions.md`, and `CHECKPOINTS.md`.
 - For **Python** projects the shared-standard skills apply: read `py-pytest`,
   `py-style`, `py-pydantic`, `py-typing` as authoritative. For **C** projects use
@@ -344,5 +345,6 @@ or `CHANGES_REQUESTED -> progress/review_<N.M.K>.md`.
 
 - ❌ Never approve with the harness check red. Only exceptions: the red acceptance tests of `plan` mode (see Toolchain),
   and the re-gate exception of `roadmap`, `phase` and `issue` modes when the counterfactual run (`HARNESS_ASSUME_APPROVED`) is green.
+  In `issue` mode also the in-progress re-gate exception when the third run (`HARNESS_EXPECT_RED`) is green and every test in every file of T is accounted for (see Toolchain).
 - ❌ Never edit the implementer's production code.
 - ✅ Be specific: cite `file:line`.
