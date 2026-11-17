@@ -39,6 +39,12 @@
 # turns it off; HARNESS_GH overrides the gh binary). A failed push or PR never
 # undoes the close: it warns and prints the command to retry.
 set -uo pipefail
+# Inherited exported functions could stand in for any command this script runs
+# (issue #31): drop them all before anything else.
+for _f in $(builtin compgen -A function); do builtin unset -f "$_f"; done; builtin unset _f
+if [ -n "$(builtin compgen -A function)" ]; then
+  echo "[FAIL] inherited shell functions remain: refusing to run" >&2; exit 1
+fi
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HARNESS_DIR/_colors.sh"
@@ -62,11 +68,85 @@ CHECK_CMD="${HARNESS_CHECK_CMD:-make check}"
 # Run the project check outside the sandbox; $1 = log file. Returns its exit code.
 # Every decision-making run drops HARNESS_ASSUME_APPROVED (issue #27): only the
 # gate's counterfactual run sets it, for exactly the reviewed target.
-run_check() { env -u HARNESS_ASSUME_APPROVED bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null; }
+# They also drop every variable that could exclude tests or override make variables
+# (issue #31): only the issue gate's third run sets them.
+. "$HARNESS_DIR/_clean_env.sh"
+run_check() { "${CLEAN_ENV[@]}" bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null; }
 # $1 = log file, $2 = target (roadmap | phase:NN | issue:ISS-n).
 run_check_assuming() {
-  env -u HARNESS_ASSUME_APPROVED HARNESS_ASSUME_APPROVED="$2" bash -c "$CHECK_CMD" \
-    >"$1" 2>&1 </dev/null
+  "${CLEAN_ENV[@]}" HARNESS_ASSUME_APPROVED="$2" bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null
+}
+# The C template's test list: "<origin of TESTS>" then one file per line.
+read_tests_var() {
+  local mk rc
+  mk="$(mktemp "${TMPDIR:-/tmp}/harness-tests.XXXXXX")"
+  printf '%s\n' '__harness_print_tests:' "	@echo '\$(origin TESTS)'" \
+    "	@printf '%s\\n' \$(TESTS)" >"$mk"
+  "${CLEAN_ENV[@]}" make -s --no-print-directory -f Makefile -f "$mk" __harness_print_tests \
+    2>/dev/null </dev/null
+  rc=$?; rm -f "$mk"; return $rc
+}
+# Issue gate, third run (issue #31): `make check` assuming the issue approved, with the
+# test files of T (one per line in $3) excluded by code: pytest --ignore for Python,
+# a `TESTS=` override on the command line for a C Makefile that assigns TESTS.
+# $1 = log, $2 = target. Returns 99 when the exclusion cannot be applied.
+run_check_tolerating() {
+  local log="$1" target="$2" files="$3" label out origin keep=() t f skip args=()
+  # The build and test configuration must be what the last approved close committed
+  # (the leader cannot commit outside it): a changed or new Makefile, pyproject.toml,
+  # setup.cfg, tox.ini, pytest.ini or conftest.py (git-ignored ones too) means no
+  # third run.
+  local cfg
+  cfg="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git status --porcelain \
+    --ignored --untracked-files=all -- Makefile GNUmakefile makefile pyproject.toml setup.cfg \
+    tox.ini pytest.ini ':(glob)**/conftest.py' ':(exclude,glob)**/.venv/**' \
+    ':(exclude,glob)**/venv/**' ':(exclude,glob)**/node_modules/**' 2>&1)" || return 99
+  [ -z "$cfg" ] || return 99
+  # Index flags (assume-unchanged, skip-worktree) hide changes from git status:
+  # compare each tracked configuration file's content with its blob in HEAD too.
+  local rel want have
+  while IFS= read -r -d '' rel; do
+    want="$(git rev-parse -q --verify "HEAD:./$rel" 2>/dev/null)" || return 99
+    have="$(git hash-object -- "$rel" 2>/dev/null)" || return 99
+    [ "$want" = "$have" ] || return 99
+  done < <(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git ls-files -z -- Makefile \
+    GNUmakefile makefile pyproject.toml setup.cfg tox.ini pytest.ini ':(glob)**/conftest.py')
+  # GNU make prefers GNUmakefile and makefile over Makefile: the probe and the
+  # check must read the same file, so only a lone Makefile gets a third run.
+  if [ -e GNUmakefile ] || [ -e makefile ] || [ ! -f Makefile ]; then return 99; fi
+  label="$(printf '%s' "$files" | paste -sd, -)"
+  out="$(read_tests_var)" || out=""
+  origin="$(printf '%s\n' "$out" | head -1)"
+  if [ "$origin" = "file" ]; then
+    python3 "$HARNESS_DIR/_expect_red.py" c-makefile-ok || return 99
+    while IFS= read -r t; do
+      [ -n "$t" ] || continue
+      skip=""
+      while IFS= read -r f; do [ "$t" = "$f" ] || [ "$t" = "./$f" ] && skip=1; done <<<"$files"
+      [ -n "$skip" ] || keep+=("$t")
+    done < <(printf '%s\n' "$out" | tail -n +2)
+    # Behaviour, not shape: the dry run of check must differ only by the files of T.
+    local dry; dry="$(mktemp -d "${TMPDIR:-/tmp}/harness-dry.XXXXXX")"
+    printf '%s\n' "$files" >"$dry/t"
+    printf '%s\n' "$out" | tail -n +2 | grep -v '^$' | paste -sd' ' - >"$dry/every"
+    printf '%s\n' "${keep[*]}" >"$dry/kept"
+    "${CLEAN_ENV[@]}" make -n -s --no-print-directory check >"$dry/full" 2>&1 </dev/null
+    "${CLEAN_ENV[@]}" make -n -s --no-print-directory check "TESTS=${keep[*]}" \
+      >"$dry/reduced" 2>&1 </dev/null
+    if ! python3 "$HARNESS_DIR/_expect_red.py" same-recipes "$dry/full" "$dry/reduced" "$dry/t" \
+        "$dry/every" "$dry/kept"; then
+      rm -rf "$dry"; return 99
+    fi
+    rm -rf "$dry"
+    "${CLEAN_ENV[@]}" HARNESS_ASSUME_APPROVED="$target" HARNESS_EXPECT_RED="$label" \
+      make check "TESTS=${keep[*]}" >"$log" 2>&1 </dev/null
+  elif [ "$origin" = "undefined" ] && [ -f pyproject.toml ]; then
+    while IFS= read -r f; do [ -n "$f" ] && args+=("--ignore=$f"); done <<<"$files"
+    "${CLEAN_ENV[@]}" HARNESS_ASSUME_APPROVED="$target" HARNESS_EXPECT_RED="$label" \
+      PYTEST_ADDOPTS="${args[*]}" make check >"$log" 2>&1 </dev/null
+  else
+    return 99
+  fi
 }
 new_log() { mktemp "${TMPDIR:-/tmp}/harness-check-$1.XXXXXX"; }
 
@@ -209,6 +289,38 @@ CHECK_RC=$?
 # check again assuming exactly this target approved; the reviewer may approve a red
 # first run only if this one is green. A HARNESS_CHECK_CMD override gets no second
 # run (fail-closed: the harness cannot know what it checks).
+# In-progress re-gate (issue #31): with the counterfactual run red too, an issue gate
+# computes T (_expect_red.py) and runs the check a third time without T. Any
+# ineligible `migrates:` entry, an empty T or a project whose tests cannot be
+# filtered means no third run (fail-closed, the #27 rule applies).
+third_run_step() {
+  local iid="$1" target="$2" files rc log
+  files="$(python3 "$HARNESS_DIR/_expect_red.py" "$iid" 2>&1)"; rc=$?
+  if [ "$rc" -eq 3 ]; then
+    printf '\n%s\n%s\n%s' \
+      "No third run, so the red counterfactual run blocks: T cannot be computed safely" \
+      "(ineligible migrates: entries, or paths the gate cannot exclude exactly):" "$(printf '%s\n' "$files" | sed 's/^/  - /')"
+    return 0
+  fi
+  [ "$rc" -eq 0 ] && [ -n "$files" ] || return 0
+  log="$(new_log "$PHASE-expect-red")"
+  run_check_tolerating "$log" "$target" "$files"; rc=$?
+  if [ "$rc" -eq 99 ]; then
+    rm -f "$log"
+    printf '\n%s' "No third run: this project's tests cannot be filtered by file."
+    return 0
+  fi
+  printf '\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+    "Third run (in-progress re-gate, issue mode): \`$CHECK_CMD\` again with" \
+    "HARNESS_ASSUME_APPROVED=$target and HARNESS_EXPECT_RED=$(printf '%s' "$files" | paste -sd, -) (the gate" \
+    "excluded these test files of T from the tests; their lint and build still ran in the first two runs):" \
+    "$(printf '%s\n' "$files" | sed 's/^/  - /')" \
+    "exit code $rc, full output in $log." \
+    "With the counterfactual run red you may approve only if this run is green AND your" \
+    "verdict accounts for every test in every file of T, not only the failures in the logs" \
+    "(read each file and the subtask's changes; see your role's in-progress re-gate rule);" \
+    "list T, the first run's FAIL lines and that per-file accounting."
+}
 ASSUME_STEP=""
 if [ "$CHECK_RC" -ne 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ]; then
   ASSUME=""
@@ -227,6 +339,9 @@ Counterfactual run (re-gate): \`$CHECK_CMD\` again with HARNESS_ASSUME_APPROVED=
 exit code $ASSUME_RC, full output in $ASSUME_LOG.
 With the first run red you may approve only if this run is green; list the first
 run's FAIL lines in your verdict."
+    if [ "$ASSUME_RC" -ne 0 ] && [ "$PHASE" = "issue" ]; then
+      ASSUME_STEP="$ASSUME_STEP$(third_run_step "$ID" "$ASSUME")"
+    fi
   fi
 fi
 CLOSE_STEP=""
