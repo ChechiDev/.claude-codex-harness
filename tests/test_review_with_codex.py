@@ -35,7 +35,7 @@ def _manual_run(
 def test_review_phases_use_workspace_write_without_git_or_network(
     project: Project, phase: str
 ) -> None:
-    out = _manual(project, phase)
+    out = _manual(project, phase, HARNESS_CHECK_CMD="true")
     assert "--sandbox workspace-write" in out
     assert "danger-full-access" not in out
     assert UV_CACHE in out
@@ -45,14 +45,14 @@ def test_review_phases_use_workspace_write_without_git_or_network(
 
 def test_doc_phase_cannot_write_git(project: Project) -> None:
     # The harness commits the close outside the sandbox, so Codex never needs .git.
-    project.set_verdict("code", "APPROVED")
+    project.set_verdict("code", "APPROVED", with_gate_record=True)
     out = _manual(project, "doc")
     assert "--sandbox workspace-write" in out
     assert f"{project.root}/.git" not in out
 
 
 def test_network_is_opt_in(project: Project) -> None:
-    out = _manual(project, "code", HARNESS_CODEX_NETWORK="1")
+    out = _manual(project, "code", HARNESS_CODEX_NETWORK="1", HARNESS_CHECK_CMD="true")
     assert "sandbox_workspace_write.network_access=true" in out
 
 
@@ -208,11 +208,21 @@ def test_usage_lists_every_gate(project: Project) -> None:
 
 
 def test_check_runs_before_codex_and_its_result_is_in_the_prompt(project: Project) -> None:
-    out = _manual(project, "code", HARNESS_CHECK_CMD="echo SUITE-OUTPUT; exit 3")
+    out = _manual(project, "plan", HARNESS_CHECK_CMD="echo SUITE-OUTPUT; exit 3")
     assert "Do NOT run `make check`" in out
     assert "exit code 3" in out
     log = next(w for w in out.split() if "harness-check" in w).strip("`.,")
     assert "SUITE-OUTPUT" in Path(log).read_text()
+
+
+def test_red_code_check_stops_before_the_reviewer(project: Project) -> None:
+    # Issue #39: in code mode a red check never reaches the reviewer.
+    res = _manual_run(project, "code", LEAF_ID, HARNESS_CHECK_CMD="echo SUITE-OUTPUT; exit 3")
+    assert res.returncode != 0
+    assert "SUITE-OUTPUT" in res.stderr
+    assert "codex exec" not in res.stdout
+    assert not (project.root / f"progress/review_{LEAF_ID}.md").exists()
+    assert not (project.root / "progress/review_history").exists()
 
 
 def test_default_check_is_make_check(project: Project) -> None:
@@ -222,7 +232,7 @@ def test_default_check_is_make_check(project: Project) -> None:
 
 def _codex_closing(project: Project, tmp: Path, message: str | None) -> dict[str, str]:
     """A fake documenter (code review APPROVED): marks the change, leaves its message."""
-    project.set_verdict("code", "APPROVED")
+    project.set_verdict("code", "APPROVED", with_gate_record=True)
     bin_dir = tmp / "fakebin"
     bin_dir.mkdir()
     write_msg = f"printf '%b\\n' {message!r} > progress/close_{LEAF_ID}.msg\n" if message else ""
@@ -284,7 +294,7 @@ def test_close_refuses_a_bad_or_missing_message(
 
 
 def test_manual_close_prints_the_commit_step(project: Project) -> None:
-    project.set_verdict("code", "APPROVED")
+    project.set_verdict("code", "APPROVED", with_gate_record=True)
     out = _manual(project, "doc")
     assert f"./harness/review_with_codex.sh close {LEAF_ID}" in out
     assert f"progress/close_{LEAF_ID}.msg" in out

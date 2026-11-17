@@ -276,7 +276,11 @@ def _verdict_cli(project: Project, *args: str) -> subprocess.CompletedProcess[st
 
 def test_manual_mode_prints_the_receipt_step_before_record(project: Project) -> None:
     res = project.run(
-        "review_with_codex.sh", None, "code", LEAF_ID, env={"HARNESS_CODEX_MODE": "manual"}
+        "review_with_codex.sh",
+        None,
+        "code",
+        LEAF_ID,
+        env={"HARNESS_CODEX_MODE": "manual", "HARNESS_CHECK_CMD": "true"},
     )
     assert res.returncode == 0, res.stdout + res.stderr
     out = res.stdout

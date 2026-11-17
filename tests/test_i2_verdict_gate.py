@@ -405,7 +405,7 @@ def test_cli_in_a_linked_worktree_on_another_filesystem(tmp_path: Path, outcome:
 
 def test_auto_doc_gate_is_unaffected(project: Project, tmp_path: Path) -> None:
     run = _prepare(project, CODE, tmp_path)
-    project.set_verdict("code", "APPROVED")
+    project.set_verdict("code", "APPROVED", with_gate_record=True)
     code_verdict = run.text(CODE.verdict)
     receipts = sorted(p.name for p in (project.root / "progress").glob("verdict_*.sha256"))
     # The documenter fails: doc passes its status through and touches no verdict.

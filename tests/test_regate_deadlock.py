@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import TOOLKIT, bash_payload
+from conftest import TOOLKIT, bash_payload, bind_code_approval
 from i0_projects import Installed, install_project
 
 VAR = "HARNESS_ASSUME_APPROVED"
@@ -398,6 +398,9 @@ def test_the_gates_first_run_ignores_an_inherited_variable(tmp_path: Path) -> No
 def test_the_close_check_ignores_an_inherited_variable(tmp_path: Path) -> None:
     project = _issue_project(tmp_path)
     _issue_changes_requested(project)
+    # A fresh approved code gate (issue #39), so only the red close check can refuse.
+    _verdict(project, f"review_{IID}.2.md", "APPROVED")
+    bind_code_approval(project.root, f"{IID}.2")
     _write(project, f"progress/close_{IID}.2.msg", f"fix(domain): s [{IID}.2]\n\nBody.\n")
     head = _sh(project, "git", "rev-parse", "HEAD")
     env = _gate_env(project, tmp_path, **{VAR: f"issue:{IID}"})
