@@ -150,16 +150,46 @@ run_check_tolerating() {
 }
 new_log() { mktemp "${TMPDIR:-/tmp}/harness-check-$1.XXXXXX"; }
 
+# Code-gate attempt record (issue #39, lib/_gate_run.py): every code-gate attempt
+# is recorded under .git/harness-gate-runs/ with the check result and fingerprints
+# of the implementation (files: + tests/unit/) and the toolkit.
+GATE_RUN_PY="$HARNESS_DIR/_gate_run.py"
+# $1 = id, $2 = check rc, $3 = log. A red check stops the code gate here: no
+# reviewer, no verdict, no round (never called in plan mode nor the re-gate).
+code_gate_record() {
+  local rc
+  python3 "$GATE_RUN_PY" record "$1" "$2" "$3" "$$"; rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  if [ "$rc" -eq 10 ]; then
+    fail "$CHECK_CMD is red (exit $2): the code review was not launched (log: $3)" >&2
+  fi
+  exit 1
+}
+# After a final code verdict: an APPROVED one binds the recorded attempt.
+code_gate_bind() {
+  if [ "$2" = "APPROVED" ]; then
+    python3 "$GATE_RUN_PY" approve "$1" "$$" ||
+      warn "could not bind the approval of $1 to its gate record: re-run the code gate" >&2
+  else
+    python3 "$GATE_RUN_PY" drop "$1"
+  fi
+}
+# The close refuses an approval that no longer covers the tree.
+code_gate_fresh() { python3 "$GATE_RUN_PY" fresh "$1"; }
+
 # Commit a close: the documenter's message, only with the check green.
 close_commit() {
   local id="$1" msg="progress/close_$1.msg" log text
   python3 "$HARNESS_DIR/_guard.py" commit-message "$msg" "$id" || return 1
+  code_gate_fresh "$id" || return 1
   log="$(new_log close)"
   if ! run_check "$log"; then
     fail "$CHECK_CMD is red after the close of $id: nothing committed (log: $log)" >&2
     tail -n 30 "$log" >&2
     return 1
   fi
+  # The check itself may rewrite files: the approval must still cover what is staged.
+  code_gate_fresh "$id" || return 1
   text="$(cat "$msg")"
   rm -f "$msg"
   git add -A && printf '%s\n' "$text" | git commit -q -F - || return 1
@@ -238,7 +268,8 @@ case "$PHASE" in
   roadmap) python3 "$HARNESS_PY" roadmap-ready || exit 1 ;;
   phase)   python3 "$HARNESS_PY" phase-ready "$ID" || exit 1 ;;
   issue)   python3 "$HARNESS_PY" issue-ready "$ID" || exit 1 ;;
-  doc)     python3 "$HARNESS_PY" close-ready "$ID" || exit 1 ;;
+  doc)     python3 "$HARNESS_PY" close-ready "$ID" || exit 1
+           code_gate_fresh "$ID" || exit 1 ;;
   plan)    python3 "$HARNESS_PY" subtask-ready "$ID" || exit 1
            python3 "$HARNESS_DIR/_guard.py" migrates-ready "$ID" || exit 1 ;;
   issue-draft)
@@ -283,6 +314,7 @@ FEATURE_NAME="$(python3 "$HARNESS_PY" feature-name "$ID" 2>/dev/null)"
 CHECK_LOG="$(new_log "$PHASE")"
 run_check "$CHECK_LOG"
 CHECK_RC=$?
+[ "$PHASE" != "code" ] || code_gate_record "$ID" "$CHECK_RC" "$CHECK_LOG"
 
 # Re-gate (issue #27): a red check of an approved roadmap/phase/issue may come only
 # from failures this same approval clears (its seal, its plan-rule lines). Run the
@@ -425,6 +457,10 @@ if [ "$MODE_EXEC" = "manual" ]; then
     echo "python3 harness/_verdict.py receipt $PHASE $ID"
     echo "--- then keep it in the review history ---"
     echo "python3 harness/_pr.py record $PHASE $ID $VERDICT_FILE"
+    if [ "$PHASE" = "code" ]; then
+      echo "--- if APPROVED, bind it to this gate's record (the close needs it) ---"
+      echo "python3 harness/_gate_run.py approve $ID $$"
+    fi
   fi
   exit 0
 fi
@@ -470,6 +506,7 @@ fi
 # Validate and make the verdict final (receipt included); an invalid one is undone.
 TOKEN="$(python3 "$VERDICT_PY" commit --owner $$ "$PHASE" "$VERDICT_FILE")" || exit 1
 trap - EXIT TERM INT
+[ "$PHASE" != "code" ] || code_gate_bind "$ID" "$TOKEN"
 
 # From here the verdict is final and never undone; re-running the gate repairs a
 # failed record or seal.

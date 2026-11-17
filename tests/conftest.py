@@ -46,11 +46,17 @@ class Project:
         data = {"phases": [phase], "features": [task]}
         self.write("feature_list.json", json.dumps(data))
 
-    def set_verdict(self, kind: str, verdict: str, extra: str = "") -> None:
+    def set_verdict(
+        self, kind: str, verdict: str, extra: str = "", *, with_gate_record: bool = False
+    ) -> None:
+        """with_gate_record: also bind a green code-gate record of the CURRENT tree, as
+        an approved code gate would (issue #39); the close refuses an approval without."""
         name = "plan_review" if kind == "plan" else "review"
         self.write(
             f"progress/{name}_{LEAF_ID}.md", f"# Review\n\n**Verdict:** {verdict}\n\n{extra}\n"
         )
+        if with_gate_record:
+            bind_code_approval(self.root, LEAF_ID)
 
     def commit_all(self, msg: str = "wip") -> None:
         _git(self.root, "add", "-A")
@@ -75,6 +81,19 @@ class Project:
             env=full_env,
             check=False,
         )
+
+
+def bind_code_approval(root: Path, sid: str) -> None:
+    """Record a green code-gate attempt of the current tree and bind it to the
+    APPROVED progress/review_<sid>.md, as review_with_codex.sh code does."""
+    log = root / ".git" / "harness-test-check.log"
+    log.write_text("ok\n", encoding="utf-8")
+    tool = root / "harness" / "_gate_run.py"
+    for args in (["record", sid, "0", str(log), "1"], ["approve", sid, "1"]):
+        subprocess.run(
+            ["python3", str(tool), *args], cwd=root, check=True, capture_output=True, text=True
+        )
+    log.unlink()
 
 
 @pytest.fixture

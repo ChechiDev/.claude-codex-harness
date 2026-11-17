@@ -8,8 +8,16 @@ unit tests only, never docs/verdicts/progress) and a fingerprint of the toolkit.
   mode (red is expected) and the counterfactual re-gate are never skipped.
 - `is_stale`: the closure is refused when the reviewed inputs changed since approval.
 
-Pure module: the caller supplies the subtask's declared `files:`; nothing here
-parses the plan. Not yet wired into review_with_codex.sh / _verdict.py.
+The functions above the CLI are pure: the caller supplies the files. The CLI
+(used by review_with_codex.sh, run from the project root) reads the subtask's
+`files:` from the plan, adds every file under tests/unit/ and keeps the records
+under .git/harness-gate-runs/ (outside the tree, never committed):
+
+  record <id> <rc> <log> <tag>  record one code-gate attempt (tag: unique per
+                           gate run); exit 10 = skip the review
+  approve <id> <tag>       bind that attempt to the APPROVED code review
+  drop <id>                forget the approval (any other verdict)
+  fresh <id>               exit 0 only if the approval still covers the tree
 """
 
 from __future__ import annotations
@@ -17,8 +25,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, get_args
 
@@ -166,3 +178,149 @@ def load_attempt(path: Path) -> GateAttempt:
         return GateAttempt(**values)  # type: ignore[arg-type]
     except ValueError as exc:
         raise GateRunError(f"bad gate-run record {path}: {exc}") from exc
+
+
+# ── CLI ─────────────────────────────────────────────────────────────────────
+
+UNIT_TESTS = "tests/unit"
+SKIP_RC = 10
+TOOLKIT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def unit_test_files(root: Path) -> list[str]:
+    base = root / UNIT_TESTS
+    found = (p for p in base.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
+    return sorted(p.relative_to(root).as_posix() for p in found)
+
+
+def reviewed_files(root: Path, declared: list[str]) -> list[str]:
+    """The implementation under review: the subtask's `files:` plus its unit tests."""
+    return sorted(set(declared) | set(unit_test_files(root)))
+
+
+def _records_dir() -> Path:
+    res = subprocess.run(
+        ["git", "rev-parse", "--git-path", "harness-gate-runs"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if res.returncode != 0 or not res.stdout.strip():
+        raise GateRunError(f"git rev-parse --git-path failed: {res.stderr.strip()}")
+    return Path(res.stdout.strip()).resolve()
+
+
+def _path(kind: str, sid: str) -> Path:
+    if "/" in sid or sid.startswith("."):
+        raise GateRunError(f"bad subtask id: {sid!r}")
+    return _records_dir() / f"{kind}_{sid}.json"
+
+
+def _declared(sid: str) -> list[str]:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _harness
+
+    files = _harness.leaf_files(sid)
+    if files is None:
+        raise GateRunError(f"subtask {sid} does not exist in docs/plan/")
+    return files
+
+
+def _head() -> str:
+    res = subprocess.run(["git", "rev-parse", "HEAD"], text=True, capture_output=True, check=False)
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def current_attempt(sid: str, rc: int, log_tail: str) -> GateAttempt:
+    root = Path.cwd()
+    return GateAttempt(
+        mode="code",
+        subtask=sid,
+        check_rc=rc,
+        log_tail=log_tail,
+        head=_head(),
+        impl_fp=implementation_fingerprint(root, reviewed_files(root, _declared(sid))),
+        toolkit_fp=toolkit_fingerprint(TOOLKIT_ROOT),
+        created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+    )
+
+
+def _attempt_path(sid: str, tag: str) -> Path:
+    if not tag.isdigit():
+        raise GateRunError(f"bad attempt tag: {tag!r}")
+    return _path(f"code.{tag}", sid)
+
+
+def _cmd_record(sid: str, rc: str, log: str, tag: str) -> int:
+    text = Path(log).read_text(encoding="utf-8", errors="replace")
+    attempt = current_attempt(sid, int(rc), tail(text))
+    record_attempt(_attempt_path(sid, tag), attempt)
+    if should_skip_review(attempt):
+        print(attempt.log_tail, file=sys.stderr)
+        return SKIP_RC
+    return 0
+
+
+def _cmd_approve(sid: str, tag: str) -> int:
+    """Bind this run's own attempt (never another run's) to an APPROVED review."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _harness
+
+    if _harness.read_verdict(Path(f"progress/review_{sid}.md")) != "APPROVED":
+        raise GateRunError(f"progress/review_{sid}.md is not APPROVED: nothing to bind")
+    src = _attempt_path(sid, tag)
+    record_attempt(_path("code.approved", sid), load_attempt(src))
+    src.unlink(missing_ok=True)
+    return 0
+
+
+def _cmd_drop(sid: str) -> int:
+    _path("code.approved", sid).unlink(missing_ok=True)
+    return 0
+
+
+def _cmd_fresh(sid: str) -> int:
+    path = _path("code.approved", sid)
+    if not path.is_file():
+        print(
+            f"[FAIL] {sid}: no record of an approved code gate ({path}): run the code gate again",
+            file=sys.stderr,
+        )
+        return 1
+    approved = load_attempt(path)
+    if is_stale(approved, current_attempt(sid, 0, "")):
+        print(
+            f"[FAIL] {sid}: the code approval is stale (the implementation, its unit tests "
+            "or the toolkit changed since): run the code gate again",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+_COMMANDS: dict[str, tuple[Callable[..., int], int]] = {
+    "record": (_cmd_record, 4),
+    "approve": (_cmd_approve, 2),
+    "drop": (_cmd_drop, 1),
+    "fresh": (_cmd_fresh, 1),
+}
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] not in _COMMANDS or len(argv) - 1 != _COMMANDS[argv[0]][1]:
+        print(
+            "usage: _gate_run.py record <id> <rc> <log> <tag> | approve <id> <tag>"
+            " | drop|fresh <id>",
+            file=sys.stderr,
+        )
+        return 2
+    func, _ = _COMMANDS[argv[0]]
+    try:
+        return func(*argv[1:])
+    except (GateRunError, ValueError, OSError) as exc:
+        print(f"[FAIL] gate run: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

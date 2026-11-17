@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from conftest import TOOLKIT, bash_payload
+from conftest import TOOLKIT, bash_payload, bind_code_approval
 from i0_projects import Installed, install_project
 from test_regate_deadlock import (
     COUNTERFACTUAL,
@@ -314,6 +314,9 @@ def _tests_only_red(tmp: Path) -> Installed:
 @pytest.mark.parametrize("var", sorted(INHERITED))
 def test_the_close_check_ignores_inherited_variables(tmp_path: Path, var: str) -> None:
     project = _tests_only_red(tmp_path)
+    # A fresh approved code gate (issue #39), so only the red close check can refuse.
+    _verdict(project, f"review_{LEAF2}.md", "APPROVED")
+    bind_code_approval(project.root, LEAF2)
     _write(project, f"progress/close_{LEAF2}.msg", f"fix(domain): s [{LEAF2}]\n\nBody.\n")
     head = _sh(project, "git", "rev-parse", "HEAD")
     env = _gate_env(project, tmp_path, **{var: INHERITED[var]})

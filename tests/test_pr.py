@@ -361,7 +361,8 @@ def _fake_tools(project: Project, tmp: Path, *, with_gh: bool = True) -> dict[st
 
 
 def _close(project: Project, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    project.set_verdict("code", "APPROVED")  # the close runs after an approved code gate
+    # the close runs after an approved code gate
+    project.set_verdict("code", "APPROVED", with_gate_record=True)
     return project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
 
 
@@ -428,7 +429,7 @@ def test_without_gh_the_close_still_succeeds(project: Project, tmp_path: Path) -
 
 
 def test_manual_close_prints_the_pr_step(project: Project) -> None:
-    project.set_verdict("code", "APPROVED")
+    project.set_verdict("code", "APPROVED", with_gate_record=True)
     res = project.run(
         "review_with_codex.sh", None, "doc", LEAF_ID, env={"HARNESS_CODEX_MODE": "manual"}
     )
