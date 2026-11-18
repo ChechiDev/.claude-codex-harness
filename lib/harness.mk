@@ -19,10 +19,33 @@ status:
 # Single entry point for agent and hooks: toolchain + harness invariants.
 # Both halves always run (-k keeps verify going past a red step), so one run
 # reports every failure; the result is red if either half is red.
+# Serialized per repo (issue #52): the Stop hook and the gates must never build
+# the same tree at once. A flock on harness-check.lock in the git dir (outside
+# the work tree) makes a second run wait its turn, up to
+# HARNESS_CHECK_LOCK_TIMEOUT seconds. The lock holder re-enters `make check`
+# with HARNESS_CHECK_LOCK_HELD=1, which runs the body without locking again.
+# No -o: the lock fd is inherited, so it stays held while any child of the check
+# still runs, even if the flock process itself dies.
+HARNESS_CHECK_LOCK_TIMEOUT ?= 1800
+
 check:
-	@rc=0; \
-	$(MAKE) --no-print-directory -k verify || rc=1; \
-	./harness/check.sh || rc=1; \
+	@if [ "$${HARNESS_CHECK_LOCK_HELD:-}" = 1 ]; then \
+	  rc=0; \
+	  $(MAKE) --no-print-directory -k verify || rc=1; \
+	  ./harness/check.sh || rc=1; \
+	  exit $$rc; \
+	fi; \
+	if ! lock="$$(git rev-parse --git-path harness-check.lock 2>/dev/null)"; then \
+	  echo "make check: not a git repository; running unlocked (no gate or hook runs here)" >&2; \
+	  HARNESS_CHECK_LOCK_HELD=1 $(MAKE) --no-print-directory check; exit $$?; \
+	fi; \
+	command -v flock >/dev/null 2>&1 || { \
+	  echo "make check: flock not found; it serializes concurrent checks (install util-linux)" >&2; exit 2; }; \
+	HARNESS_CHECK_LOCK_HELD=1 flock -E 75 -w "$(HARNESS_CHECK_LOCK_TIMEOUT)" "$$lock" \
+	  $(MAKE) --no-print-directory check; rc=$$?; \
+	if [ $$rc -eq 75 ]; then \
+	  echo "make check: timed out after $(HARNESS_CHECK_LOCK_TIMEOUT)s waiting for $$lock (another check is running; HARNESS_CHECK_LOCK_TIMEOUT sets the wait)" >&2; \
+	fi; \
 	exit $$rc
 
 # Issues lane (GitHub): queue an issue, claim and start it, draft a new one.
