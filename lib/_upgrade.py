@@ -120,6 +120,26 @@ def _recipe(lines: list[str], block: tuple[int, int, int]) -> list[str]:
     return [line.rstrip() for line in lines[block[1] : block[2]]]
 
 
+# Earlier harness.mk recipes, still recognised (exactly) as not customised: a
+# project Makefile copied before a change must migrate after it.
+LEGACY_RECIPES: dict[str, tuple[tuple[str, ...], ...]] = {
+    # Before the per-repo flock (issue #52).
+    "check": (
+        (
+            "check:",
+            "\t@rc=0; \\",
+            "\t$(MAKE) --no-print-directory -k verify || rc=1; \\",
+            "\t./harness/check.sh || rc=1; \\",
+            "\texit $$rc",
+        ),
+    ),
+}
+
+
+def _is_shared(name: str, recipe: list[str], current: list[str]) -> bool:
+    return recipe == current or tuple(recipe) in LEGACY_RECIPES.get(name, ())
+
+
 def _harness_recipes() -> dict[str, list[str]]:
     lines = HARNESS_MK.read_text("utf-8").splitlines()
     return {name: _recipe(lines, b) for name, b in _blocks(lines).items()}
@@ -136,7 +156,9 @@ def migrated_makefile(text: str) -> str | None:
     lines = text.splitlines()
     shared = _harness_recipes()
     blocks = {name: b for name, b in _blocks(lines).items() if name in shared}
-    custom = [name for name, b in blocks.items() if _recipe(lines, b) != shared[name]]
+    custom = [
+        name for name, b in blocks.items() if not _is_shared(name, _recipe(lines, b), shared[name])
+    ]
     if custom:
         raise MigrationError(
             "; ".join(f"{name}: customised in Makefile" for name in sorted(custom))

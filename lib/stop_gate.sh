@@ -36,7 +36,10 @@ fi
 LOG="$(mktemp)"
 # Never under the gate's counterfactual assumption (issue #27).
 . "$HARNESS_DIR/_clean_env.sh"
-if "${CLEAN_ENV[@]}" make check >"$LOG" 2>&1; then
+# make check takes the per-repo lock (issue #52): this waits for a gate's check
+# in progress instead of building the same tree at once. An inherited
+# HARNESS_CHECK_LOCK_HELD would skip that lock, so it is dropped here.
+if "${CLEAN_ENV[@]}" -u HARNESS_CHECK_LOCK_HELD make check >"$LOG" 2>&1; then
   echo "[harness] make check OK — session ready to close."
   rm -f "$LOG"
   if [ -n "$FP" ] && [ -n "$CACHE" ]; then printf '%s' "$FP" >"$CACHE"; fi
