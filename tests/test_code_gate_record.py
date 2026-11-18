@@ -51,7 +51,7 @@ def _reviewer(tmp: Path, verdict: str) -> dict[str, str]:
 def _documenter(tmp: Path) -> dict[str, str]:
     return _fake_codex(
         tmp,
-        "echo documented > docs_ref.md\n"
+        "mkdir -p docs/reference && echo documented > docs/reference/1.1.1-user-entity.md\n"
         f"printf '%s\\n' {SUBJECT!r} > progress/close_{LEAF_ID}.msg\n",
     )
 
@@ -136,7 +136,7 @@ def dirs(tmp_path: Path) -> Path:
 
 def test_fresh_approval_closes(committed: Project, dirs: Path) -> None:
     _approve(committed, dirs)
-    committed.write("docs/reference/note.md", "docs never invalidate an approval\n")
+    committed.write("docs/reference/1.1.1-user-entity.md", "docs never invalidate an approval\n")
     res = _close(committed, dirs)
     assert res.returncode == 0, res.stdout + res.stderr
     assert "closed ->" in res.stdout
