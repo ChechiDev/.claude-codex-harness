@@ -27,14 +27,19 @@ def _write(root: Path, rel: str, content: str = "x\n") -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _leaf(
+def _leaf(  # noqa: PLR0913
     sid: str = "1.1.1",
     files: list[str] | None = None,
     spec: str = SPEC,
     migrates: list[str] | None = None,
+    *,
+    phase: str = "01",
+    issue: str = "",
 ) -> dict[str, Any]:
     return {
         "id": sid,
+        "phase": phase,
+        "issue": issue,
         "files": ["src/pkg/user.py"] if files is None else files,
         "spec": spec,
         "migrates": migrates or [],
@@ -264,3 +269,142 @@ def test_documenter_concept_docs_are_allowed(repo: Path) -> None:
     _write(repo, "docs/architecture.md")
     _write(repo, "docs/conventions.md")
     assert cs.check(repo, "1.1.1", _leaf()).ok
+
+
+def test_cli_files_prints_the_allowed_paths_nul_separated(repo: Path) -> None:
+    features = {
+        "features": [
+            {"id": "1.1", "phase": "01", "subtasks": [{**_leaf(), "status": "in_progress"}]}
+        ]
+    }
+    (repo / "feature_list.json").write_text(json.dumps(features), encoding="utf-8")
+    _git(repo, "add", "feature_list.json")
+    _git(repo, "commit", "-q", "-m", "plan")
+    _write(repo, "src/pkg/user.py", "changed\n")
+    _write(repo, "tests/unit/test a.py", "changed\n")
+    res = _cli(repo, "files", "1.1.1")
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.split("\0") == ["src/pkg/user.py", "tests/unit/test a.py", ""]
+    _write(repo, "src/pkg/other.py", "changed\n")
+    res = _cli(repo, "files", "1.1.1")
+    assert res.returncode == 1
+    assert res.stdout == ""
+    assert "src/pkg/other.py" in res.stderr
+
+
+# ── harness bookkeeping of the subtask's chain (issue #40) ────────────────────
+
+
+def test_gate_seals_and_verdict_receipts_of_the_chain(repo: Path) -> None:
+    for rel in (
+        "progress/verdict_review_1.1.1.md.sha256",
+        "progress/verdict_plan_review_1.1.1.md.sha256",
+        "progress/verdict_phase_review_01.md.sha256",
+        "progress/verdict_roadmap_review.md.sha256",
+        "progress/plan_roadmap.sha256",
+        "progress/plan_phase_01.sha256",
+    ):
+        _write(repo, rel)
+    assert cs.check(repo, "1.1.1", _leaf()).ok
+    for rel in (
+        "progress/verdict_review_1.1.2.md.sha256",
+        "progress/verdict_phase_review_02.md.sha256",
+        "progress/plan_phase_02.sha256",
+        "progress/plan_issue_ISS-7.sha256",
+    ):
+        _write(repo, rel)
+    assert len(cs.check(repo, "1.1.1", _leaf()).disallowed) == 4
+
+
+def test_issue_chain_bookkeeping(repo: Path) -> None:
+    for rel in (
+        "progress/verdict_issue_review_ISS-7.md.sha256",
+        "progress/issue_review_ISS-7.md",
+        "progress/plan_issue_ISS-7.sha256",
+        "progress/issue_migrations_ISS-7.json",
+        "progress/review_history/ISS-7.md",
+    ):
+        _write(repo, rel)
+    leaf = _leaf("ISS-7.2", spec=ISS_SPEC, phase="", issue="ISS-7")
+    assert cs.check(repo, "ISS-7.2", leaf).ok
+    _write(repo, "progress/issue_review_ISS-8.md")
+    assert cs.check(repo, "ISS-7.2", leaf).disallowed == ("progress/issue_review_ISS-8.md",)
+
+
+def test_first_close_carries_the_roadmap_and_phase_approval(repo: Path) -> None:
+    for rel in (
+        "progress/roadmap_review.md",
+        "progress/phase_review_01.md",
+        "progress/review_history/roadmap.md",
+        "progress/review_history/phase-01.md",
+        "docs/plan/phase-01-p01.md",
+    ):
+        _write(repo, rel)
+    assert cs.check(repo, "1.1.1", _leaf()).ok
+    _write(repo, "docs/plan/phase-02-next.md")
+    _write(repo, "progress/phase_review_02.md")
+    assert cs.check(repo, "1.1.1", _leaf()).disallowed == (
+        "docs/plan/phase-02-next.md",
+        "progress/phase_review_02.md",
+    )
+
+
+def test_legacy_leaf_without_spec_resolves_it_by_convention(repo: Path) -> None:
+    _write(repo, "docs/plan/phase-01-p01.md")
+    _write(repo, SPEC)
+    _write(repo, "docs/plan/phase-01-p01/1.1.2-other.md")
+    report = cs.check(repo, "1.1.1", _leaf(spec=""))
+    assert SPEC in report.allowed
+    assert report.disallowed == ("docs/plan/phase-01-p01/1.1.2-other.md",)
+
+
+def test_project_in_a_subdirectory(repo: Path) -> None:
+    sub = repo / "backend"
+    _write(sub, "src/pkg/user.py")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "sub")
+    _write(sub, "src/pkg/user.py", "changed\n")
+    _write(sub, "progress/review_1.1.1.md")
+    report = cs.check(sub, "1.1.1", _leaf())
+    assert report.ok, report.explain()
+    assert report.allowed == ("progress/review_1.1.1.md", "src/pkg/user.py")
+    _write(repo, "src/pkg/user.py", "outside the project\n")
+    report = cs.check(sub, "1.1.1", _leaf())
+    assert report.disallowed == (":/src/pkg/user.py",)
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "progress/notes.md",
+        "progress/verdict_notes.md.sha256",
+        "progress/review_history/other.md",
+        "progress/plan_other.sha256",
+        "docs/plan/notes.md",
+    ],
+)
+def test_foreign_file_in_progress_still_blocks(repo: Path, rel: str) -> None:
+    _write(repo, "docs/plan/phase-01-p01.md")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "phase")
+    _write(repo, rel)
+    assert cs.check(repo, "1.1.1", _leaf()).disallowed == (rel,)
+
+
+def test_first_close_carries_the_specs_of_the_sealed_phase(repo: Path) -> None:
+    sibling = "docs/plan/phase-01-p01/1.2.1-hello.md"
+    _write(repo, "docs/plan/phase-01-p01.md")
+    _write(repo, sibling)
+    assert cs.check(repo, "1.1.1", _leaf()).disallowed == (sibling,)
+    _write(repo, "progress/plan_phase_01.sha256", f"{'0' * 64}  {sibling}\n")
+    assert cs.check(repo, "1.1.1", _leaf()).ok
+    _write(repo, "progress/plan_phase_01.sha256", f"{'0' * 64}  ../escape.md\n")
+    assert cs.check(repo, "1.1.1", _leaf()).disallowed == (sibling,)
+
+
+@pytest.mark.parametrize("listed", ["scratch/notes.txt", "src/pkg/other.py", "docs/plan/x.md"])
+def test_a_tampered_seal_cannot_widen_the_manifest(repo: Path, listed: str) -> None:
+    _write(repo, "docs/plan/phase-01-p01.md")
+    _write(repo, listed, "changed\n")
+    _write(repo, "progress/plan_phase_01.sha256", f"{'0' * 64}  {listed}\n")
+    assert cs.check(repo, "1.1.1", _leaf()).disallowed == (listed,)

@@ -190,9 +190,30 @@ close_commit() {
   fi
   # The check itself may rewrite files: the approval must still cover what is staged.
   code_gate_fresh "$id" || return 1
+  # Stage only the subtask's manifest (issue #40): a foreign path in the tree or the
+  # index blocks the close with its reason; the manifest is never widened.
+  local scope_py="$HARNESS_DIR/_close_scope.py" scope
+  if ! python3 "$scope_py" check "$id"; then
+    fail "the close of $id touches paths outside its manifest: nothing committed" >&2
+    return 1
+  fi
   text="$(cat "$msg")"
-  rm -f "$msg"
-  git add -A && printf '%s\n' "$text" | git commit -q -F - || return 1
+  rm -f "$msg"  # never part of the commit: list the manifest without it
+  scope="$(new_log scope)"
+  if ! python3 "$scope_py" files "$id" >"$scope" || { [ -s "$scope" ] &&
+      ! GIT_LITERAL_PATHSPECS=1 git add -A --pathspec-from-file="$scope" --pathspec-file-nul; }
+  then
+    rm -f "$scope"
+    printf '%s\n' "$text" >"$msg"
+    fail "could not stage the manifest of $id: nothing committed" >&2
+    return 1
+  fi
+  rm -f "$scope"
+  if ! printf '%s\n' "$text" | git commit -q -F -; then
+    printf '%s\n' "$text" >"$msg"  # kept for the retry
+    fail "git commit failed for the close of $id: message restored to $msg" >&2
+    return 1
+  fi
   ok "closed -> $id ; commit $(git rev-parse --short HEAD)"
 }
 

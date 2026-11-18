@@ -238,7 +238,10 @@ def _codex_closing(project: Project, tmp: Path, message: str | None) -> dict[str
     write_msg = f"printf '%b\\n' {message!r} > progress/close_{LEAF_ID}.msg\n" if message else ""
     codex = bin_dir / "codex"
     codex.write_text(
-        "#!/usr/bin/env bash\ncat >/dev/null\necho documented > docs_ref.md\n" + write_msg
+        "#!/usr/bin/env bash\ncat >/dev/null\nmkdir -p docs/reference && echo documented > "
+        + REF
+        + "\n"
+        + write_msg
     )
     codex.chmod(0o755)
     return {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HARNESS_CHECK_CMD": "true"}
@@ -251,6 +254,7 @@ def _git_out(project: Project, *args: str) -> str:
 
 
 SUBJECT = f"feat(domain): add user entity [{LEAF_ID}]"
+REF = "docs/reference/1.1.1-user-entity.md"  # the fake documenter's reference doc
 
 
 def test_close_commits_codex_message_after_a_green_check(project: Project, tmp_path: Path) -> None:
@@ -258,7 +262,7 @@ def test_close_commits_codex_message_after_a_green_check(project: Project, tmp_p
     res = project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
     assert res.returncode == 0, res.stdout + res.stderr
     assert _git_out(project, "log", "-1", "--format=%s") == SUBJECT + "\n"
-    assert "docs_ref.md" in _git_out(project, "show", "--name-only", "--format=")
+    assert REF in _git_out(project, "show", "--name-only", "--format=")
     assert not (project.root / f"progress/close_{LEAF_ID}.msg").exists()
     assert _git_out(project, "status", "--porcelain") == ""
     assert "closed ->" in res.stdout
@@ -311,7 +315,7 @@ def test_close_refuses_a_subtask_already_closed(project: Project, tmp_path: Path
     assert res.returncode == 1
     assert f"{LEAF_ID} is already closed" in res.stdout
     assert "./harness/review_with_codex.sh pr 1.1" in res.stdout
-    assert not (project.root / "docs_ref.md").exists()
+    assert not (project.root / REF).exists()
     assert _git_out(project, "rev-parse", "HEAD") == head
 
 
@@ -329,7 +333,7 @@ def test_close_refuses_without_an_approved_code_review(
     res = project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
     assert res.returncode == 1
     assert f"progress/review_{LEAF_ID}.md" in res.stdout
-    assert not (project.root / "docs_ref.md").exists()
+    assert not (project.root / REF).exists()
     assert _git_out(project, "rev-parse", "HEAD") == head
 
 
