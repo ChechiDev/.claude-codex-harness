@@ -13,6 +13,7 @@ the rounds a gate rejected survive the next verdict that overwrites the file.
 Usage: python3 _pr.py <command> [args]
 Commands:
   record <gate> <id> <verdict-file>   append a gate round to the review history
+  round-cap <gate> <id>   fail if the gate hit harness.toml [review] max_rounds on <id>
   last-of-task <N.M.K>    print the task id if every other subtask of it is complete
   pr-due <N.M.K>          print the task id if the task is complete and auto_pr is on
   title <N.M|ISS-n>       print the PR title
@@ -93,6 +94,48 @@ def record(gate: str, fid: str, verdict_file: str) -> int:
     entry = f"\n## Round {rounds + 1}: {gate} gate, {verdict} ({stamp})\n\n{demoted}\n"
     path.write_text(old.rstrip("\n") + "\n" + entry, encoding="utf-8")
     return 0
+
+
+def rejected_rounds(gate: str, fid: str) -> int:
+    """CHANGES_REQUESTED rounds of <gate> on <fid> since its last approval (or ever)."""
+    path = history_file(gate, fid)
+    if not path.is_file():
+        return 0
+    heads = re.findall(
+        rf"^## Round \d+: {re.escape(gate)} gate, (\S+)", path.read_text(encoding="utf-8"), re.M
+    )
+    streak = 0
+    for verdict in heads:
+        if verdict == "CHANGES_REQUESTED":
+            streak += 1
+        elif verdict.endswith("APPROVED"):
+            streak = 0
+    return streak
+
+
+def capped(gate: str, fid: str) -> int | None:
+    """The cap when <gate> on <fid> reached it (the human must step in), else None.
+    Raises ConfigError for an untrustworthy harness.toml."""
+    cap = _config.load(Path.cwd()).max_rounds
+    return cap if cap and rejected_rounds(gate, fid) >= cap else None
+
+
+def needs_human(gate: str, fid: str) -> str:
+    return (
+        f"needs human ({rejected_rounds(gate, fid)} rounds): the {gate} gate on {fid} was rejected "
+        f"that many times in a row ({history_file(gate, fid)}); the human decides, then "
+        f"raises [review] max_rounds in {_config.CONFIG_FILE} (0 = no cap) to resume"
+    )
+
+
+def round_cap(gate: str, fid: str) -> int:
+    try:
+        if capped(gate, fid) is None:
+            return 0
+        say("FAIL", f"{needs_human(gate, fid)}; the review was not launched", sys.stderr)
+    except _config.ConfigError as exc:
+        say("FAIL", str(exc), sys.stderr)
+    return 1
 
 
 # ── task completion ──────────────────────────────────────────────────────────
@@ -301,6 +344,8 @@ def main(argv: list[str]) -> int:
         return record(*args)
     if cmd == "body" and len(args) == 2:
         return body(*args)
+    if cmd == "round-cap" and len(args) == 2:
+        return round_cap(*args)
     single = {"last-of-task": last_of_task, "pr-due": pr_due, "title": title}
     if cmd in single and len(args) == 1:
         return single[cmd](args[0])

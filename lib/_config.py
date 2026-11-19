@@ -11,6 +11,11 @@
   auto_pr = true                         push and open the task PR when its last subtask closes
   pr_template = ".github/pr.md"          PR body template (default: the harness's pr_template.md)
 
+  [review]
+  max_rounds = 3                         consecutive CHANGES_REQUESTED rounds of one gate on
+                                         one id before the gate stops and needs the human
+                                         (default 3; 0 = no cap). No env override, by design.
+
 Placeholders: {task} (1.1), {slug} (the task title in kebab-case), {ticket} (the
 task's `- ticket:` line in its phase file). Every section and key is optional; a
 project without the file behaves exactly like one with no [git] section.
@@ -28,6 +33,7 @@ from typing import Any
 CONFIG_FILE = "harness.toml"
 DEFAULT_BRANCH = "feat/{task}-{slug}"
 DEFAULT_SETUP_BRANCH = "chore/project-setup"
+DEFAULT_MAX_ROUNDS = 3
 PLACEHOLDERS = frozenset({"task", "slug", "ticket"})
 # What a rendered branch may contain: a conservative subset of git ref names.
 RE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
@@ -47,6 +53,7 @@ class Config:
     auto_pr: bool = True
     pr_template: str = ""  # empty: the harness's default template
     git_configured: bool = False  # a [git] section: the task branch is enforced
+    max_rounds: int = DEFAULT_MAX_ROUNDS  # review round cap per gate and id; 0 = off
 
     @property
     def needs_ticket(self) -> bool:
@@ -123,6 +130,14 @@ def _src_dirs(section: dict[str, Any]) -> tuple[str, ...] | None:
     return tuple("/".join(p for p in Path(d.strip("/")).parts if p != ".") for d in dirs)
 
 
+def _max_rounds(section: dict[str, Any]) -> int:
+    value = section.get("max_rounds", DEFAULT_MAX_ROUNDS)
+    # bool is an int subclass: `max_rounds = true` is a mistake, not 1.
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(f"{CONFIG_FILE}: [review] max_rounds must be an integer >= 0")
+    return value
+
+
 def _section(data: dict[str, Any], name: str) -> dict[str, Any] | None:
     section = data.get(name)
     if section is None:
@@ -144,4 +159,10 @@ def load(root: Path) -> Config:
     scope = _section(data, "scope") or {}
     git = _section(data, "git")
     git_values: dict[str, Any] = {} if git is None else {**_git(git), **_pr(git)}
-    return Config(src_dirs=_src_dirs(scope), git_configured=git is not None, **git_values)
+    review = _section(data, "review") or {}
+    return Config(
+        src_dirs=_src_dirs(scope),
+        git_configured=git is not None,
+        max_rounds=_max_rounds(review),
+        **git_values,
+    )
