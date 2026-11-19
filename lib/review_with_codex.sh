@@ -298,6 +298,12 @@ case "$PHASE" in
       fail "no progress/issue_draft.md: the leader writes the draft first" >&2; exit 1; } ;;
 esac
 
+# Round cap (issue #42): after harness.toml [review] max_rounds rejections in a row of
+# this gate on this id, stop and hand over to the human. No env override on purpose.
+if [ "$PHASE" != "doc" ]; then
+  python3 "$PR_PY" round-cap "$PHASE" "$ID" || exit 1
+fi
+
 # Read config from the role prompt's YAML header.
 read_cfg() { grep -E "^$1:" "$ROLE" | head -1 | sed -E "s/^$1:[[:space:]]*//"; }
 MODEL="$(read_cfg codex_model)"

@@ -133,6 +133,25 @@ The labels are created on first use (`gh label create --force`). `gh` must be
 logged in for `make issue`, `make issue-start`, `harness/issue.sh`, the PR step
 and the queue block of `make status`; `make check` and the hooks never call it.
 
+## Review round cap (`harness.toml` `[review]`)
+
+```toml
+[review]
+max_rounds = 3   # default: 3; 0 = no cap
+```
+
+After `max_rounds` consecutive `CHANGES_REQUESTED` verdicts of one gate on one id
+(roadmap, phase `NN`, issue `ISS-n`, issue draft, or the `plan` / `code` gate of
+one subtask), counted from `progress/review_history/`, `review_with_codex.sh`
+refuses to launch that review (non-zero exit, nothing written) and `make status`
+shows `Next: needs human (N rounds) ...`. The subtask stays `in_progress`. An
+approval of that gate resets the count; a red check in code mode never makes a
+round, so it never counts. Each gate and id has its own counter.
+
+Only the human sets the cap: there is no environment variable for it, so an agent
+cannot lift it. To resume after deciding what to do, raise `max_rounds` (or set it
+to `0`) in `harness.toml`. A value that is not an integer `>= 0` fails closed.
+
 ## Environment variables
 
 | Variable | Values | Default | Read by |

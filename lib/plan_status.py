@@ -20,7 +20,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import _config
 import _harness
+import _pr
 from _status import Kind, paint
 
 Item = dict[str, Any]
@@ -192,6 +194,8 @@ def _done_issue_next(issue: Item) -> str | None:
 
 def _issue_gate_next(iid: str) -> str | None:
     verdict = _verdict(_harness.issue_review(iid))
+    if verdict != "ISSUE_APPROVED" and (capped := _capped("issue", iid)):
+        return capped
     if verdict == "CHANGES_REQUESTED":
         return f"fix the breakdown of issue {iid} ({_harness.issue_review(iid)}), then issue gate"
     if verdict != "ISSUE_APPROVED":
@@ -238,9 +242,20 @@ def _lane_next(data: Item, queue: list[Item] | None) -> str | None:
 # ── next step ────────────────────────────────────────────────────────────────
 
 
+def _capped(gate: str, fid: str) -> str | None:
+    """`needs human (N rounds) ...` once a gate hit [review] max_rounds (issue #42)."""
+    try:
+        return _pr.needs_human(gate, fid) if _pr.capped(gate, fid) else None
+    except _config.ConfigError as exc:
+        return f"fix {_config.CONFIG_FILE}: {exc}"
+
+
 def _leaf_next(sid: str) -> str:
     plan = _verdict(Path(f"progress/plan_review_{sid}.md"))
     code = _verdict(Path(f"progress/review_{sid}.md"))
+    gate = ("plan", plan) if plan != "PLAN_APPROVED" else ("code", code)
+    if gate[1] not in ("PLAN_APPROVED", "APPROVED") and (capped := _capped(gate[0], sid)):
+        return capped
     if plan == "CHANGES_REQUESTED":
         return f"fix the spec of {sid} (progress/plan_review_{sid}.md), then plan gate"
     if plan != "PLAN_APPROVED":
@@ -270,6 +285,8 @@ def _roadmap_next(data: Item) -> str | None:
     if not data["phases"]:
         return "ask the leader to plan the project (discovery → PLAN.md + every phase)"
     roadmap = _verdict(_harness.ROADMAP_REVIEW)
+    if roadmap != "ROADMAP_APPROVED" and (capped := _capped("roadmap", "roadmap")):
+        return capped
     if roadmap == "CHANGES_REQUESTED":
         return f"fix the roadmap ({_harness.ROADMAP_REVIEW}), then roadmap gate: {GATE} roadmap"
     if roadmap != "ROADMAP_APPROVED":
@@ -291,6 +308,8 @@ def _breakdown_next(data: Item, pid: str) -> str:
     if not _subs(data, pid):
         return f"break down phase {pid} into tasks and subtask specs"
     verdict = _verdict(_harness.phase_review(pid))
+    if verdict != "PHASE_APPROVED" and (capped := _capped("phase", pid)):
+        return capped
     if verdict == "CHANGES_REQUESTED":
         return f"fix the breakdown of phase {pid} ({_harness.phase_review(pid)}), then phase gate"
     if verdict != "PHASE_APPROVED":
