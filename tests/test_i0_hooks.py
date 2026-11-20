@@ -107,49 +107,43 @@ def test_guard_bash_fails_closed_on_a_malformed_payload(project: Project, stdin:
 
 
 @pytest.mark.parametrize("stdin", ["valid", *MALFORMED])
-def test_post_write_gives_feedback_and_never_blocks(project: Project, stdin: str) -> None:
-    """It runs lint + test after a write and reports them, even when both are red."""
+def test_post_write_runs_only_lint_and_never_blocks(project: Project, stdin: str) -> None:
+    """#55: only `make lint` after a write (even red); the suite runs at gates/close/PR."""
     project.write("Makefile", "lint:\n\t@echo lint-ran; exit 1\ntest:\n\t@echo test-ran; exit 1\n")
     raw = json.dumps(write_payload(project.root / "notes.md")) if stdin == "valid" else stdin
     code, out = _raw(project, "post_write.sh", raw)
     assert code == 0
-    assert "fast lint + tests after the write" in out
-    assert "lint-ran" in out and "test-ran" in out
+    assert "fast lint after the write" in out
+    assert "lint-ran" in out
+    assert "test-ran" not in out
 
 
-# ── stop_gate.sh ─────────────────────────────────────────────────────────────
-
-
-def _makefile(project: Project, check_ok: bool) -> None:
-    body = "\t@echo check-ok\n" if check_ok else "\t@echo check-red; exit 1\n"
-    project.write("Makefile", f"check:\n{body}")
-
-
-@pytest.mark.parametrize("stdin", [json.dumps({"stop_hook_active": False}), *MALFORMED])
-def test_stop_gate_lets_the_session_close_when_check_is_green(project: Project, stdin: str) -> None:
-    _makefile(project, check_ok=True)
-    code, out = _raw(project, "stop_gate.sh", stdin)
+def test_post_write_without_a_makefile_is_silent(project: Project) -> None:
+    code, out = _raw(project, "post_write.sh", "")
     assert code == 0, out
-    assert "session ready to close" in out
 
 
-@pytest.mark.parametrize("stdin", [json.dumps({"stop_hook_active": False}), *MALFORMED])
-def test_stop_gate_blocks_when_check_is_red(project: Project, stdin: str) -> None:
-    _makefile(project, check_ok=False)
-    code, out = _raw(project, "stop_gate.sh", stdin)
-    assert code == 2
-    assert "make check FAILED" in out
+# ── stop_gate.sh (advisory, never blocks, never runs make check) ─────────────
 
 
-@pytest.mark.pins("I12c")
-def test_stop_gate_lets_a_second_red_stop_through_today(project: Project) -> None:
-    """Deliberate today (avoids a loop): the second blocked stop passes. I12c decides."""
-    _makefile(project, check_ok=False)
-    code, out = _raw(project, "stop_gate.sh", json.dumps({"stop_hook_active": True}))
-    assert code == 0
-    assert "not blocking again" in out
+def _makefile(project: Project) -> None:
+    project.write("Makefile", "check:\n\t@echo check-ran; exit 1\n")
 
 
-def test_stop_gate_without_a_makefile_blocks(project: Project) -> None:
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("stdin", ["valid", *MALFORMED])
+def test_stop_gate_allows_the_stop_without_running_check(
+    project: Project, stdin: str, active: bool
+) -> None:
+    _makefile(project)
+    raw = json.dumps({"stop_hook_active": active}) if stdin == "valid" else stdin
+    code, out = _raw(project, "stop_gate.sh", raw)
+    assert code == 0, out
+    assert "check-ran" not in out
+    assert "no green full check for this state" in out
+
+
+def test_stop_gate_without_a_makefile_allows_the_stop(project: Project) -> None:
     code, out = _raw(project, "stop_gate.sh", "")
-    assert code == 2, out
+    assert code == 0, out
+    assert "no green full check for this state" in out

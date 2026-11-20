@@ -1,8 +1,8 @@
-"""I12b-key: the Stop cache must not outlive a change in the toolkit.
+"""I12b-key: the green full-check record must not outlive a change in the toolkit.
 
-The project is installed from a throwaway COPY of the toolkit, so changing "the
-toolkit" here never touches the real checkout. A toolkit change that turns
-`make check` red is simulated by making the copy's gate.sh fail.
+Since #55 the Stop only READS the record (gates and close write it) and warns when
+it does not match. The project is installed from a throwaway COPY of the toolkit,
+so changing "the toolkit" here never touches the real checkout.
 """
 
 from __future__ import annotations
@@ -15,7 +15,9 @@ import pytest
 from conftest import TOOLKIT
 from i0_projects import Installed, install_project
 
-ALREADY_GREEN = "make check already green for this exact tree"
+ALREADY_GREEN = "last green full check matches this exact state"
+NO_GREEN = "no green full check for this state"
+UNKNOWN = "unknown"
 SKIP = shutil.ignore_patterns(".git", ".venv", "__pycache__", "*_cache", "scratchpad")
 RED_GATE = '#!/usr/bin/env bash\necho "[FAIL]  gate broken by a toolkit update"\nexit 1\n'
 
@@ -48,9 +50,9 @@ def _cache(project: Installed) -> Path:
 def setup(tmp_path: Path) -> tuple[Path, Installed]:
     toolkit = _toolkit_copy(tmp_path)
     project = install_project(tmp_path, "python", toolkit=toolkit)
-    first = _stop(project)
-    assert first.returncode == 0, first.stdout + first.stderr
-    assert _cache(project).is_file(), "a green Stop writes its cache"
+    fp = _fingerprint(project).stdout.strip()
+    assert fp
+    _cache(project).write_text(fp)  # the record gates/close write after a green check
     return toolkit, project
 
 
@@ -66,14 +68,15 @@ def test_an_unchanged_toolkit_keeps_the_cache(setup: tuple[Path, Installed]) -> 
     assert ALREADY_GREEN in res.stdout
 
 
-def test_a_toolkit_change_invalidates_the_cache(setup: tuple[Path, Installed]) -> None:
-    """The harness changed (check now red): the Stop runs make check again and blocks."""
+def test_a_toolkit_change_invalidates_the_record(setup: tuple[Path, Installed]) -> None:
+    """The harness changed (check now red): the Stop warns, never runs it nor blocks."""
     toolkit, project = setup
     (toolkit / "lib/gate.sh").write_text(RED_GATE)
     res = _stop(project)
-    assert res.returncode == 2, res.stdout + res.stderr
+    assert res.returncode == 0, res.stdout + res.stderr
     assert ALREADY_GREEN not in res.stdout
-    assert "gate broken by a toolkit update" in res.stderr
+    assert NO_GREEN in res.stdout + res.stderr
+    assert "gate broken by a toolkit update" not in res.stdout + res.stderr
 
 
 def _fingerprint(project: Installed) -> subprocess.CompletedProcess[str]:
@@ -122,12 +125,12 @@ def test_python_bytecode_in_the_toolkit_is_part_of_the_key(
     assert _fingerprint(project).stdout != before
 
 
-def test_running_the_harness_settles_the_bytecode_after_one_stop(
+def test_a_stop_does_not_void_the_record_by_itself(
     setup: tuple[Path, Installed],
 ) -> None:
-    """The bytecode the check itself writes must not void the cache on every Stop."""
+    """Running the Stop (and its bytecode) must not change the fingerprint it compares."""
     _, project = setup
-    _stop(project)  # at most one more full check while __pycache__ settles
+    _stop(project)
     assert ALREADY_GREEN in _stop(project).stdout
 
 
@@ -172,28 +175,15 @@ def test_an_unreadable_directory_in_lib_means_no_fingerprint(
     assert res.returncode != 0 and not res.stdout.strip()
 
 
-def test_a_broken_settings_link_means_no_cache(setup: tuple[Path, Installed]) -> None:
-    """The toolkit part cannot be computed: no fingerprint, full check, no cache write."""
+def test_a_broken_settings_link_means_unknown(setup: tuple[Path, Installed]) -> None:
+    """The toolkit part cannot be computed: no fingerprint -> "unknown", never green."""
     _, project = setup
     link = project.root / ".claude/settings.json"
     link.unlink()
     link.symlink_to(project.root / "missing-settings.json")
     res = _fingerprint(project)
     assert res.returncode != 0 and not res.stdout.strip()
-    _cache(project).unlink()
     stop = _stop(project)
     assert stop.returncode == 0, stop.stdout + stop.stderr
     assert ALREADY_GREEN not in stop.stdout
-    assert not _cache(project).exists(), "no cache without a fingerprint"
-
-
-def test_control_without_the_cache_the_changed_toolkit_is_red(
-    setup: tuple[Path, Installed],
-) -> None:
-    """Control: the same toolkit change, no cache -> the Stop blocks."""
-    toolkit, project = setup
-    (toolkit / "lib/gate.sh").write_text(RED_GATE)
-    _cache(project).unlink()
-    res = _stop(project)
-    assert res.returncode == 2, res.stdout + res.stderr
-    assert "gate broken by a toolkit update" in res.stderr
+    assert UNKNOWN in stop.stdout + stop.stderr

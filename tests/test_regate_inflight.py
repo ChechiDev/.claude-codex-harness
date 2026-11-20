@@ -335,7 +335,10 @@ def test_a_fresh_stop_ignores_inherited_variables(tmp_path: Path, var: str) -> N
         input=json.dumps({"hook_event_name": "Stop", "stop_hook_active": False}),
         capture_output=True, check=False, timeout=900,
     )  # fmt: skip
-    assert res.returncode == 2, res.stdout + res.stderr
+    # #55: the Stop is advisory: it allows the stop, warns, never runs make check.
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "no green full check for this state" in res.stdout + res.stderr
+    assert "FAILED" not in res.stdout + res.stderr
 
 
 def test_make_check_does_not_tolerate_by_itself(tmp_path: Path) -> None:
@@ -906,7 +909,10 @@ def test_c_fresh_stop_ignores_an_inherited_tests_override(tmp_path: Path, var: s
         input=json.dumps({"hook_event_name": "Stop", "stop_hook_active": False}),
         capture_output=True, check=False, timeout=900,
     )  # fmt: skip
-    assert res.returncode == 2, res.stdout + res.stderr
+    # #55: advisory Stop: allows the stop, warns, never builds nor runs the C tests.
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "no green full check for this state" in res.stdout + res.stderr
+    assert C_ORACLE1 not in res.stdout + res.stderr
 
 
 def test_c_prompt_requires_the_full_accounting_of_a_file_whose_log_stops_early(
