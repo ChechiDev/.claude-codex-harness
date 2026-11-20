@@ -145,19 +145,31 @@ def test_pr_command_opens_the_issue_pr_and_cleans_the_claim(plan: Plan, tmp_path
     )
     gh.chmod(0o755)
     toolkit = Path(__file__).resolve().parents[1]
-    res = subprocess.run(
-        ["bash", str(toolkit / "lib/review_with_codex.sh"), "pr", "ISS-14"],
-        cwd=plan.root,
-        text=True,
-        capture_output=True,
-        check=False,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "HARNESS_GH": str(gh),
-            "CLAUDE_PROJECT_DIR": str(plan.root),
-            "HOME": str(tmp_path),
-        },
-    )
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "HARNESS_GH": str(gh),
+        "CLAUDE_PROJECT_DIR": str(plan.root),
+        "HOME": str(tmp_path),
+    }
+
+    def harness(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(toolkit / "lib/review_with_codex.sh"), *args],
+            cwd=plan.root,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+
+    # tmp_path is the repo here: keep the fakes and local files out of the PR tree.
+    (plan.root / ".gitignore").write_text("/gh\n/gh.log\n/remote.git/\n")
+    (plan.root / "Makefile").write_text("check:\n\t@echo ok\n")
+    _git(plan.root, "add", "Makefile", ".gitignore")
+    _git(plan.root, "commit", "-qm", "build: check")
+    # Issue #55: with no green record of this state, `pr` runs the real, clean
+    # `make check` itself (red-path blocking: tests/test_green_record_pr.py).
+    res = harness("pr", "ISS-14")
     assert res.returncode == 0, res.stdout + res.stderr
     calls = log.read_text()
     assert "pr create --head refactor/ISS-14-issue-14 --base main" in calls

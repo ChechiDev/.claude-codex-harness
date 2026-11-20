@@ -222,8 +222,16 @@ small allowlist:
 |------|--------|--------|
 | `PreToolUse` `Edit\|Write\|MultiEdit\|NotebookEdit` | `harness/guard_write.sh` | blocks protected and out-of-scope writes |
 | `PreToolUse` `Bash` | `harness/guard_bash.sh` | blocks commits, attribution and shell writes to protected paths |
-| `PostToolUse` `Edit\|Write` | `harness/post_write.sh` | fast lint + tests after each write; never blocks |
-| `Stop` | `harness/stop_gate.sh` | runs `make check` before the session ends |
+| `PostToolUse` `Edit\|Write` | `harness/post_write.sh` | `make lint` only after each write; never blocks |
+| `Stop` | `harness/stop_gate.sh` | advisory, every turn: warns when there is no green record (`.git/harness-check.ok`) for the current state; never blocks, never runs `make check` |
+
+The full `make check` runs at the review gates, at `close` and before a PR:
+gates and `close` write the green record after a real, clean, green run whose
+fingerprint did not change during the run (a plain `make check` you run by hand
+writes nothing). `review_with_codex.sh pr`, and the PR the last close of a task
+opens, push only a committed tree (no uncommitted or untracked changes) whose
+green record matches its exact state; without one, `pr` runs that clean check
+itself and blocks if it is red.
 
 Allowed without a prompt: `make *`, `uv run *`, `./harness/review_with_codex.sh *`,
 `./harness/check.sh`.

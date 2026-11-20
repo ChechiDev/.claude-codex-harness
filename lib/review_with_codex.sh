@@ -72,6 +72,46 @@ CHECK_CMD="${HARNESS_CHECK_CMD:-make check}"
 # (issue #31): only the issue gate's third run sets them.
 . "$HARNESS_DIR/_clean_env.sh"
 run_check() { "${CLEAN_ENV[@]}" bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null; }
+
+# Green record (issue #55): .git/harness-check.ok holds the `_guard.py fingerprint`
+# of the last state a real, clean `make check` passed on (the format the Stop hook
+# reads). Only run_check_recorded writes it: the default command (no
+# HARNESS_CHECK_CMD override), green, and the same fingerprint before and after the
+# run. The counterfactual and third runs never call it. Any other outcome removes
+# the record, so it never outlives a red or unverifiable run of the same state.
+GREEN_RECORD="$(git rev-parse --git-path harness-check.ok 2>/dev/null)"
+fingerprint() { python3 "$HARNESS_DIR/_guard.py" fingerprint 2>/dev/null; }
+# Exit 0 when no tracked file is marked assume-unchanged or skip-worktree: those
+# flags hide edits from git status and the fingerprint, so the check would read
+# content the record does not describe. An unreadable index counts as flagged.
+index_flags_clear() {
+  local flags
+  flags="$(git ls-files -v 2>&1)" || return 1
+  ! printf '%s\n' "$flags" | grep -E '^([a-z]|S)' >/dev/null
+}
+# $1 = log file. Returns the check's exit code.
+run_check_recorded() {
+  local before after rc
+  before="$(fingerprint)" || before=""
+  run_check "$1"; rc=$?
+  after="$(fingerprint)" || after=""
+  [ -n "$GREEN_RECORD" ] || return "$rc"
+  if [ "$rc" -eq 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ] && [ -n "$before" ] &&
+      [ "$before" = "$after" ] && index_flags_clear; then
+    printf '%s' "$after" >"$GREEN_RECORD" ||
+      warn "could not write the green record $GREEN_RECORD" >&2
+  else
+    rm -f "$GREEN_RECORD"
+  fi
+  return "$rc"
+}
+# PR barrier: exit 0 only when the green record matches the exact current state.
+green_record_current() {
+  local fp
+  fp="$(fingerprint)" || return 1
+  [ -n "$fp" ] && [ -n "$GREEN_RECORD" ] && [ -f "$GREEN_RECORD" ] &&
+    [ "$(cat "$GREEN_RECORD")" = "$fp" ]
+}
 # $1 = log file, $2 = target (roadmap | phase:NN | issue:ISS-n).
 run_check_assuming() {
   "${CLEAN_ENV[@]}" HARNESS_ASSUME_APPROVED="$2" bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null
@@ -183,7 +223,7 @@ close_commit() {
   python3 "$HARNESS_DIR/_guard.py" commit-message "$msg" "$id" || return 1
   code_gate_fresh "$id" || return 1
   log="$(new_log close)"
-  if ! run_check "$log"; then
+  if ! run_check_recorded "$log"; then
     fail "$CHECK_CMD is red after the close of $id: nothing committed (log: $log)" >&2
     tail -n 30 "$log" >&2
     return 1
@@ -233,6 +273,35 @@ open_pr() {
   base="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
   base="${base#origin/}"; : "${base:=main}"
   retry="retry with: ./harness/review_with_codex.sh pr $tid"
+  # PR barrier (issue #55): never push or open a PR for a state without a green
+  # full check. The Stop hook only warns; this is where the check is enforced.
+  # git push sends only HEAD: uncommitted changes (untracked included) would let a
+  # green check of the working tree stand for a commit it never ran on.
+  if [ -n "$(git status --porcelain -uall 2>&1)" ]; then
+    fail "the tree has uncommitted changes: the PR for task $tid was not pushed or" \
+      "opened. Commit or remove them first; $retry" >&2
+    return 1
+  fi
+  # Index flags hide edits from git status and the fingerprint alike: the check
+  # would read files whose content is not what gets pushed.
+  if ! index_flags_clear; then
+    fail "files marked assume-unchanged or skip-worktree: the PR for task $tid was not" \
+      "pushed or opened. Clear the flags (git update-index --no-assume-unchanged" \
+      "--no-skip-worktree <file>) first; $retry" >&2
+    return 1
+  fi
+  if ! green_record_current; then
+    # No record of this exact state: run the real, clean check here (the same
+    # producer as gates and close) and go on only if it records green.
+    local log
+    log="$(new_log pr)"
+    if ! run_check_recorded "$log" || ! green_record_current; then
+      fail "no green make check for this exact state (log: $log): the PR for task $tid" \
+        "was not pushed or opened. Fix the tree until \`make check\` is green; $retry" >&2
+      tail -n 30 "$log" >&2
+      return 1
+    fi
+  fi
   if ! command -v "$GH" >/dev/null 2>&1; then
     warn "gh not found: the PR for task $tid was not opened; $retry" >&2
     return 0
@@ -266,13 +335,23 @@ open_pr() {
 open_pr_if_due() {
   local tid
   tid="$(python3 "$PR_PY" pr-due "$1")" || return 0
-  open_pr "$tid"
+  # The close commit moved HEAD, so the record of the pre-commit check no longer
+  # matches: check the committed state again (only when a PR is due).
+  local log
+  log="$(new_log pr)"
+  if ! run_check_recorded "$log"; then
+    warn "$CHECK_CMD is red after the close commit: the PR for task $tid was not opened" \
+      "(log: $log). Fix it until \`make check\` is green, then:" \
+      "./harness/review_with_codex.sh pr $tid" >&2
+    return 0
+  fi
+  open_pr "$tid" || true
 }
 
 case "$PHASE" in
   seal)    exec python3 "$HARNESS_DIR/_guard.py" seal "$@" ;;
   close)   [ -n "${1:-}" ] || usage; close_commit "$1" || exit 1; open_pr_if_due "$1"; exit 0 ;;
-  pr)      [ -n "${1:-}" ] || usage; open_pr "$1"; exit 0 ;;
+  pr)      [ -n "${1:-}" ] || usage; open_pr "$1"; exit $? ;;
   roadmap) ID="roadmap"; ROLE="$CODEX_DIR/reviewer.md" ;;
   phase|plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
   issue)   ID="${1:-}"; [[ "$ID" =~ ^[0-9]+$ ]] && ID="ISS-$ID"; ROLE="$CODEX_DIR/reviewer.md" ;;
@@ -339,7 +418,7 @@ esac
 FEATURE_NAME="$(python3 "$HARNESS_PY" feature-name "$ID" 2>/dev/null)"
 
 CHECK_LOG="$(new_log "$PHASE")"
-run_check "$CHECK_LOG"
+run_check_recorded "$CHECK_LOG"
 CHECK_RC=$?
 [ "$PHASE" != "code" ] || code_gate_record "$ID" "$CHECK_RC" "$CHECK_LOG"
 
