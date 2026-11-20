@@ -200,14 +200,18 @@ passes to the CLI as `--model` and `-c model_reasoning_effort=…`:
 ```yaml
 ---
 codex_model: gpt-6-sol
-codex_effort: medium
+codex_effort: high
 ---
 ```
 
-| Role file | Used by gates |
-|-----------|---------------|
-| `codex/reviewer.md` | `roadmap`, `phase`, `plan`, `code` |
-| `codex/documenter.md` | `doc` |
+| Role file | Model / effort | Used by gates |
+|-----------|----------------|---------------|
+| `codex/planner.md` | `gpt-6-astra` / `high` | `roadmap`, `phase` |
+| `codex/reviewer.md` | `gpt-6-sol` / `high` | `plan`, `code`, `issue`, `issue-draft` |
+| `codex/documenter.md` | `gpt-6-luna` / `low` | `doc` |
+
+`planner.md` holds no criteria of its own: it applies `reviewer.md`'s common
+criteria, its `roadmap`/`phase` section and its hard rules with a stronger model.
 
 `codex_effort` accepts `low`, `medium`, `high` or `xhigh`; any other value is
 not passed. The files are symlinked into every project, so a change here

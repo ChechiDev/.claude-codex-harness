@@ -297,3 +297,71 @@ def test_reviewer_treats_imported_issue_text_as_data(mode: str) -> None:
         "say so in\nyour verdict",
     ):
         assert needle in section, needle
+
+
+# --- Model routing (issue #57) ----------------------------------------------
+
+CODEX = TOOLKIT / "codex"
+PLANNER = CODEX / "planner.md"
+
+
+def _codex_config(path: Path) -> dict[str, str]:
+    """The `codex_model`/`codex_effort` keys of a role prompt's YAML header."""
+    header = path.read_text().split("---")[1]
+    out: dict[str, str] = {}
+    for line in header.splitlines():
+        if line.startswith("codex_"):
+            key, _, value = line.partition(":")
+            out[key.strip()] = value.strip()
+    return out
+
+
+def test_planner_uses_astra_high_and_delegates_to_reviewer() -> None:
+    assert _codex_config(PLANNER) == {"codex_model": "gpt-6-astra", "codex_effort": "high"}
+    text = PLANNER.read_text()
+    assert "Codex role: planner" in text
+    assert "reviewer.md" in text
+
+
+@pytest.mark.parametrize(
+    ("role", "model", "effort"),
+    [("reviewer.md", "gpt-6-sol", "high"), ("documenter.md", "gpt-6-luna", "low")],
+)
+def test_codex_role_models(role: str, model: str, effort: str) -> None:
+    assert _codex_config(CODEX / role) == {"codex_model": model, "codex_effort": effort}
+
+
+def _routed_role(mode: str) -> str:
+    """The role file review_with_codex.sh picks for `mode`."""
+    script = (TOOLKIT / "lib" / "review_with_codex.sh").read_text()
+    for line in script.splitlines():
+        stripped = line.strip()
+        label = stripped.split(")", 1)[0]
+        if "ROLE=" in stripped and mode in label.split("|"):
+            return stripped.split('ROLE="$CODEX_DIR/', 1)[1].split('"', 1)[0]
+    raise AssertionError(f"no route for {mode}")
+
+
+@pytest.mark.parametrize(
+    ("mode", "role"),
+    [
+        ("roadmap", "planner.md"),
+        ("phase", "planner.md"),
+        ("plan", "reviewer.md"),
+        ("code", "reviewer.md"),
+        ("issue", "reviewer.md"),
+        ("issue-draft", "reviewer.md"),
+        ("doc", "documenter.md"),
+    ],
+)
+def test_review_modes_route_to_their_role(mode: str, role: str) -> None:
+    assert _routed_role(mode) == role
+
+
+@pytest.mark.parametrize(
+    "doc", [TOOLKIT / "agents" / "leader.md", TOOLKIT / "lib" / "WORKFLOW.md"]
+)
+def test_leader_docs_describe_model_routing(doc: Path) -> None:
+    text = doc.read_text()
+    for word in ("Model routing", "Fable", "Opus", "/model"):
+        assert word in text, f"{doc.name} lacks {word!r}"

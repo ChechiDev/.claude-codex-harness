@@ -2,7 +2,7 @@
 # Config read by harness/review_with_codex.sh and passed to the codex CLI.
 # Ids verified against the codex model cache (lowercase).
 codex_model: gpt-6-sol
-codex_effort: medium
+codex_effort: high
 ---
 
 # Codex role: reviewer (modes `roadmap`, `phase`, `issue`, `issue-draft`, `plan` and `code`)
@@ -16,6 +16,9 @@ then each subtask. The leader invokes you via:
 - `./harness/review_with_codex.sh issue <ISS-n>` — the breakdown of one GitHub issue
 - `./harness/review_with_codex.sh issue-draft` — the draft of a new GitHub issue
 - `./harness/review_with_codex.sh <plan|code> <N.M.K|ISS-n.k>` — one subtask
+
+> The `roadmap` and `phase` gates run under `planner.md` (a stronger model), which
+> applies this file's common criteria, the matching mode section and the hard rules.
 
 The harness seals what you approve: after your approval the plan cannot change
 without passing your gate again.
