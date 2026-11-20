@@ -17,6 +17,8 @@ status:
 	@python3 harness/plan_status.py
 
 # Single entry point for agent and hooks: toolchain + harness invariants.
+# Decisions (gates, close, PR) run it only through harness/run_check.sh (issue
+# #64), which sets HARNESS_RUN_CHECK; a direct `make check` says it decides nothing.
 # Both halves always run (-k keeps verify going past a red step), so one run
 # reports every failure; the result is red if either half is red.
 # Serialized per repo (issue #52): the Stop hook and the gates must never build
@@ -29,7 +31,10 @@ status:
 HARNESS_CHECK_LOCK_TIMEOUT ?= 1800
 
 check:
-	@if [ "$${HARNESS_CHECK_LOCK_HELD:-}" = 1 ]; then \
+	@if [ -z "$${HARNESS_RUN_CHECK:-}" ] && [ "$${HARNESS_CHECK_LOCK_HELD:-}" != 1 ]; then \
+	  echo "make check: convenience run, it reports but decides nothing; gates, close and PRs use harness/run_check.sh" >&2; \
+	fi; \
+	if [ "$${HARNESS_CHECK_LOCK_HELD:-}" = 1 ]; then \
 	  rc=0; \
 	  $(MAKE) --no-print-directory -k verify || rc=1; \
 	  ./harness/check.sh || rc=1; \
