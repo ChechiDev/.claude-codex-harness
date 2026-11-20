@@ -74,7 +74,26 @@ def _phase_line(data: Item, phase: Item) -> str:
         state = paint("done", "OK", OUT)
     else:
         state = _gate_state(_harness.phase_review(pid), "PHASE_APPROVED")
-    return f"{head} · {state} · {done}/{len(subs)} done"
+    line = f"{head} · {state} · {done}/{len(subs)} done"
+    if subs and done == len(subs) and _shows_task_flow(pid):
+        line += f" · close: {_verdict(_harness.phase_close(pid)) or '—'}"
+    return line
+
+
+def _shows_task_flow(pid: str) -> bool:
+    """Task-flow columns only for a phase sealed tasks-only: every other phase prints
+    exactly as before #62."""
+    sealed = _harness.phase_seal(pid).is_file()
+    return sealed and _harness.phase_flow(pid) == _harness.TASK_FLOW
+
+
+def _task_line(task: Item) -> str:
+    line = f"  {task['id']} {task['title']} · {task['status'].replace('_', ' ')}"
+    if _shows_task_flow(str(task["phase"])):
+        gate = _verdict(_harness.task_review(task["id"])) or "—"
+        close = _verdict(_harness.task_close(task["id"])) or "—"
+        line += f" · task gate: {gate} · close: {close}"
+    return line
 
 
 def _sub_line(sub: Item) -> str:
@@ -92,7 +111,7 @@ def _tree(data: Item) -> list[str]:
     for phase in data["phases"]:
         lines.append(_phase_line(data, phase))
         for task in (t for t in data["features"] if t["phase"] == phase["id"]):
-            lines.append(f"  {task['id']} {task['title']} · {task['status'].replace('_', ' ')}")
+            lines.append(_task_line(task))
             lines += [_sub_line(s) for s in task["subtasks"]]
     return lines
 
@@ -267,6 +286,61 @@ def _leaf_next(sid: str) -> str:
     return f"close: {GATE} doc {sid}"
 
 
+def _close_gate_next(gate: str, fid: str, path: Path, approved: str) -> str:
+    verdict = _verdict(path)
+    if verdict != approved and (capped := _capped(gate, fid)):
+        return capped
+    what = "task" if gate == "task-close" else "phase"
+    if verdict == "CHANGES_REQUESTED":
+        return (
+            f"fix the gaps of {what} {fid} ({path}): new subtask(s) for them, "
+            f"then {gate} gate: {GATE} {gate} {fid}"
+        )
+    return f"{gate} gate: {GATE} {gate} {fid}"
+
+
+def _task_gate_next(tid: str) -> str | None:
+    path = _harness.task_review(tid)
+    verdict = _verdict(path)
+    if verdict == "TASK_APPROVED":
+        return None
+    if capped := _capped("task", tid):
+        return capped
+    if verdict == "CHANGES_REQUESTED":
+        return f"fix the breakdown of task {tid} ({path}), then task gate: {GATE} task {tid}"
+    return f"task gate: {GATE} task {tid} (then the user's OK)"
+
+
+def _task_flow_next(data: Item, pid: str) -> str:
+    """Task flow (issue #62): kickoff, task gate, subtasks, task-close; phase-close."""
+    tasks = [t for t in data["features"] if t["phase"] == pid]
+    previous = None
+    for task in tasks:
+        tid, subs = str(task["id"]), task["subtasks"]
+        if subs and all(_complete(s, pid) for s in subs):
+            if previous and not _harness.task_closed(previous, pid):
+                path = _harness.task_close(previous)
+                return _close_gate_next("task-close", previous, path, "TASK_CLOSE_APPROVED")
+            previous = tid
+            continue
+        if previous and not _harness.task_closed(previous, pid):
+            path = _harness.task_close(previous)
+            return _close_gate_next("task-close", previous, path, "TASK_CLOSE_APPROVED")
+        if not subs:
+            after = f" (review what task {previous} delivered first)" if previous else ""
+            return (
+                f"kickoff task {tid}{after}: one question at a time if the plan no longer "
+                "fits, then write its subtask specs + make plan (leader, Fable)"
+            )
+        gate = None if _harness.task_approved(tid, pid) else _task_gate_next(tid)
+        return gate or _phase_next(data, pid)
+    if previous and not _harness.task_closed(previous, pid):
+        path = _harness.task_close(previous)
+        return _close_gate_next("task-close", previous, path, "TASK_CLOSE_APPROVED")
+    path = _harness.phase_close(pid)
+    return _close_gate_next("phase-close", pid, path, "PHASE_CLOSE_APPROVED")
+
+
 def _phase_next(data: Item, pid: str) -> str:
     subs = _subs(data, pid)
     current = next((s for s in subs if s["status"] == "in_progress"), None)
@@ -301,12 +375,28 @@ def _current_phase(data: Item) -> Item | None:
         subs = _subs(data, phase["id"])
         if not subs or not all(_complete(s, phase["id"]) for s in subs):
             return phase
+        if not _harness.phase_closed(str(phase["id"])):
+            return phase
+    return None
+
+
+def _unbroken_next(data: Item, pid: str, flow: str) -> str | None:
+    """The breakdown step of a phase not broken down yet, or None."""
+    phase = next(p for p in data["phases"] if p["id"] == pid)
+    if flow == _harness.TASK_FLOW and not phase["tasks"]:
+        return (
+            f"break down phase {pid} into tasks (tasks only: titles, goals, layers, order; "
+            "no subtask specs), then phase gate"
+        )
+    if flow != _harness.TASK_FLOW and not _subs(data, pid):
+        return f"break down phase {pid} into tasks and subtask specs"
     return None
 
 
 def _breakdown_next(data: Item, pid: str) -> str:
-    if not _subs(data, pid):
-        return f"break down phase {pid} into tasks and subtask specs"
+    flow = _harness.phase_flow(pid)
+    if unbroken := _unbroken_next(data, pid, flow):
+        return unbroken
     verdict = _verdict(_harness.phase_review(pid))
     if verdict != "PHASE_APPROVED" and (capped := _capped("phase", pid)):
         return capped
@@ -314,6 +404,8 @@ def _breakdown_next(data: Item, pid: str) -> str:
         return f"fix the breakdown of phase {pid} ({_harness.phase_review(pid)}), then phase gate"
     if verdict != "PHASE_APPROVED":
         return f"phase gate: {GATE} phase {pid}"
+    if flow == _harness.TASK_FLOW or not _harness.phase_exempt(pid):
+        return _task_flow_next(data, pid)
     return _phase_next(data, pid)
 
 

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # The single entry point through which Claude (leader) invokes Codex.
 #   review_with_codex.sh roadmap              Codex reviews PLAN.md + every phase (scope)
-#   review_with_codex.sh phase <NN>           Codex reviews the breakdown of phase NN
+#   review_with_codex.sh phase <NN>           Codex reviews the breakdown of phase NN (tasks)
+#   review_with_codex.sh task <N.M>           Codex reviews the subtask specs of task N.M
+#   review_with_codex.sh task-close <N.M>     Codex checks a finished task against its goal
+#   review_with_codex.sh phase-close <NN>     Codex checks a finished phase against PLAN.md
 #   review_with_codex.sh issue <ISS-n>        Codex reviews the breakdown of issue ISS-n
 #   review_with_codex.sh issue-draft          Codex reviews progress/issue_draft.md
 #   review_with_codex.sh <plan|code|doc> <N.M.K|ISS-n.k>   per-subtask gates and close
 #   review_with_codex.sh close <N.M.K>        check + commit a close (after manual `doc`)
 #   review_with_codex.sh pr <N.M|ISS-n>       push the task/issue branch and open its PR
-#   review_with_codex.sh seal <N.M.K|roadmap|phase NN|issue ISS-n|draft>
+#   review_with_codex.sh seal <N.M.K|roadmap|phase NN|task N.M|issue ISS-n|draft>
 #                                             (human, manual mode: seal)
 #
 # Each gate checks its preconditions first (roadmap approved before a phase gate,
@@ -54,9 +57,10 @@ MODE_EXEC="${HARNESS_CODEX_MODE:-auto}"
 cd "$PROJECT_DIR" || exit 1
 
 usage() {
-  echo "usage: review_with_codex.sh roadmap | phase <NN> | issue <ISS-n> | issue-draft" \
+  echo "usage: review_with_codex.sh roadmap | phase <NN> | task <N.M> | task-close <N.M>" \
+       "| phase-close <NN> | issue <ISS-n> | issue-draft" \
        "| <plan|code|doc> <N.M.K|ISS-n.k> | close <N.M.K> | pr <N.M> | pr <ISS-n>" \
-       "| seal <N.M.K|roadmap|phase NN|issue ISS-n|draft>" >&2
+       "| seal <N.M.K|roadmap|phase NN|task N.M|issue ISS-n|draft>" >&2
   exit 2
 }
 PHASE="${1:-}"; shift || true
@@ -354,6 +358,7 @@ case "$PHASE" in
   pr)      [ -n "${1:-}" ] || usage; open_pr "$1"; exit $? ;;
   roadmap) ID="roadmap"; ROLE="$CODEX_DIR/planner.md" ;;
   phase)   ID="${1:-}"; ROLE="$CODEX_DIR/planner.md" ;;
+  task|task-close|phase-close) ID="${1:-}"; ROLE="$CODEX_DIR/planner.md" ;;
   plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
   issue)   ID="${1:-}"; [[ "$ID" =~ ^[0-9]+$ ]] && ID="ISS-$ID"; ROLE="$CODEX_DIR/reviewer.md" ;;
   issue-draft) ID="draft"; ROLE="$CODEX_DIR/reviewer.md" ;;
@@ -368,6 +373,9 @@ CODEX_PHASE="$PHASE"
 case "$PHASE" in
   roadmap) python3 "$HARNESS_PY" roadmap-ready || exit 1 ;;
   phase)   python3 "$HARNESS_PY" phase-ready "$ID" || exit 1 ;;
+  task)    python3 "$HARNESS_PY" task-ready "$ID" || exit 1 ;;
+  task-close)  python3 "$HARNESS_PY" task-close-ready "$ID" || exit 1 ;;
+  phase-close) python3 "$HARNESS_PY" phase-close-ready "$ID" || exit 1 ;;
   issue)   python3 "$HARNESS_PY" issue-ready "$ID" || exit 1 ;;
   doc)     python3 "$HARNESS_PY" close-ready "$ID" || exit 1
            code_gate_fresh "$ID" || exit 1 ;;
@@ -400,6 +408,15 @@ case "$PHASE" in
     PHASE_FILE="$(ls docs/plan/phase-"$ID"-*.md 2>/dev/null | head -1)"
     TARGET="the breakdown of phase $ID: ${PHASE_FILE:-docs/plan/phase-$ID-<slug>.md} (tasks) and every subtask spec in ${PHASE_FILE%.md}/"
     VERDICT_FILE="progress/phase_review_$ID.md"; SEAL_ARGS=(phase "$ID"); SEAL_ON="PHASE_APPROVED" ;;
+  task)
+    TARGET="the breakdown of task $ID: its subtask specs ($(python3 "$HARNESS_PY" close-sources "$ID" 2>/dev/null | grep '^docs/' | paste -sd' ' -))"
+    VERDICT_FILE="progress/task_review_$ID.md"; SEAL_ARGS=(task "$ID"); SEAL_ON="TASK_APPROVED" ;;
+  task-close)
+    TARGET="the delivered work of task $ID against its goal (its phase file) and its subtask specs"
+    VERDICT_FILE="progress/task_close_$ID.md"; SEAL_ARGS=(); SEAL_ON="" ;;
+  phase-close)
+    TARGET="the delivered work of phase $ID against its goal in docs/plan/PLAN.md and its phase file"
+    VERDICT_FILE="progress/phase_close_$ID.md"; SEAL_ARGS=(); SEAL_ON="" ;;
   issue)
     ISSUE_FILE="$(ls docs/plan/issues/"$ID"-*.md 2>/dev/null | head -1)"
     TARGET="the breakdown of issue $ID: ${ISSUE_FILE:-docs/plan/issues/$ID-<slug>.md} (header) and every subtask spec in ${ISSUE_FILE%.md}/"
@@ -419,8 +436,17 @@ esac
 FEATURE_NAME="$(python3 "$HARNESS_PY" feature-name "$ID" 2>/dev/null)"
 
 CHECK_LOG="$(new_log "$PHASE")"
-run_check_recorded "$CHECK_LOG"
-CHECK_RC=$?
+# Close gates (issue #62) read a state the last close already checked: when the green
+# record matches this exact state, reuse it instead of a second full check.
+if { [ "$PHASE" = "task-close" ] || [ "$PHASE" = "phase-close" ]; } && green_record_current; then
+  printf 'reused the green record %s (fingerprint %s): no new %s run\n' \
+    "$GREEN_RECORD" "$(cat "$GREEN_RECORD")" "$CHECK_CMD" >"$CHECK_LOG"
+  ok "reused the green record: $CHECK_CMD already passed on this exact state"
+  CHECK_RC=0
+else
+  run_check_recorded "$CHECK_LOG"
+  CHECK_RC=$?
+fi
 [ "$PHASE" != "code" ] || code_gate_record "$ID" "$CHECK_RC" "$CHECK_LOG"
 
 # Re-gate (issue #27): a red check of an approved roadmap/phase/issue may come only
@@ -466,6 +492,7 @@ if [ "$CHECK_RC" -ne 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ]; then
   case "$PHASE" in
     roadmap) ASSUME="roadmap" ;;
     phase)   ASSUME="phase:$ID" ;;
+    task)    ASSUME="task:$ID" ;;
     issue)   ASSUME="issue:$ID" ;;
   esac
   if [ -n "$ASSUME" ]; then
@@ -499,6 +526,32 @@ roadmap) and \`git log\` of this branch. The harness opens the PR after the comm
   fi
 fi
 
+# What Codex reads. The close gates (issue #62) read only their specs, reports and
+# the diff of their close commits: never the whole repo (cost limit).
+CONTEXT="Context you must read: AGENTS.md, docs/architecture.md, docs/conventions.md,
+CHECKPOINTS.md, feature_list.json, and progress/current.md."
+case "$PHASE" in
+  task-close|phase-close)
+    GOAL_FILE="$(ls docs/plan/phase-"${ID%%.*}"-*.md docs/plan/phase-0"${ID%%.*}"-*.md 2>/dev/null | head -1)"
+    [ "$PHASE" = "task-close" ] || GOAL_FILE="docs/plan/PLAN.md $GOAL_FILE"
+    SOURCES="$(python3 "$HARNESS_PY" close-sources "$ID" 2>/dev/null | sed 's/^/  - /')"
+    COMMITS="$(python3 "$HARNESS_PY" close-commits "$ID" 2>/dev/null)"
+    MISSING="$(python3 "$HARNESS_PY" close-missing "$ID" 2>/dev/null | paste -sd' ' -)"
+    if [ -n "$COMMITS" ]; then
+      SHOW="git show --stat --patch $(printf '%s\n' "$COMMITS" | paste -sd' ' -)"
+    else
+      SHOW="(no close commit found: say so in your verdict)"
+    fi
+    CONTEXT="Read ONLY these, nothing else of the repo (cost limit):
+  - goal: $GOAL_FILE
+$SOURCES
+  - the diff of its close commits: $SHOW
+Write the traceability matrix your role describes (one row per goal point and per
+acceptance criterion: test, met/gap); any gap means CHANGES_REQUESTED.${MISSING:+
+Subtasks with NO close commit (each is a gap row; the harness rejects an approval
+while any remains): $MISSING}" ;;
+esac
+
 # Build the concrete instruction for Codex.
 PROMPT="$(cat <<EOF
 Act strictly according to your role defined in: $ROLE
@@ -507,8 +560,7 @@ Feature: id=$ID name=$FEATURE_NAME
 Review: $TARGET
 Project root: $PROJECT_DIR
 
-Context you must read: AGENTS.md, docs/architecture.md, docs/conventions.md,
-CHECKPOINTS.md, feature_list.json, and progress/current.md.
+$CONTEXT
 
 Test suite: this sandbox cannot run it (local sockets are blocked).
 Do NOT run \`make check\`, \`make verify\`, the tests or anything that runs them.

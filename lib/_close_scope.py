@@ -26,6 +26,13 @@ Allowed for subtask X (N.M.K or ISS-n.k), owner O (task N.M or issue ISS-n):
                the phase file docs/plan/phase-NN-<slug>.md found on disk, and every
                path listed in the approved seal plan_phase_NN | plan_issue_ISS-n.
                The first close of a project carries the approved roadmap and phase.
+  task flow    (issue #62) for a task leaf N.M.K of phase NN, by exact name: the
+               task gate (task_review_N.M.md, its receipt, plan_task_N.M.sha256 and
+               the specs it lists, review_history/N.M.md), task_close_N.M.md and the
+               previous task's task_close_N.(M-1).md (+ receipts), the previous
+               phase's phase_close_(NN-1).md (+ receipt, review_history/(NN-1).md)
+               for the first task of a phase, and task_flow_legacy_NN.json only
+               while it is not in HEAD (creation only: a change to it blocks).
   legacy spec  a leaf without `spec` gets the one on disk by convention:
                docs/plan/phase-NN-<slug>/<id>-<slug>.md (or the issue's folder).
 
@@ -41,6 +48,7 @@ Usage (cwd = project root):
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -193,11 +201,61 @@ def _chain(sid: str, kind: str, owner: str, leaf: dict[str, Any], root: Path | N
                 out.add(phase_file.relative_to(root).as_posix())
                 folder = phase_file.with_suffix("")
     out |= _sealed(root, seal, folder)
+    if kind == "task":
+        out |= _task_flow(owner, str(leaf.get("phase") or ""), root, folder)
     out |= {f"progress/{v}" for v in verdicts}
     out |= {f"progress/verdict_{v}.sha256" for v in verdicts}
     if not leaf.get("spec") and folder is not None and root is not None:
         out |= {p.relative_to(root).as_posix() for p in folder.glob(f"{glob_escape(sid)}-*.md")}
     return out
+
+
+def _task_flow(tid: str, pid: str, root: Path | None, folder: Path | None) -> set[str]:
+    """Task-flow bookkeeping of task N.M (issue #62), exact names only."""
+    m = re.fullmatch(r"(\d+)\.(\d+)", tid)
+    if m is None or not re.fullmatch(r"\d{2}", pid):
+        return set()
+    verdicts = [f"task_review_{tid}.md", f"task_close_{tid}.md"]
+    out = {f"progress/plan_task_{tid}.sha256", f"progress/review_history/{tid}.md"}
+    before_task, before_phase = _previous(root, tid, pid)
+    if before_task:
+        verdicts.append(f"task_close_{before_task}.md")
+    elif before_phase:
+        verdicts.append(f"phase_close_{before_phase}.md")
+        out.add(f"progress/review_history/{before_phase}.md")
+    out |= {f"progress/{v}" for v in verdicts}
+    out |= {f"progress/verdict_{v}.sha256" for v in verdicts}
+    out |= _sealed(root, f"progress/plan_task_{tid}.sha256", folder)
+    record = f"progress/task_flow_legacy_{pid}.json"
+    if root is not None and not _in_head(root, record):
+        out.add(record)
+    return out
+
+
+def _previous(root: Path | None, tid: str, pid: str) -> tuple[str, str]:
+    """(previous task in its phase, previous phase) in the plan order of
+    feature_list.json; ("", "") when it cannot be read (nothing extra admitted)."""
+    try:
+        data = json.loads((root / "feature_list.json").read_text("utf-8")) if root else {}
+    except (OSError, ValueError):
+        return "", ""
+    tasks = [str(t.get("id")) for t in data.get("features", []) if t.get("phase") == pid]
+    phases = [str(p.get("id")) for p in data.get("phases", [])]
+    if tid in tasks and tasks.index(tid) > 0:
+        return tasks[tasks.index(tid) - 1], ""
+    if tid in tasks and pid in phases and phases.index(pid) > 0:
+        return "", phases[phases.index(pid) - 1]
+    return "", ""
+
+
+def _in_head(root: Path, rel: str) -> bool:
+    res = subprocess.run(
+        ["git", "cat-file", "-e", f"HEAD:./{rel}"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    return res.returncode == 0
 
 
 def _sealed(root: Path | None, seal: str, folder: Path | None) -> set[str]:

@@ -21,10 +21,15 @@ subagent) writes the code.
 - ❌ Do not set `status: done`, write `docs/reference/`, or commit: Codex closes.
 - ❌ Do not hand-edit `feature_list.json`: edit `docs/plan/` and run `make plan`.
 - ✅ Implement via `subagent_type: "implementer"` (one subtask `N.M.K` or `ISS-<n>.<k>`).
-- ✅ Run gates via `./harness/review_with_codex.sh roadmap | phase <NN> | issue <ISS-n>
-  | issue-draft | <plan|code|doc> <N.M.K|ISS-n.k>`.
+- ✅ Run gates via `./harness/review_with_codex.sh roadmap | phase <NN> | task <N.M>
+  | task-close <N.M> | phase-close <NN> | issue <ISS-n> | issue-draft
+  | <plan|code|doc> <N.M.K|ISS-n.k>`.
 - ✅ Plan by discovery (one question at a time) → PLAN.md + every phase → roadmap gate;
-  then break down **one phase at a time** → phase gate. Stop for the user's OK at each level.
+  then break down **one phase at a time into tasks only** → phase gate; then, per
+  task at its kickoff, its subtask specs → task gate. Stop for the user's OK at each level.
+- ✅ After the last subtask of a task: task-close gate (`TASK_CLOSE_APPROVED`, needed
+  by the next task's kickoff); after the last task of a phase: phase-close gate
+  (`PHASE_CLOSE_APPROVED`, needed by the next phase's breakdown). Any gap blocks.
 - ✅ **Micro-tasks**: each subtask is one atomic unit and declares a `files:` list
   of 1-3 production files. The harness blocks writes outside it. A non-baseline
   subtask may have an empty `files:` only if its spec declares
@@ -53,18 +58,26 @@ with `/model`; announce every switch and ask the user to run it:
 
 | Stage | Actor | Model / effort |
 |-------|-------|----------------|
-| Discovery, roadmap, phase breakdown + specs, roadmap/phase gate fixes | Claude leader | Fable 5.2 / high (`/model`) |
-| Subtask cycles and issue planning | Claude leader | Opus 5.5 / high (`/model`) |
+| Discovery, roadmap, phase breakdown (tasks), task kickoff + specs, roadmap/phase/task gate fixes | Claude leader | Fable 5.2 / high (`/model`) |
+| Subtask cycles, task-close/phase-close gap fixes, issue planning | Claude leader | Opus 5.5 / high (`/model`) |
 | Implementation | Claude implementer | its own frontmatter (sonnet / medium) |
-| `roadmap`, `phase` gates | Codex `planner.md` | gpt-6-astra / high |
+| `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates | Codex `planner.md` | gpt-6-astra / high |
 | `plan`, `code`, `issue`, `issue-draft` gates | Codex `reviewer.md` | gpt-6-sol / high |
 | `doc` close | Codex `documenter.md` | gpt-6-luna / low |
 
-- Before discovery or a phase breakdown: ask the user to run `/model` and pick
-  **Fable 5.2** (effort high).
+- Before discovery, a phase breakdown or a task kickoff: ask the user to run
+  `/model` and pick **Fable 5.2** (effort high).
 - Before the subtask cycles (and issue planning): ask the user to run `/model`
   and pick **Opus 5.5** (effort high).
 - The Codex models are read from each role's header; nothing to switch by hand.
+
+### Task flow and phases broken down whole
+
+A phase sealed with its specs (broken down whole, before the task flow) keeps
+working: no task gate. `make plan` records once which of its tasks were already
+done in `progress/task_flow_legacy_<NN>.json` (sealed in the phase seal: editing
+or deleting it fails `make check`); only the others need a task-close, and the
+phase needs its phase-close (unless it was already finished). Design: the toolkit's `docs/design/task-flow.md`.
 
 ### When the leader role does NOT apply
 

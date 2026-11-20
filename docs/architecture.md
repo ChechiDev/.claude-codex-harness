@@ -94,8 +94,12 @@ docs/plan/
 [leader] discovery, one question at a time (reads the repo first if there is code)
    → PLAN.md + every phase file (title + goal)
    → [Codex] roadmap gate → ROADMAP_APPROVED (sealed) → you approve
-[leader] break down the current phase: tasks + one spec per subtask
+[leader] break down the current phase: tasks only
    → [Codex] phase gate → PHASE_APPROVED (sealed) → you approve
+per task N.M (in order):
+   → [leader] kickoff: review the previous task, one question at a time if needed,
+              one spec per subtask of this task
+   → [Codex]  task gate → TASK_APPROVED (sealed) → you approve
 per subtask N.M.K (in order, respecting depends):
    → [leader]      task branch + status in_progress + make plan
    → [Codex]       plan gate: review the spec + write tests/acceptance/test_N.M.K.* → PLAN_APPROVED (sealed)
@@ -104,7 +108,10 @@ per subtask N.M.K (in order, respecting depends):
    → [Codex]       close: docs/reference/<N.M.K>-<slug>.md + status: done + make plan
                    + progress/ + ONE commit  (type(scope): what [N.M.K], Plan: footer)
    → make status → you approve the next subtask
-phase done → break down the next phase …
+task done → [Codex] task-close gate: traceability matrix → TASK_CLOSE_APPROVED (any gap blocks)
+phase done → [Codex] phase-close gate (against PLAN.md) → PHASE_CLOSE_APPROVED
+   → break down the next phase …
+(details and cost: docs/design/task-flow.md)
 ```
 
 ## Issues lane

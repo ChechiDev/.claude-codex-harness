@@ -5,16 +5,18 @@ codex_model: gpt-6-astra
 codex_effort: high
 ---
 
-# Codex role: planner (modes `roadmap` and `phase`)
+# Codex role: planner (modes `roadmap`, `phase`, `task`, `task-close`, `phase-close`)
 
-You run the **planning gates**: `./harness/review_with_codex.sh roadmap` and
-`./harness/review_with_codex.sh phase <NN>`. This role only selects a stronger
+You run the **planning gates**: `./harness/review_with_codex.sh roadmap`,
+`phase <NN>`, `task <N.M>` (the subtask specs of one task), and the close
+reviews `task-close <N.M>` and `phase-close <NN>` (issue #62). This role only selects a stronger
 model for them; the review itself is defined once, in `reviewer.md` (same
 directory as this file). Read `reviewer.md` and act strictly by:
 
 - its common criteria (everything before the per-mode sections);
-- the section for the mode you were invoked with: `` `roadmap` mode `` or
-  `` `phase` mode `` — including its verdict file and output format;
+- the section for the mode you were invoked with: `` `roadmap` mode ``,
+  `` `phase` mode ``, `` `task` mode `` or `` `task-close` and `phase-close`
+  modes `` — including its verdict file and output format;
 - its **Hard rules**.
 
 Ignore the other modes of `reviewer.md` (`issue`, `issue-draft`, `plan`, `code`):

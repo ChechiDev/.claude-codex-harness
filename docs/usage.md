@@ -36,17 +36,14 @@ On `CHANGES_REQUESTED` the leader fixes the plan and re-runs the gate. From
 here on the roadmap is sealed: editing it fails `make check` until the gate
 approves the change again.
 
-## 2. Break down the current phase
+## 2. Break down the current phase (tasks only)
 
 ```text
 OK, roadmap approved. Break down phase 01 and run the phase gate.
 ```
 
-The leader writes the tasks into the phase file and one spec per subtask
-(`docs/plan/phase-01-<slug>/<N.M.K>-<slug>.md`: `files:` with 1-3 paths,
-or an empty `files:` only for a spec declaring
-`Test-only verification (no production behaviour change)`
-that changes no production file, acceptance criteria, description), then runs:
+The leader writes only the tasks into the phase file (title, layer, goal, in
+order; no subtask specs yet), then runs:
 
 ```bash
 ./harness/review_with_codex.sh phase 01
@@ -54,8 +51,30 @@ that changes no production file, acceptance criteria, description), then runs:
 
 | Produces | Check before approving |
 |----------|------------------------|
-| `progress/phase_review_01.md` (`PHASE_APPROVED`) | every file the code needs is in `files:` (a missing one blocks the implementer later) |
-| `progress/plan_phase_01.sha256` | acceptance criteria are concrete examples, not prose |
+| `progress/phase_review_01.md` (`PHASE_APPROVED`) | the tasks, in order, cover the phase goal |
+| `progress/plan_phase_01.sha256` | each task has one clear goal and layer |
+
+## 2b. Task kickoff and task gate
+
+```text
+OK, phase approved. Start the kickoff of task 1.1.
+```
+
+The leader reviews what the previous task delivered, asks you short questions
+one at a time only if something no longer fits, and writes one spec per subtask
+of this task (`docs/plan/phase-01-<slug>/<N.M.K>-<slug>.md`: `files:` with 1-3
+paths, or an empty `files:` only for a spec declaring
+`Test-only verification (no production behaviour change)` that changes no
+production file, acceptance criteria, description), then runs:
+
+```bash
+./harness/review_with_codex.sh task 1.1
+```
+
+| Produces | Check before approving |
+|----------|------------------------|
+| `progress/task_review_1.1.md` (`TASK_APPROVED`) | every file the code needs is in `files:` (a missing one blocks the implementer later) |
+| `progress/plan_task_1.1.sha256` | acceptance criteria are concrete examples, not prose |
 
 ## 3. Plan gate for a subtask
 
@@ -161,6 +180,31 @@ always yours. Turn it off per project with `auto_pr = false` in `harness.toml`
 The "issues resolved" part comes from `progress/review_history/`: every gate
 verdict (roadmap, phase, plan, code) is appended there, so rounds a gate
 rejected survive the next verdict that overwrites the review file.
+
+## 6b. Task close and phase close
+
+After the last close of a task, the leader runs the task-close gate:
+
+```bash
+./harness/review_with_codex.sh task-close 1.1     # → progress/task_close_1.1.md
+./harness/review_with_codex.sh phase-close 01     # after the last task of the phase
+```
+
+Codex checks the delivered work against the task goal and its specs (the phase
+goal in `PLAN.md`, for a phase) and writes a traceability matrix: one row per
+goal point and acceptance criterion, with its test and `met` or `gap`. Any gap
+is `CHANGES_REQUESTED`; the harness also refuses an approval without a matrix or
+with a gap row. The next task's kickoff needs `TASK_CLOSE_APPROVED`, and the
+next phase's breakdown needs `PHASE_CLOSE_APPROVED`; `make status` shows both.
+
+Both gates reuse the green `make check` of the last close when nothing changed
+since (no second full run) and give Codex only the specs, the implementation
+and review reports and the diff of the close commits. Cost: see the toolkit's
+`docs/design/task-flow.md`.
+
+A phase broken down whole before this flow keeps working (no task gate); only
+its tasks not yet done when `make plan` first saw it
+(`progress/task_flow_legacy_NN.json`, sealed) need a task-close.
 
 ## 7. Next subtask, next phase
 
@@ -307,12 +351,12 @@ Pydantic settings, validated at startup. Documented in docs/backend/configuratio
 
 | | `pending` / `done` | `baseline` |
 |---|---|---|
-| Reviewed by | phase, plan and code gates | the phase gate, against the code |
+| Reviewed by | task (or phase), plan and code gates | the task gate (the phase gate, for a phase broken down whole), against the code |
 | Needs a code review and `docs/reference/` | yes (at the close) | no |
-| Counts as done for phases and `depends` | when `done` | once its phase is `PHASE_APPROVED` |
+| Counts as done for phases and `depends` | when `done` | once its task is `TASK_APPROVED` (its phase `PHASE_APPROVED`, for a phase broken down whole) |
 | Acceptance tests | new, in `tests/acceptance/` | existing tests |
 
-The phase gate requests changes for a baseline subtask the code does not
+The task (or phase) gate requests changes for a baseline subtask the code does not
 implement, or only partly implements; that one is `pending`. After the
 approval, `status: baseline` is sealed: turning a subtask into baseline (or
 back) fails `make check`.
@@ -351,6 +395,7 @@ instead of running Codex. After an approved roadmap, phase or plan gate,
 ```bash
 ./harness/review_with_codex.sh seal roadmap
 ./harness/review_with_codex.sh seal phase 01
+./harness/review_with_codex.sh seal task 1.1
 ./harness/review_with_codex.sh seal 1.1.1
 ```
 

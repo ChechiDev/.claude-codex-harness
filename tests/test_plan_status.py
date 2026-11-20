@@ -38,7 +38,7 @@ def test_roadmap_changes_requested_is_visible(plan: Plan) -> None:
 def test_approved_roadmap_asks_for_the_first_breakdown(plan: Plan) -> None:
     out = _status(plan.phase("01").phase("02").approve_roadmap().sync())
     assert "Roadmap    ROADMAP_APPROVED" in out
-    assert "Next: break down phase 01 into tasks and subtask specs" in out
+    assert "Next: break down phase 01 into tasks" in out
 
 
 def test_broken_down_phase_waits_for_its_gate(plan: Plan) -> None:
@@ -105,7 +105,7 @@ def test_finished_phase_points_at_the_next_breakdown(plan: Plan) -> None:
     plan.phase("01", "1.1").sub("1.1.1", "done").phase("02")
     out = _status(plan.approve_roadmap().approve_phase("01").sync())
     assert "Phase 01 — P01 · done · 1/1 done" in out
-    assert "Next: break down phase 02 into tasks and subtask specs" in out
+    assert "Next: break down phase 02 into tasks" in out
 
 
 def test_everything_done(plan: Plan) -> None:

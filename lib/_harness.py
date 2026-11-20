@@ -10,6 +10,14 @@ Codex before any phase is broken down; phases are broken down one at a time
 (phase N+1 only once phase N is done); a subtask starts only once its phase
 breakdown is approved and its dependencies are done.
 
+Task flow (issue #62): a phase sealed without subtask specs is broken down task by
+task. A subtask of it starts only once its task is TASK_APPROVED (task gate); a task
+starts only once the previous task is TASK_CLOSE_APPROVED (task-close gate), and the
+next phase is broken down only once this one is PHASE_CLOSE_APPROVED. A phase sealed
+with its specs (broken down whole) is legacy: no task gate, and only the tasks not in
+its legacy record (progress/task_flow_legacy_NN.json, written once by `make plan`)
+need a task-close. An approved phase with no seal at all keeps the pre-#62 rules.
+
 `baseline` is work that existed before the harness: it counts as done for
 progression and dependencies once its phase is PHASE_APPROVED, and needs no
 code review nor reference doc (it is not in done-ids). Its status line is part
@@ -33,6 +41,12 @@ Commands:
   phase-ready <NN>       exit 0 if phase NN can go through the phase gate
   subtask-ready <id>     exit 0 if subtask <id> can go through the plan gate
   issue-ready <ISS-n>    exit 0 if issue ISS-n can go through the issue gate
+  task-ready <N.M>       exit 0 if task N.M can go through the task gate (issue #62)
+  task-close-ready <N.M> exit 0 if task N.M can go through the task-close gate
+  phase-close-ready <NN> exit 0 if phase NN can go through the phase-close gate
+  close-commits <N.M|NN> print the close commits of a task or phase, oldest first
+  close-sources <N.M|NN> print the specs and reports a close gate reads
+  close-missing <N.M|NN> print the subtasks with no close commit (gaps of a close)
   close-ready <N.M.K>    exit 0 if subtask N.M.K can be closed (not done, code APPROVED)
   issue-of <id>          print the issue id of issue subtask <id> (exit 1 for a task leaf)
   issue-field <ISS-n> <key>  print a field of issue ISS-n (type, priority, interrupts…)
@@ -66,7 +80,8 @@ STARTED = {"in_progress", "done"}
 # CHANGES_REQUESTED review that merely mentions "PLAN_APPROVED" open the gate.
 RE_VERDICT = re.compile(
     r"^\*\*Verdict:\*\*[ \t]*"
-    r"(ROADMAP_APPROVED|PHASE_APPROVED|ISSUE_APPROVED|DRAFT_APPROVED|PLAN_APPROVED|APPROVED"
+    r"(ROADMAP_APPROVED|PHASE_APPROVED|ISSUE_APPROVED|DRAFT_APPROVED|PLAN_APPROVED"
+    r"|TASK_APPROVED|TASK_CLOSE_APPROVED|PHASE_CLOSE_APPROVED|APPROVED"
     r"|CHANGES_REQUESTED)[ \t]*$",
     re.MULTILINE,
 )
@@ -82,6 +97,26 @@ def phase_review(pid: str) -> Path:
 
 def issue_review(iid: str) -> Path:
     return Path(f"progress/issue_review_{iid}.md")
+
+
+def task_review(tid: str) -> Path:
+    return Path(f"progress/task_review_{tid}.md")
+
+
+def task_close(tid: str) -> Path:
+    return Path(f"progress/task_close_{tid}.md")
+
+
+def phase_close(pid: str) -> Path:
+    return Path(f"progress/phase_close_{pid}.md")
+
+
+def legacy_record(pid: str) -> Path:
+    return Path(f"progress/task_flow_legacy_{pid}.json")
+
+
+def phase_seal(pid: str) -> Path:
+    return Path(f"progress/plan_phase_{pid}.sha256")
 
 
 def parse_id(item_id: str) -> tuple[str, str]:
@@ -251,6 +286,234 @@ def read_verdict(path: Path) -> str:
     return match.group(1) if match else ""
 
 
+# ── task flow (issue #62) ────────────────────────────────────────────────────
+
+LEGACY, UNSEALED, TASK_FLOW = "legacy", "unsealed", "task"
+
+
+def sealed_specs(manifest: Path) -> bool:
+    """The phase seal holds subtask specs (docs/plan/phase-NN-<slug>/...): the phase
+    was broken down whole, before the task flow."""
+    try:
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    rels = [line.split(maxsplit=1)[1] for line in lines if len(line.split(maxsplit=1)) == 2]
+    return any(rel.startswith("docs/plan/phase-") and rel.count("/") >= 3 for rel in rels)
+
+
+def phase_flow(pid: str) -> str:
+    """legacy (sealed with its specs) | unsealed (approved, never sealed, has specs and
+    no task gate: pre-#62 rules) | task (the task flow)."""
+    manifest = phase_seal(pid)
+    if manifest.is_file():
+        return LEGACY if sealed_specs(manifest) else TASK_FLOW
+    approved = read_verdict(phase_review(pid)) == "PHASE_APPROVED"
+    tids = [str(t["id"]) for t in _tasks() if t.get("phase") == pid]
+    gated = any(task_review(t).exists() for t in tids)
+    if approved and _phase_leaves(pid) and not gated:
+        return UNSEALED
+    return TASK_FLOW
+
+
+def legacy_done(pid: str) -> list[str] | None:
+    """The tasks of a legacy phase already done when `make plan` first saw it."""
+    try:
+        data = json.loads(legacy_record(pid).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    done = data.get("tasks_done") if isinstance(data, dict) else None
+    return [str(t) for t in done] if isinstance(done, list) else None
+
+
+def phase_tasks(pid: str) -> list[Item]:
+    return [t for t in _tasks() if t.get("phase") == pid]
+
+
+def task_approved(tid: str, pid: str) -> bool:
+    if phase_flow(pid) != TASK_FLOW:
+        return True
+    return read_verdict(task_review(tid)) == "TASK_APPROVED" or assumed("task", tid)
+
+
+def task_exempt(tid: str, pid: str) -> bool:
+    """No task-close gate for this task: pre-#62 rules, or done before the task flow."""
+    flow = phase_flow(pid)
+    if flow == UNSEALED:
+        return True
+    if flow == LEGACY:
+        done = legacy_done(pid)
+        return done is None or tid in done
+    return False
+
+
+def task_closed(tid: str, pid: str) -> bool:
+    return read_verdict(task_close(tid)) == "TASK_CLOSE_APPROVED" or task_exempt(tid, pid)
+
+
+def phase_exempt(pid: str) -> bool:
+    flow = phase_flow(pid)
+    if flow == UNSEALED:
+        return True
+    if flow == LEGACY:
+        done = legacy_done(pid)
+        return done is None or all(str(t["id"]) in done for t in phase_tasks(pid))
+    return False
+
+
+def phase_closed(pid: str) -> bool:
+    return read_verdict(phase_close(pid)) == "PHASE_CLOSE_APPROVED" or phase_exempt(pid)
+
+
+def _task_leaves(tid: str) -> list[Item]:
+    return [leaf for leaf in leaves() if parse_id(str(leaf["id"])) == ("task", tid)]
+
+
+def _task_order_problems() -> list[str]:
+    problems = []
+    for phase in phases():
+        pid = str(phase["id"])
+        ordered = phase_tasks(pid)
+        flow = phase_flow(pid)
+        for prev, task in zip(ordered, ordered[1:], strict=False):
+            tid, before = str(task["id"]), str(prev["id"])
+            subs = _task_leaves(tid)
+            started = any(leaf["status"] in STARTED for leaf in subs)
+            if flow == TASK_FLOW and subs and not started and not task_closed(before, pid):
+                problems.append(
+                    f"task {tid} has subtask specs before its kickoff: task {before} is not "
+                    f"TASK_CLOSE_APPROVED ({task_close(before)})"
+                )
+            elif started and not task_closed(before, pid):
+                problems.append(
+                    f"task {tid} started but task {before} is not TASK_CLOSE_APPROVED "
+                    f"({task_close(before)})"
+                )
+    return problems
+
+
+def task_ready_problems(tid: str) -> list[str]:
+    task = _task(tid)
+    if task is None:
+        return [f"task {tid} does not exist in docs/plan/"]
+    pid = str(task["phase"])
+    if read_verdict(phase_review(pid)) != "PHASE_APPROVED":
+        return [f"phase {pid} is not PHASE_APPROVED ({phase_review(pid)})"]
+    if phase_flow(pid) != TASK_FLOW:
+        return [
+            f"task {tid}: phase {pid} was broken down whole (sealed with its specs): "
+            "it has no task gate"
+        ]
+    problems = []
+    if not _task_leaves(tid):
+        problems.append(f"task {tid} has no subtask specs yet: write them at its kickoff")
+    ordered = [str(t["id"]) for t in phase_tasks(pid)]
+    index = ordered.index(tid)
+    if index > 0 and not task_closed(ordered[index - 1], pid):
+        before = ordered[index - 1]
+        problems.append(f"task {before} is not TASK_CLOSE_APPROVED ({task_close(before)})")
+    return problems
+
+
+def task_close_ready_problems(tid: str) -> list[str]:
+    task = _task(tid)
+    if task is None:
+        return [f"task {tid} does not exist in docs/plan/"]
+    pid = str(task["phase"])
+    subs = _task_leaves(tid)
+    if not subs:
+        return [f"task {tid} has no subtasks yet"]
+    if task_exempt(tid, pid):
+        return [
+            f"task {tid} was done before the task flow ({legacy_record(pid)}) or its phase "
+            "keeps the pre-task-flow rules: it has no task-close gate"
+        ]
+    open_ids = [str(s["id"]) for s in subs if not complete(s)]
+    if open_ids:
+        return [f"task {tid} is not finished: {', '.join(open_ids)} not done"]
+    return []
+
+
+def phase_close_ready_problems(pid: str) -> list[str]:
+    if not any(p["id"] == pid for p in phases()):
+        return [f"phase {pid} does not exist in docs/plan/"]
+    if phase_exempt(pid):
+        return [f"phase {pid} was done before the task flow ({legacy_record(pid)}): no gate"]
+    if not _done(pid):
+        return [f"phase {pid} is not finished: every subtask must be done"]
+    return [
+        f"task {t['id']} is not TASK_CLOSE_APPROVED ({task_close(str(t['id']))})"
+        for t in phase_tasks(pid)
+        if not task_closed(str(t["id"]), pid)
+    ]
+
+
+def _target_leaves(target: str) -> list[Item]:
+    return _task_leaves(target) if "." in target else _phase_leaves(target)
+
+
+def close_sources(target: str) -> int:
+    """The only files a task-close / phase-close gate reads besides the diff: the
+    specs of its subtasks and their implementation and code-review reports."""
+    found = _target_leaves(target)
+    if not found:
+        return 1
+    for leaf in found:
+        sid = str(leaf["id"])
+        print(leaf["spec"])
+        for report in (Path(f"progress/impl_{sid}.md"), Path(f"progress/review_{sid}.md")):
+            if report.is_file():
+                print(report.as_posix())
+    return 0
+
+
+def missing_close_commits(target: str) -> list[str]:
+    """The subtasks of a task (N.M) or phase (NN) with no `[N.M.K]`-tagged close
+    commit (fail closed: a git error counts as missing). A close gate counts each
+    as a gap."""
+    missing = []
+    for leaf in _target_leaves(target):
+        sid = str(leaf["id"])
+        if leaf["status"] == "baseline":
+            continue  # no close by design
+        found = tagged_commits(sid)
+        if not found:
+            missing.append(sid)
+    return missing
+
+
+def tagged_commits(sid: str) -> list[str]:
+    """Commits, oldest first, whose SUBJECT carries `[sid]` (a close commit); a tag
+    in the body does not count. Empty on any git error (fail closed)."""
+    res = _git(None, "log", "--reverse", "--format=%H%x00%s")
+    if res.returncode != 0:
+        return []
+    tag = f"[{sid}]"
+    rows = (line.split("\0", 1) for line in res.stdout.splitlines() if "\0" in line)
+    return [sha for sha, subject in rows if tag in subject]
+
+
+def close_missing(target: str) -> int:
+    for sid in missing_close_commits(target):
+        print(sid)
+    return 0
+
+
+def close_commits(target: str) -> int:
+    """The close commits of a task's (N.M) or a phase's (NN) subtasks, oldest first:
+    the single commit of each close carries its `[N.M.K]` tag in the message."""
+    ids = [str(leaf["id"]) for leaf in _target_leaves(target)]
+    if not ids:
+        return 1
+    found: list[str] = []
+    for sid in ids:
+        found += [sha for sha in tagged_commits(sid) if sha not in found]
+    order = _git(None, "log", "--reverse", "--format=%H")
+    rank = {sha: i for i, sha in enumerate(order.stdout.split())}
+    print("\n".join(sorted(found, key=lambda sha: rank.get(sha, 0))))
+    return 0
+
+
 # ── plan rules ───────────────────────────────────────────────────────────────
 
 
@@ -275,7 +538,10 @@ def complete(leaf: Item) -> bool:
     if leaf["status"] == "baseline" and leaf.get("issue"):
         return False  # issues have no baseline: their work is new by definition
     if leaf["status"] == "baseline":
-        return read_verdict(phase_review(str(leaf["phase"]))) == "PHASE_APPROVED"
+        pid = str(leaf["phase"])
+        tid = parse_id(str(leaf["id"]))[1]
+        approved = read_verdict(phase_review(pid)) == "PHASE_APPROVED"
+        return approved and task_approved(tid, pid)
     return bool(leaf["status"] == "done")
 
 
@@ -311,6 +577,12 @@ def _progression_problems() -> list[str]:
                     "done (one phase at a time)"
                 )
                 break
+            if not phase_closed(str(earlier["id"])):
+                problems.append(
+                    f"phase {phase['id']} is broken down but phase {earlier['id']} is not "
+                    f"PHASE_CLOSE_APPROVED ({phase_close(str(earlier['id']))})"
+                )
+                break
     return problems
 
 
@@ -326,7 +598,13 @@ def _gate_problems(leaf: Item) -> list[str]:
         ]
     pid = leaf["phase"]
     if read_verdict(phase_review(pid)) == "PHASE_APPROVED" or assumed("phase", pid):
-        return []
+        tid = parse_id(str(leaf["id"]))[1]
+        if task_approved(tid, pid):
+            return []
+        return [
+            f"{leaf['id']} is {leaf['status']} but task {tid} is not TASK_APPROVED "
+            f"({task_review(tid)})"
+        ]
     return [
         f"{leaf['id']} is {leaf['status']} but phase {pid} is not PHASE_APPROVED "
         f"({phase_review(pid)})"
@@ -366,7 +644,7 @@ def plan_problems() -> list[str]:
     units = leaves()
     status = {str(leaf["id"]): str(leaf["status"]) for leaf in units}
     finished = _complete_ids()
-    problems = _roadmap_problems() + _progression_problems()
+    problems = _roadmap_problems() + _progression_problems() + _task_order_problems()
     for leaf in units:
         if leaf["status"] in STARTED:
             problems += _start_problems(leaf, status, finished)
@@ -386,8 +664,8 @@ def phase_ready_problems(pid: str) -> list[str]:
     problems = []
     if read_verdict(ROADMAP_REVIEW) != "ROADMAP_APPROVED":
         problems.append(f"the roadmap is not ROADMAP_APPROVED ({ROADMAP_REVIEW})")
-    if not _phase_leaves(pid):
-        problems.append(f"phase {pid} has no subtasks yet: break it down first")
+    if not phase.get("tasks"):
+        problems.append(f"phase {pid} has no tasks yet: break it down first")
     return problems + [p for p in _progression_problems() if p.startswith(f"phase {pid} ")]
 
 
@@ -555,6 +833,12 @@ def main(argv: list[str]) -> int:
         "subtask-ready": lambda: _report(subtask_ready_problems(arg)),
         "issue-ready": lambda: _report(issue_ready_problems(arg)),
         "close-ready": lambda: _report(close_ready_problems(arg)),
+        "task-ready": lambda: _report(task_ready_problems(arg)),
+        "task-close-ready": lambda: _report(task_close_ready_problems(arg)),
+        "phase-close-ready": lambda: _report(phase_close_ready_problems(arg)),
+        "close-commits": lambda: close_commits(arg),
+        "close-sources": lambda: close_sources(arg),
+        "close-missing": lambda: close_missing(arg),
         "issue-of": lambda: issue_of(arg),
         "issue-field": lambda: issue_field(arg, arg2),
         "branch-of": lambda: branch_of(arg),
