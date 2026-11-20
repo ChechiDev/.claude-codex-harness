@@ -185,6 +185,19 @@ MSG_ASSUME = (
 )
 
 
+MSG_PLANNER_SCOPE = (
+    "BLOCKED: the claude-planner subagent may write only docs/plan/** and CLAUDE.md "
+    "(target: {target}). Return the request to the leader instead."
+)
+
+# Per-agent write scopes (#63): an agent listed here may write only inside its
+# project-relative prefixes / exact files; every other path is blocked for it.
+# Claude Code sets `agent_type` in the hook payload for calls made by a subagent.
+AGENT_WRITE_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "claude-planner": (("docs/plan/",), ("CLAUDE.md",)),
+}
+
+
 class Blocked(Exception):
     """A guard decision to block, carrying the message Claude reads."""
 
@@ -355,6 +368,7 @@ def guard_write(payload: object) -> None:
         raise Blocked(MSG_HARNESS.format(target=raw))
     path = resolve(raw, ROOT)
     rel = project_rel(path)
+    _check_agent_scope(payload, raw, rel)
     if rel is None:
         if in_verdict_slot(path):
             raise Blocked(MSG_CODEX_OWNED.format(rel=raw))
@@ -368,6 +382,42 @@ def guard_write(payload: object) -> None:
         raise Blocked(MSG_CONFIG)
     if kind == "src":
         _check_src_scope(rel)
+
+
+def _check_agent_scope(payload: object, raw: str, rel: str | None) -> None:
+    """Restrict a scoped subagent (AGENT_WRITE_SCOPES) to its own paths; the
+    other rules still apply on top. `rel` is the resolved project path."""
+    agent = payload.get("agent_type") if isinstance(payload, dict) else None
+    if not isinstance(agent, str) or agent not in AGENT_WRITE_SCOPES:
+        return
+    prefixes, exact = AGENT_WRITE_SCOPES[agent]
+    if rel is not None and (rel in exact or any(rel.startswith(p) for p in prefixes)):
+        return
+    raise Blocked(MSG_PLANNER_SCOPE.format(target=raw))
+
+
+# Per-agent Bash allowlists (#63): the whole command must be one of these
+# make targets, alone or joined by `&&` (no other shell syntax at all).
+AGENT_BASH_TARGETS: dict[str, frozenset[str]] = {
+    "claude-planner": frozenset({"plan", "check"}),
+}
+RE_MAKE_TARGET = re.compile(r"make ([a-z]+)")
+MSG_PLANNER_BASH = (
+    "BLOCKED: the claude-planner subagent may run only `make plan` and `make check` "
+    "(command: {command!r}). Return the request to the leader instead."
+)
+
+
+def _check_agent_bash(payload: object, command: str) -> None:
+    agent = payload.get("agent_type") if isinstance(payload, dict) else None
+    if not isinstance(agent, str) or agent not in AGENT_BASH_TARGETS:
+        return
+    allowed = AGENT_BASH_TARGETS[agent]
+    parts = command.strip().split(" && ")
+    for part in parts:
+        m = RE_MAKE_TARGET.fullmatch(part.strip(" "))
+        if m is None or m.group(1) not in allowed:
+            raise Blocked(MSG_PLANNER_BASH.format(command=command))
 
 
 def _current_leaf() -> str | None:
@@ -1393,6 +1443,7 @@ def guard_bash(payload: object) -> None:
     command = _tool_input(payload).get("command")
     if not isinstance(command, str):
         raise ValueError("the Bash payload has no command string")
+    _check_agent_bash(payload, command)
     if not command.strip():
         return
     if "HARNESS_ASSUME_APPROVED" in command:  # best effort (issue #27)

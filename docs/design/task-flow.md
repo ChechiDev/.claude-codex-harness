@@ -23,7 +23,7 @@ phase breakdown (tasks only) → phase gate → user OK
 | task-close | `review_with_codex.sh task-close N.M` | `progress/task_close_N.M.md` | `TASK_CLOSE_APPROVED` | — |
 | phase-close | `review_with_codex.sh phase-close NN` | `progress/phase_close_NN.md` | `PHASE_CLOSE_APPROVED` | — |
 
-All four run on the Codex `planner.md` role. Each verdict gets its receipt and
+All four run on the Codex `codex-planner.md` role. Each verdict gets its receipt and
 its rounds in `progress/review_history/` like every other gate.
 
 ## Rules (`make check`, `_harness.py validate`)
@@ -84,6 +84,6 @@ Measured by `tests/test_task_flow_62.py::test_task_close_reuses_a_matching_green
   `progress/review_<id>.md`, and one `git show` of the close commits (the single
   commit of each close, found by its `[N.M.K]` tag). For a task of 4-5 subtasks that is
   about 10-12 small files plus the task's own diff; never the whole repo.
-- **Codex calls**: one planner run per task (task gate) and per task close, one
+- **Codex calls**: one codex-planner run per task (task gate) and per task close, one
   per phase close, plus one per rejected round. A phase of N tasks adds 2N + 1
-  planner runs to the flow before #62 (which had one phase gate).
+  codex-planner runs to the flow before #62 (which had one phase gate).

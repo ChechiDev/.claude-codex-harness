@@ -554,15 +554,13 @@ def test_new_gates_run_on_the_planner(mode: str) -> None:
         for line in script.splitlines()
         if "ROLE=" in line and mode in line.strip().split(")", 1)[0].split("|")
     )
-    assert 'ROLE="$CODEX_DIR/planner.md"' in route
+    assert 'ROLE="$CODEX_DIR/codex-planner.md"' in route
 
 
 @pytest.mark.parametrize("doc", ["agents/leader.md", "lib/WORKFLOW.md"])
 def test_routing_tables_cover_the_task_flow(doc: str) -> None:
     text = (TOOLKIT / doc).read_text()
-    fable = next(line for line in text.splitlines() if "Fable 5.2 / high" in line)
-    assert "task kickoff" in fable
-    planner = next(line for line in text.splitlines() if "`planner.md`" in line)
+    planner = next(line for line in text.splitlines() if "`codex-planner.md`" in line)
     for gate in ("`task`", "`task-close`", "`phase-close`"):
         assert gate in planner, (doc, gate)
 

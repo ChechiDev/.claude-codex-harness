@@ -5,7 +5,7 @@ codex_model: gpt-6-astra
 codex_effort: high
 ---
 
-# Codex role: planner (modes `roadmap`, `phase`, `task`, `task-close`, `phase-close`)
+# Codex role: codex-planner (modes `roadmap`, `phase`, `task`, `task-close`, `phase-close`)
 
 You run the **planning gates**: `./harness/review_with_codex.sh roadmap`,
 `phase <NN>`, `task <N.M>` (the subtask specs of one task), and the close

@@ -206,12 +206,12 @@ codex_effort: high
 
 | Role file | Model / effort | Used by gates |
 |-----------|----------------|---------------|
-| `codex/planner.md` | `gpt-6-astra` / `high` | `roadmap`, `phase` |
+| `codex/codex-planner.md` | `gpt-6-astra` / `high` | `roadmap`, `phase`, `task`, `task-close`, `phase-close` |
 | `codex/reviewer.md` | `gpt-6-sol` / `high` | `plan`, `code`, `issue`, `issue-draft` |
 | `codex/documenter.md` | `gpt-6-luna` / `low` | `doc` |
 
-`planner.md` holds no criteria of its own: it applies `reviewer.md`'s common
-criteria, its `roadmap`/`phase` section and its hard rules with a stronger model.
+`codex-planner.md` holds no criteria of its own: it applies `reviewer.md`'s common
+criteria, the section of its planning mode and its hard rules with a stronger model.
 
 `codex_effort` accepts `low`, `medium`, `high` or `xhigh`; any other value is
 not passed. The files are symlinked into every project, so a change here
@@ -224,7 +224,7 @@ small allowlist:
 
 | Hook | Script | Effect |
 |------|--------|--------|
-| `PreToolUse` `Edit\|Write\|MultiEdit\|NotebookEdit` | `harness/guard_write.sh` | blocks protected and out-of-scope writes |
+| `PreToolUse` `Edit\|Write\|MultiEdit\|NotebookEdit` | `harness/guard_write.sh` | blocks protected and out-of-scope writes; a call from the `claude-planner` subagent (`agent_type` in the hook payload) may write only `docs/plan/**` and `CLAUDE.md` |
 | `PreToolUse` `Bash` | `harness/guard_bash.sh` | blocks commits, attribution and shell writes to protected paths |
 | `PostToolUse` `Edit\|Write` | `harness/post_write.sh` | `make lint` only after each write; never blocks |
 | `Stop` | `harness/stop_gate.sh` | advisory, every turn: warns when there is no green record (`.git/harness-check.ok`) for the current state; never blocks, never runs `make check` |

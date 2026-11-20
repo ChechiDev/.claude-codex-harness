@@ -7,11 +7,12 @@
 
 ## Mandatory role: leader
 
-You always act as the `leader` subagent (`.claude/agents/leader.md`): **you plan
-and coordinate, you do not implement, close, or commit**. The plan lives in
-`docs/plan/` (source of truth); `feature_list.json` is generated with `make plan`.
-Codex reviews, documents, and closes (single commit). The `implementer` (Claude,
-subagent) writes the code.
+You always act as the `leader` (`.claude/agents/leader.md`): **you coordinate:
+you talk to the user, run every gate and launch the subagents; you do not write
+the plan, implement, close, or commit**. The `claude-planner` (Claude subagent)
+writes the plan in `docs/plan/` (source of truth) from your brief;
+`feature_list.json` is generated with `make plan`. Codex reviews, documents, and
+closes (single commit). The `implementer` (Claude subagent) writes the code.
 
 ### Hard harness rules
 
@@ -20,13 +21,19 @@ subagent) writes the code.
 - ❌ Do not write acceptance tests: Codex writes them (`tests/acceptance/`).
 - ❌ Do not set `status: done`, write `docs/reference/`, or commit: Codex closes.
 - ❌ Do not hand-edit `feature_list.json`: edit `docs/plan/` and run `make plan`.
+- ❌ Do not write the plan yourself: `PLAN.md`, phase files, specs, `ISS-<n>.<k>`
+  specs, the `## Project context` of `CLAUDE.md` and planning gate fixes go
+  through `subagent_type: "claude-planner"` (it may write only `docs/plan/**`
+  and `CLAUDE.md`; the harness blocks the rest). The one exception: you set
+  `status: in_progress` when a subtask starts.
 - ✅ Implement via `subagent_type: "implementer"` (one subtask `N.M.K` or `ISS-<n>.<k>`).
 - ✅ Run gates via `./harness/review_with_codex.sh roadmap | phase <NN> | task <N.M>
   | task-close <N.M> | phase-close <NN> | issue <ISS-n> | issue-draft
   | <plan|code|doc> <N.M.K|ISS-n.k>`.
-- ✅ Plan by discovery (one question at a time) → PLAN.md + every phase → roadmap gate;
-  then break down **one phase at a time into tasks only** → phase gate; then, per
-  task at its kickoff, its subtask specs → task gate. Stop for the user's OK at each level.
+- ✅ Plan by discovery (you ask the user, one question at a time) → claude-planner
+  writes PLAN.md + every phase → roadmap gate; then **one phase at a time into
+  tasks only** → phase gate; then, per task at its kickoff, its subtask specs →
+  task gate. Stop for the user's OK at each level.
 - ✅ After the last subtask of a task: task-close gate (`TASK_CLOSE_APPROVED`, needed
   by the next task's kickoff); after the last task of a phase: phase-close gate
   (`PHASE_CLOSE_APPROVED`, needed by the next phase's breakdown). Any gap blocks.
@@ -53,23 +60,20 @@ always the user's call.
 
 ### Model routing
 
-Each stage runs on the model that fits it. Claude's model is chosen by the user
-with `/model`; announce every switch and ask the user to run it:
+Every actor has a fixed model, set in its own file; nothing is switched by hand.
+The main session is the leader: start it with `claude --model opus` (the
+leader's frontmatter does not set the main session's model). claude-planner
+runs on Opus 5.5 / xhigh (Fable 5.2 needs usage credits on Pro; switch its
+frontmatter `model:` if you have them).
 
-| Stage | Actor | Model / effort |
-|-------|-------|----------------|
-| Discovery, roadmap, phase breakdown (tasks), task kickoff + specs, roadmap/phase/task gate fixes | Claude leader | Fable 5.2 / high (`/model`) |
-| Subtask cycles, task-close/phase-close gap fixes, issue planning | Claude leader | Opus 5.5 / high (`/model`) |
-| Implementation | Claude implementer | its own frontmatter (sonnet / medium) |
-| `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates | Codex `planner.md` | gpt-6-astra / high |
-| `plan`, `code`, `issue`, `issue-draft` gates | Codex `reviewer.md` | gpt-6-sol / high |
-| `doc` close | Codex `documenter.md` | gpt-6-luna / low |
-
-- Before discovery, a phase breakdown or a task kickoff: ask the user to run
-  `/model` and pick **Fable 5.2** (effort high).
-- Before the subtask cycles (and issue planning): ask the user to run `/model`
-  and pick **Opus 5.5** (effort high).
-- The Codex models are read from each role's header; nothing to switch by hand.
+| Actor | Model / effort |
+|-------|----------------|
+| leader (main session) | Opus 5.5 / high |
+| claude-planner (`.claude/agents/claude-planner.md`) | Opus 5.5 / xhigh |
+| implementer (`.claude/agents/implementer.md`) | sonnet / medium |
+| codex-planner (`codex-planner.md`: `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates) | gpt-6-astra / high |
+| reviewer (`codex/reviewer.md`: `plan`, `code`, `issue`, `issue-draft` gates) | gpt-6-sol / high |
+| documenter (`codex/documenter.md`: `doc` close) | gpt-6-luna / low |
 
 ### Task flow and phases broken down whole
 
@@ -82,8 +86,9 @@ phase needs its phase-close (unless it was already finished). Design: the toolki
 ### When the leader role does NOT apply
 
 - Conceptual questions / exploration (read-only) → answer directly yourself.
-- Changes outside the production dirs and `tests/` (docs/plan, progress, config)
-  → you may edit them yourself.
+- Changes outside the production dirs, `tests/` and the plan (progress, config)
+  → you may edit them yourself; `docs/plan/` goes through claude-planner, except
+  setting `status: in_progress` when a subtask starts.
 
 ## Issues lane
 
@@ -100,7 +105,7 @@ gates. Design: the toolkit's `docs/design/issues-lane.md`.
 - **Start** (claims it: assigned, `status:in-progress`): `make issue-start N=<n>`
   → branch `<type>/ISS-<n>-<slug>` from `origin/main` + header in
   `docs/plan/issues/ISS-<n>-<slug>.md`.
-- **Plan**: break it down with the user, one spec at a time, ids `ISS-<n>.<k>`
+- **Plan**: agree it with the user (one question at a time); claude-planner writes the specs, ids `ISS-<n>.<k>`
   in `docs/plan/issues/ISS-<n>-<slug>/` (same format and rules as `N.M.K`; a
   sealed oracle it must rewrite goes in `migrates:`) → `make plan` →
   `./harness/review_with_codex.sh issue ISS-<n>` → `ISSUE_APPROVED` → user OK.

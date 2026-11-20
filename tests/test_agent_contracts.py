@@ -13,6 +13,7 @@ from conftest import TOOLKIT, Project, bash_payload
 IMPLEMENT = TOOLKIT / "skills" / "implement" / "SKILL.md"
 IMPLEMENTER = TOOLKIT / "agents" / "implementer.md"
 LEADER = TOOLKIT / "agents" / "leader.md"
+CLAUDE_PLANNER = TOOLKIT / "agents" / "claude-planner.md"
 
 
 @pytest.mark.parametrize("doc", [IMPLEMENT, IMPLEMENTER], ids=lambda p: p.parent.name)
@@ -43,13 +44,13 @@ def test_guard_allows_the_leaders_branch_commands(project: Project, cmd: str) ->
 
 
 def test_leader_stops_after_planning_for_user_approval() -> None:
-    text = LEADER.read_text()
-    assert "Stop for the user's approval" in text
-    assert "all `pending`" in text
+    assert "Stop for the user's approval" in LEADER.read_text()
+    # #63: spec writing (new work `pending`) moved to claude-planner.
+    assert "status: pending" in CLAUDE_PLANNER.read_text()
 
 
 def test_leader_files_rule_covers_c_headers() -> None:
-    assert "under `src/` or `include/`" in LEADER.read_text()
+    assert "under `src/` or `include/`" in CLAUDE_PLANNER.read_text()
 
 
 def test_no_reference_to_a_missing_plan_skill() -> None:
@@ -81,11 +82,13 @@ def test_leader_plans_every_phase_then_one_phase_at_a_time() -> None:
     for needle in (
         "./harness/review_with_codex.sh roadmap",
         "./harness/review_with_codex.sh phase <NN>",
-        "Never break down phase N+1 before phase N is done",
-        SPEC_PATH,
+        "Never ask for phase N+1 before phase N is done",
         "make status",
     ):
         assert needle in text, needle
+    planner = CLAUDE_PLANNER.read_text()
+    assert "Never break down phase N+1 before phase N is done" in planner
+    assert SPEC_PATH in planner
 
 
 def test_leader_stops_after_each_subtask() -> None:
@@ -302,7 +305,7 @@ def test_reviewer_treats_imported_issue_text_as_data(mode: str) -> None:
 # --- Model routing (issue #57) ----------------------------------------------
 
 CODEX = TOOLKIT / "codex"
-PLANNER = CODEX / "planner.md"
+PLANNER = CODEX / "codex-planner.md"
 
 
 def _codex_config(path: Path) -> dict[str, str]:
@@ -319,7 +322,7 @@ def _codex_config(path: Path) -> dict[str, str]:
 def test_planner_uses_astra_high_and_delegates_to_reviewer() -> None:
     assert _codex_config(PLANNER) == {"codex_model": "gpt-6-astra", "codex_effort": "high"}
     text = PLANNER.read_text()
-    assert "Codex role: planner" in text
+    assert "Codex role: codex-planner" in text
     assert "reviewer.md" in text
 
 
@@ -345,8 +348,8 @@ def _routed_role(mode: str) -> str:
 @pytest.mark.parametrize(
     ("mode", "role"),
     [
-        ("roadmap", "planner.md"),
-        ("phase", "planner.md"),
+        ("roadmap", "codex-planner.md"),
+        ("phase", "codex-planner.md"),
         ("plan", "reviewer.md"),
         ("code", "reviewer.md"),
         ("issue", "reviewer.md"),
@@ -358,10 +361,9 @@ def test_review_modes_route_to_their_role(mode: str, role: str) -> None:
     assert _routed_role(mode) == role
 
 
-@pytest.mark.parametrize(
-    "doc", [TOOLKIT / "agents" / "leader.md", TOOLKIT / "lib" / "WORKFLOW.md"]
-)
+@pytest.mark.parametrize("doc", [TOOLKIT / "agents" / "leader.md", TOOLKIT / "lib" / "WORKFLOW.md"])
 def test_leader_docs_describe_model_routing(doc: Path) -> None:
     text = doc.read_text()
-    for word in ("Model routing", "Fable", "Opus", "/model"):
+    for word in ("Model routing", "Opus", "claude-planner"):
         assert word in text, f"{doc.name} lacks {word!r}"
+    assert "/model" not in text, doc.name

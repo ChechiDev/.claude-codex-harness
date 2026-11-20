@@ -12,13 +12,16 @@ each project, so `git pull` here updates all of them.
 ## How it works
 
 ```
-[leader]      discovery → PLAN.md + every phase      → [Codex] roadmap gate → you approve
-[leader]      break down one phase into subtasks      → [Codex] phase gate   → you approve
+[leader]      discovery with you, one question at a time; runs every gate, never writes the plan
+[planner]     PLAN.md + every phase                   → [Codex] roadmap gate → you approve
+[planner]     break down one phase into tasks         → [Codex] phase gate   → you approve
+per task:     [planner] kickoff: its subtask specs    → [Codex] task gate    → you approve
 per subtask:  [Codex] plan gate (writes acceptance tests, red unless a confirmed marker)
               → [implementer] TDD until make verify is green
               → [Codex] code gate → [Codex] close: docs + status done + ONE commit
               → you approve the next subtask
-per task:     the last close pushes the task branch and opens ONE PR → you merge
+task done:    [Codex] task-close gate; phase done: [Codex] phase-close gate
+              the last close pushes the task branch and opens ONE PR → you merge
 per issue:    a GitHub issue, at any point, in its own issues lane (never a task):
               queue → claim → [Codex] issue gate → the same per-subtask cycle
               → ONE PR with "Closes #n" → you merge

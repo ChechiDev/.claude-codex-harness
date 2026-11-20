@@ -5,7 +5,9 @@ gate produces and what to check before approving the next step. Install first
 (see the [README](../README.md#install)).
 
 Open Claude Code at the project root. `CLAUDE.md` makes Claude act as the
-**leader**; it stops after every gate and waits for your OK.
+**leader** (Opus 5.5 / high); it stops after every gate and waits for your OK.
+The plan itself is written by the `claude-planner` subagent (Opus 5.5 / xhigh)
+from the leader's brief; you never switch models by hand.
 
 ```bash
 cd /path/to/project && claude
@@ -20,8 +22,8 @@ asks one question at a time:
 Let's plan a library with a single function slugify(text: str) -> str.
 ```
 
-It writes `docs/plan/PLAN.md`, every phase file (title + goal only) and the
-`## Project context` section of `CLAUDE.md`, then runs the **roadmap gate**:
+Then `claude-planner` writes `docs/plan/PLAN.md`, every phase file (title + goal only) and the
+`## Project context` section of `CLAUDE.md`, and the leader runs the **roadmap gate**:
 
 ```bash
 ./harness/review_with_codex.sh roadmap
@@ -32,7 +34,8 @@ It writes `docs/plan/PLAN.md`, every phase file (title + goal only) and the
 | `progress/roadmap_review.md` (`ROADMAP_APPROVED` / `CHANGES_REQUESTED`) | the verdict line and the analysis |
 | `progress/plan_roadmap.sha256` (on approval) | `make check` green |
 
-On `CHANGES_REQUESTED` the leader fixes the plan and re-runs the gate. From
+On `CHANGES_REQUESTED` the leader passes the verdict to `claude-planner`, which
+fixes the plan, and re-runs the gate. From
 here on the roadmap is sealed: editing it fails `make check` until the gate
 approves the change again.
 
@@ -42,7 +45,7 @@ approves the change again.
 OK, roadmap approved. Break down phase 01 and run the phase gate.
 ```
 
-The leader writes only the tasks into the phase file (title, layer, goal, in
+The leader has the `claude-planner` subagent write only the tasks into the phase file (title, layer, goal, in
 order; no subtask specs yet), then runs:
 
 ```bash
@@ -61,7 +64,7 @@ OK, phase approved. Start the kickoff of task 1.1.
 ```
 
 The leader reviews what the previous task delivered, asks you short questions
-one at a time only if something no longer fits, and writes one spec per subtask
+one at a time only if something no longer fits, and has `claude-planner` write one spec per subtask
 of this task (`docs/plan/phase-01-<slug>/<N.M.K>-<slug>.md`: `files:` with 1-3
 paths, or an empty `files:` only for a spec declaring
 `Test-only verification (no production behaviour change)` that changes no
