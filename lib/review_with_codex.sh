@@ -69,20 +69,21 @@ PR_PY="$HARNESS_DIR/_pr.py"
 GH="${HARNESS_GH:-gh}"
 CHECK_CMD="${HARNESS_CHECK_CMD:-make check}"
 
-# Run the project check outside the sandbox; $1 = log file. Returns its exit code.
-# Every decision-making run drops HARNESS_ASSUME_APPROVED (issue #27): only the
-# gate's counterfactual run sets it, for exactly the reviewed target.
-# They also drop every variable that could exclude tests or override make variables
-# (issue #31): only the issue gate's third run sets them.
-. "$HARNESS_DIR/_clean_env.sh"
-run_check() { "${CLEAN_ENV[@]}" bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null; }
+# Every decision run goes through the trusted launcher harness/run_check.sh (issue
+# #64): it validates the effective Makefile, runs the check in a controlled
+# environment (the _clean_env.sh drops of issues #27/#31 included) and warns on
+# anything it does not trust (WARN rollout: its exit code is the check's own).
+RUN_CHECK="$HARNESS_DIR/run_check.sh"
+# $1 = log file. Returns the check's exit code.
+run_check() { bash "$RUN_CHECK" --decision --log "$1"; }
 
 # Green record (issue #55): .git/harness-check.ok holds the `_guard.py fingerprint`
 # of the last state a real, clean `make check` passed on (the format the Stop hook
-# reads). Only run_check_recorded writes it: the default command (no
-# HARNESS_CHECK_CMD override), green, and the same fingerprint before and after the
-# run. The counterfactual and third runs never call it. Any other outcome removes
+# reads). Only the launcher writes it (run_check.sh --record): the default command
+# (no HARNESS_CHECK_CMD override), green, and the same fingerprint before and after
+# the run. The counterfactual and third runs never record. Any other outcome removes
 # the record, so it never outlives a red or unverifiable run of the same state.
+. "$HARNESS_DIR/_clean_env.sh"   # CLEAN_ENV for the issue gate's third run
 GREEN_RECORD="$(git rev-parse --git-path harness-check.ok 2>/dev/null)"
 fingerprint() { python3 "$HARNESS_DIR/_guard.py" fingerprint 2>/dev/null; }
 # Exit 0 when no tracked file is marked assume-unchanged or skip-worktree: those
@@ -94,21 +95,7 @@ index_flags_clear() {
   ! printf '%s\n' "$flags" | grep -E '^([a-z]|S)' >/dev/null
 }
 # $1 = log file. Returns the check's exit code.
-run_check_recorded() {
-  local before after rc
-  before="$(fingerprint)" || before=""
-  run_check "$1"; rc=$?
-  after="$(fingerprint)" || after=""
-  [ -n "$GREEN_RECORD" ] || return "$rc"
-  if [ "$rc" -eq 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ] && [ -n "$before" ] &&
-      [ "$before" = "$after" ] && index_flags_clear; then
-    printf '%s' "$after" >"$GREEN_RECORD" ||
-      warn "could not write the green record $GREEN_RECORD" >&2
-  else
-    rm -f "$GREEN_RECORD"
-  fi
-  return "$rc"
-}
+run_check_recorded() { bash "$RUN_CHECK" --decision --record --log "$1"; }
 # PR barrier: exit 0 only when the green record matches the exact current state.
 green_record_current() {
   local fp
@@ -117,9 +104,7 @@ green_record_current() {
     [ "$(cat "$GREEN_RECORD")" = "$fp" ]
 }
 # $1 = log file, $2 = target (roadmap | phase:NN | issue:ISS-n).
-run_check_assuming() {
-  "${CLEAN_ENV[@]}" HARNESS_ASSUME_APPROVED="$2" bash -c "$CHECK_CMD" >"$1" 2>&1 </dev/null
-}
+run_check_assuming() { bash "$RUN_CHECK" --assume "$2" --log "$1"; }
 # The C template's test list: "<origin of TESTS>" then one file per line.
 read_tests_var() {
   local mk rc
