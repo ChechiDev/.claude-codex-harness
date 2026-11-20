@@ -330,7 +330,7 @@ def _task_flow_next(data: Item, pid: str) -> str:
             after = f" (review what task {previous} delivered first)" if previous else ""
             return (
                 f"kickoff task {tid}{after}: one question at a time if the plan no longer "
-                "fits, then write its subtask specs + make plan (leader, Fable)"
+                "fits, then write its subtask specs + make plan (claude-planner)"
             )
         gate = None if _harness.task_approved(tid, pid) else _task_gate_next(tid)
         return gate or _phase_next(data, pid)

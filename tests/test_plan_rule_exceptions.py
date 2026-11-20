@@ -26,6 +26,7 @@ GATES = ["phase", "issue", "plan"]
 
 REVIEWER = TOOLKIT / "codex" / "reviewer.md"
 LEADER = TOOLKIT / "agents" / "leader.md"
+CLAUDE_PLANNER = TOOLKIT / "agents" / "claude-planner.md"
 WORKFLOW = TOOLKIT / "lib" / "WORKFLOW.md"
 TEMPLATES = ["templates", "templates-c"]
 PLAN_GATE_END = "Green is required at session start, the code gate, and close.\n"
@@ -123,10 +124,18 @@ def test_failing_assertion_for_a_red_state_is_forbidden() -> None:
 # ── planning documents and templates ─────────────────────────────────────────
 
 
-@pytest.mark.parametrize("doc", [LEADER, WORKFLOW], ids=lambda p: p.name)
+@pytest.mark.parametrize("doc", [CLAUDE_PLANNER, WORKFLOW], ids=lambda p: p.name)
 def test_planning_documents_permit_the_same_exception(doc: Path) -> None:
     rule = _rule_with(doc.read_text(), EMPTY_FILES, TEST_ONLY)
     assert NO_PRODUCTION in rule
+
+
+def test_leader_delegates_the_files_rule_to_claude_planner() -> None:
+    """#63: the micro-task rule lives in claude-planner.md; leader.md points to it."""
+    text = LEADER.read_text()
+    assert "`.claude/agents/claude-planner.md`" in text
+    assert "micro-tasks" in text
+    assert "`files:` (1-3)" not in text
 
 
 def _template_exceptions(template: str) -> str:
@@ -150,7 +159,7 @@ def test_templates_define_the_exceptions_with_identical_text() -> None:
 # ── no contradicting instruction left behind (review round 1) ────────────────
 
 LIMIT_STATEMENTS = [
-    ("agents/leader.md", "`files:` (1-3)"),
+    ("agents/claude-planner.md", "`files:` (1-3)"),
     ("templates/docs/plan/PLAN.md", "1-3 production files"),
     ("templates-c/docs/plan/PLAN.md", "1-3 production files"),
     ("templates/docs/conventions.md", "1-3 files declared"),

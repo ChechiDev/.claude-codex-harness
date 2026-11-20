@@ -10,8 +10,8 @@ Two engines, each with the work the other must not do:
 
 | Engine | Writes | Never writes |
 |--------|--------|--------------|
-| **Claude** (leader + implementer) | the plan (`docs/plan/`), `src/`, `tests/unit/`, `progress/current.md`, `progress/impl_<N.M.K>.md` | `tests/acceptance/`, Codex verdicts and seals, commits |
-| **Codex** (reviewer + documenter) | gate verdicts, acceptance tests, `docs/reference/`, `progress/history.md`, the close commit message | production code, unit tests, `.git` |
+| **Claude** (leader + claude-planner + implementer) | the plan (`docs/plan/`, claude-planner only), `src/`, `tests/unit/`, `progress/current.md`, `progress/impl_<N.M.K>.md` | `tests/acceptance/`, Codex verdicts and seals, commits |
+| **Codex** (codex-planner + reviewer + documenter) | gate verdicts, acceptance tests, `docs/reference/`, `progress/history.md`, the close commit message | production code, unit tests, `.git` |
 
 Whoever writes the code is not the one who approves, documents or commits it.
 The hooks and `make check` enforce this split; it does not depend on the model
@@ -66,8 +66,9 @@ shares it with the team.
 
 ## Planning model
 
-The leader writes the plan, Codex reviews it at every level, and the human
-approves each level before the next one starts. `docs/plan/` is the single
+The leader talks to the user and runs every gate, the `claude-planner` subagent
+(Opus 5.5 / xhigh) writes the plan from the leader's brief, Codex reviews it at
+every level, and the human approves each level before the next one starts. `docs/plan/` is the single
 source of truth:
 
 ```
@@ -92,13 +93,13 @@ docs/plan/
 
 ```
 [leader] discovery, one question at a time (reads the repo first if there is code)
-   → PLAN.md + every phase file (title + goal)
+   → [claude-planner] PLAN.md + every phase file (title + goal)
    → [Codex] roadmap gate → ROADMAP_APPROVED (sealed) → you approve
-[leader] break down the current phase: tasks only
+[claude-planner] break down the current phase: tasks only
    → [Codex] phase gate → PHASE_APPROVED (sealed) → you approve
 per task N.M (in order):
    → [leader] kickoff: review the previous task, one question at a time if needed,
-              one spec per subtask of this task
+   → [claude-planner] one spec per subtask of this task
    → [Codex]  task gate → TASK_APPROVED (sealed) → you approve
 per subtask N.M.K (in order, respecting depends):
    → [leader]      task branch + status in_progress + make plan
@@ -218,8 +219,8 @@ temp dir, without writing to the project.
 ## On-disk state contract
 
 ```
-docs/plan/PLAN.md                  # vision… + generated index (leader / make plan)
-docs/plan/phase-NN-<slug>.md       # one phase: title, goal, tasks (leader)
+docs/plan/PLAN.md                  # vision… + generated index (claude-planner / make plan)
+docs/plan/phase-NN-<slug>.md       # one phase: title, goal, tasks (claude-planner)
 docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md  # subtask spec + status (source of truth)
 progress/roadmap_review.md         # ROADMAP_APPROVED | CHANGES_REQUESTED (Codex)
 progress/plan_roadmap.sha256       # seal of the approved roadmap
