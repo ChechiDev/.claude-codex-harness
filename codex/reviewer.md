@@ -103,11 +103,17 @@ or `CHANGES_REQUESTED -> progress/roadmap_review.md`.
 
 ## `phase` mode
 
-Input: the phase file `docs/plan/phase-NN-<slug>.md` (its tasks `## N.M`) and
-every subtask spec in `docs/plan/phase-NN-<slug>/` (format in `docs/plan/PLAN.md`).
+Input: the phase file `docs/plan/phase-NN-<slug>.md` (its tasks `## N.M`). The
+phase breakdown is **tasks only** (issue #62): each task's subtask specs are
+written at its kickoff and reviewed by the `task` mode. Only a phase broken down
+whole (before the task flow, or re-gated after it) also has every subtask spec in
+`docs/plan/phase-NN-<slug>/`; then review them too with the subtask checks below.
 
 Check:
-- **Coverage**: the tasks deliver the phase goal; the subtasks deliver each task.
+- **Tasks**: titles, goals, layers and order; together they deliver the phase
+  goal, with no gap and no overlap; each task is one coherent unit of work
+  (≈4-5 subtasks) with one goal sentence.
+- **Coverage** (with specs): the subtasks deliver each task.
 - **Micro-task scope** (common criteria above) for **every** subtask: atomic,
   1-3 declared `files:` (or the confirmed test-only exception below), no bundled
   concerns, no file claimed by two subtasks without an explicit `depends`.
@@ -150,6 +156,67 @@ Verdict in `progress/phase_review_<NN>.md`:
 
 Final response in one line: `PHASE_APPROVED -> progress/phase_review_<NN>.md`
 or `CHANGES_REQUESTED -> progress/phase_review_<NN>.md`.
+
+---
+
+## `task` mode
+
+Input: the task `## N.M` in the phase file (its goal and layer), the phase goal,
+and every subtask spec of this task in `docs/plan/phase-NN-<slug>/<N.M.K>-*.md`.
+Earlier tasks are already built: their specs and `progress/task_close_*.md` say
+what they delivered.
+
+Check, for every subtask of this task, everything the `phase` mode checks for a
+subtask (micro-task scope, refactor and test-only claims, dependencies,
+acceptance, baseline), plus:
+- **Task coverage**: the subtasks together deliver the task goal; nothing of a
+  later task is pulled in.
+- **Fit**: the specs build on what the earlier tasks actually delivered.
+
+Verdict in `progress/task_review_<N.M>.md`, same layout as the phase review with
+the header `# Task review — task <N.M>` and the verdict line
+`**Verdict:** TASK_APPROVED | CHANGES_REQUESTED`.
+
+Final response in one line: `TASK_APPROVED -> progress/task_review_<N.M>.md`
+or `CHANGES_REQUESTED -> progress/task_review_<N.M>.md`.
+
+---
+
+## `task-close` and `phase-close` modes
+
+Input: ONLY what the prompt lists (cost limit): the goal (the task in its phase
+file; for `phase-close` also the phase goal in `docs/plan/PLAN.md`), every
+subtask spec, the `progress/impl_<id>.md` and `progress/review_<id>.md` reports,
+and the diff of the close commits (`git show`). Do not read other files.
+
+Check that the delivered work meets the goal and every acceptance criterion.
+Write a **traceability matrix**: one row per goal point (split the goal into its
+points) and per acceptance criterion of every spec, each with the test that
+proves it and its status, `met` or `gap`. For `phase-close`, the points are the
+phase goal and the goal of each task. A point with no test, a test that does
+not prove it, or work missing from the diff is a `gap`. **Any gap means
+`CHANGES_REQUESTED`**; the harness rejects an approval without a matrix or with
+a `gap` row.
+
+Verdict in `progress/task_close_<N.M>.md` (`progress/phase_close_<NN>.md`):
+
+```markdown
+# Task close — task <N.M>        (or: # Phase close — phase <NN>)
+
+**Verdict:** TASK_CLOSE_APPROVED | PHASE_CLOSE_APPROVED | CHANGES_REQUESTED
+
+## Traceability
+
+| Point | Test | Status |
+|---|---|---|
+| goal: <point> | tests/acceptance/test_1.1.1.py::test_ac1_x | met |
+| 1.1.2 AC1: <criterion> | tests/acceptance/test_1.1.2.py::test_ac1_y | met |
+
+## Gaps (if CHANGES_REQUESTED)
+1. <point>: what is missing, and the subtask that would cover it
+```
+
+Final response in one line: `<TOKEN> -> <verdict file>`.
 
 ---
 

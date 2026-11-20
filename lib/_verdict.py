@@ -54,7 +54,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from _harness import RE_VERDICT
+from _harness import FEATURES_FILE as FEATURES
+from _harness import RE_VERDICT, missing_close_commits
 from _status import say
 
 GATE_TOKENS: dict[str, str] = {
@@ -64,7 +65,17 @@ GATE_TOKENS: dict[str, str] = {
     "issue-draft": "DRAFT_APPROVED",
     "plan": "PLAN_APPROVED",
     "code": "APPROVED",
+    "task": "TASK_APPROVED",
+    "task-close": "TASK_CLOSE_APPROVED",
+    "phase-close": "PHASE_CLOSE_APPROVED",
 }
+# Close gates (issue #62): an approval must carry a traceability matrix, one row per
+# goal point / acceptance criterion with its test and status, and no `gap` row.
+CLOSE_GATES = frozenset({"task-close", "phase-close"})
+RE_MATRIX_SECTION = re.compile(r"^## +Traceability[ \t]*$(.*?)(?=^## |\Z)", re.M | re.S)
+RE_MATRIX_SEPARATOR = re.compile(r"^\|[ \t:|-]+\|[ \t]*$")
+MATRIX_STATUS = frozenset({"met", "gap"})
+RE_CLOSE_VERDICT = re.compile(r"(?:^|/)(?:task_close_(\d+\.\d+)|phase_close_(\d+))\.md$")
 REJECTED = "CHANGES_REQUESTED"
 TMP_PREFIX = ".tmp-"
 TRASH_PREFIX = ".trash-"
@@ -184,7 +195,50 @@ def checked_token(gate: str, verdict: str, data: bytes) -> str:
         raise InvalidVerdict(
             f"{verdict} has {found}; the {gate} gate accepts {' or '.join(accepted)}"
         )
+    if gate in CLOSE_GATES and token != REJECTED:
+        _check_matrix(verdict, data.decode("utf-8", errors="replace"))
     return token
+
+
+def matrix_statuses(text: str) -> list[str]:
+    """The status (last cell, lower case) of every data row of the `## Traceability`
+    table: the rows after its header and separator lines."""
+    section = RE_MATRIX_SECTION.search(text)
+    if section is None:
+        return []
+    rows = [line.strip() for line in section.group(1).splitlines()]
+    rows = [row for row in rows if "|" in row]  # leading/trailing pipes are optional
+    found = []
+    for row in rows[1:]:  # the first row is the header
+        cells = row.strip("|")
+        if RE_MATRIX_SEPARATOR.match(f"|{cells}|"):
+            continue
+        found.append(cells.split("|")[-1].strip().lower())
+    return found
+
+
+def _check_matrix(verdict: str, text: str) -> None:
+    statuses = matrix_statuses(text)
+    odd = sorted({s for s in statuses if s not in MATRIX_STATUS})
+    if odd:
+        raise InvalidVerdict(
+            f"{verdict}: every matrix status must be exactly `met` or `gap` (found: "
+            f"{', '.join(odd)})"
+        )
+    if not statuses:
+        raise InvalidVerdict(
+            f"{verdict} approves without a traceability matrix "
+            "(| goal point or AC | test | met/gap |)"
+        )
+    if "gap" in statuses:
+        raise InvalidVerdict(f"{verdict} approves with a gap in its matrix: a gap blocks")
+    target = RE_CLOSE_VERDICT.search(verdict)
+    if target is not None and FEATURES.is_file():
+        missing = missing_close_commits(target.group(1) or target.group(2))
+        if missing:
+            raise InvalidVerdict(
+                f"{verdict} approves, but {', '.join(missing)} has no close commit: each is a gap"
+            )
 
 
 def _unique(path: Path) -> Path:
@@ -225,6 +279,9 @@ VERDICT_NAMES: tuple[tuple[re.Pattern[str], str, Callable[[re.Match[str]], str]]
     (re.compile(r"^issue_review_(ISS-\d+)\.md$"), "issue", lambda m: m.group(1)),
     (re.compile(r"^issue_draft_review\.md$"), "issue-draft", lambda m: "issue_draft"),
     (re.compile(r"^plan_review_(.+)\.md$"), "plan", lambda m: m.group(1)),
+    (re.compile(r"^task_review_(.+)\.md$"), "task", lambda m: m.group(1)),
+    (re.compile(r"^task_close_(.+)\.md$"), "task-close", lambda m: m.group(1)),
+    (re.compile(r"^phase_close_(\d+)\.md$"), "phase-close", lambda m: m.group(1)),
     (re.compile(r"^review_(.+)\.md$"), "code", lambda m: m.group(1)),
 )
 RECEIPT_NAME = re.compile(r"^verdict_(.+)\.sha256$")
@@ -240,6 +297,9 @@ def verdict_path(gate: str, item_id: str) -> str:
         "issue-draft": "progress/issue_draft_review.md",
         "plan": f"progress/plan_review_{item_id}.md",
         "code": f"progress/review_{item_id}.md",
+        "task": f"progress/task_review_{item_id}.md",
+        "task-close": f"progress/task_close_{item_id}.md",
+        "phase-close": f"progress/phase_close_{item_id}.md",
     }[gate]
 
 

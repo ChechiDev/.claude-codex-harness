@@ -54,6 +54,11 @@ of sealed acceptance tests they rewrite:
   - interrupts: feat/2.4-x             (optional: task branch a `now` issue paused)
   - goal: <one sentence>
 
+Task flow (issue #62): the phase gate approves the tasks only; each task's specs are
+written at its kickoff and approved by its task gate. For a phase sealed with its
+specs (broken down whole), the first write also records once which of its tasks are
+already done (progress/task_flow_legacy_NN.json, see _plan_seal.record_legacy).
+
 Issues never enter `phases`/`features`: they are listed under `issues`, and only
 when there is at least one, so plans without issues keep their previous output.
 """
@@ -67,6 +72,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+import _plan_seal
 from _status import say
 
 PLAN_DIR = Path("docs/plan")
@@ -533,6 +539,8 @@ def main(argv: list[str]) -> int:
 
     for path, text in outputs.items():
         path.write_text(text, encoding="utf-8")
+    for rel in _plan_seal.record_legacy(Path.cwd(), data):
+        say("OK", f"phase broken down whole: recorded its tasks already done in {rel}")
     subs = sum(len(t["subtasks"]) for t in data["features"])
     issues = data.get("issues", [])
     lane = ""

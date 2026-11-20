@@ -10,6 +10,7 @@ Commands:
   seal <id>         record progress/acceptance_<id>.sha256 (needs PLAN_APPROVED) and
                     re-seal its spec in the phase seal
   seal roadmap      record progress/plan_roadmap.sha256 (needs ROADMAP_APPROVED)
+  seal task <N.M>   record progress/plan_task_N.M.sha256 (needs TASK_APPROVED)
   seal phase <NN>   record progress/plan_phase_<NN>.sha256 (needs PHASE_APPROVED)
   seal issue <ISS-n>  record progress/plan_issue_<ISS-n>.sha256 (needs ISSUE_APPROVED)
   seal draft        record progress/issue_draft.sha256 (needs DRAFT_APPROVED)
@@ -70,7 +71,10 @@ SKIP_DIRS = {"node_modules", "site-packages"}
 # Gate verdicts (roadmap, phase, plan, code), their history, the task PR
 # narrative and every seal under progress/.
 RE_CODEX_OWNED = re.compile(
-    r"^(progress/(plan_review|review|phase_review|issue_review)_[^/]+\.md"
+    r"^(progress/(plan_review|review|phase_review|issue_review|task_review|task_close"
+    r"|phase_close)_[^/]+\.md"
+    # Legacy record of a phase broken down whole (issue #62), sealed in its phase seal.
+    r"|progress/task_flow_legacy_[^/]+\.json"
     r"|progress/(roadmap_review|issue_draft_review|legacy_inventory_review)\.md"
     # Sealed legacy inventory (M0b): written only by the human-run legacy_inventory.sh.
     r"|progress/legacy_inventory\.json"
@@ -540,6 +544,7 @@ RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
     r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_"
     r"|pr_|legacy_inventory|issue_review|issue_draft_review|verdict_|review_history/"
+    r"|task_review|task_close|phase_close|task_flow_legacy"
     r"|issue_migrations_|oracle_migrations/|close_|[^/\s'\"]*\.sha256)|\.harness\b"
     r"|\.git/harness-"
 )
@@ -557,7 +562,19 @@ RE_WRITE_CALL = re.compile(
 # fnmatch pattern per component; `**` spans any number of components. Keep in sync with
 # RE_CODEX_OWNED / classify / HARNESS_ENTRIES.
 PROTECTED_TEMPLATES = (
-    *(f"progress/{n}_*.md" for n in ("plan_review", "review", "phase_review", "issue_review")),
+    *(
+        f"progress/{n}_*.md"
+        for n in (
+            "plan_review",
+            "review",
+            "phase_review",
+            "issue_review",
+            "task_review",
+            "task_close",
+            "phase_close",
+        )
+    ),
+    "progress/task_flow_legacy_*.json",
     "progress/roadmap_review.md",
     "progress/issue_draft_review.md",
     "progress/legacy_inventory_review.md",
@@ -1752,6 +1769,20 @@ def seal_phase(pid: str) -> int:
     return 0
 
 
+def seal_task(tid: str) -> int:
+    """Task gate (issue #62): seal the subtask specs of task N.M it approved."""
+    if _harness.read_verdict(ROOT / _harness.task_review(tid)) != "TASK_APPROVED":
+        say("FAIL", f"cannot seal task {tid}: it is not TASK_APPROVED", sys.stderr)
+        return 1
+    entries = _plan_seal.task_entries(ROOT, tid)
+    if not entries:
+        say("FAIL", f"cannot seal task {tid}: it has no subtask specs", sys.stderr)
+        return 1
+    _plan_seal.write(_plan_seal.task_manifest(ROOT, tid), entries)
+    say("OK", f"sealed the approved task {tid} ({len(entries)} spec(s))")
+    return 0
+
+
 def seal_issue(iid: str) -> int:
     if _harness.read_verdict(ROOT / _harness.issue_review(iid)) != "ISSUE_APPROVED":
         say("FAIL", f"cannot seal issue {iid}: it is not ISSUE_APPROVED", sys.stderr)
@@ -1806,18 +1837,16 @@ def seal_draft() -> int:
 
 
 def seal_command(args: list[str]) -> int:
-    if args == ["roadmap"]:
-        return seal_roadmap()
-    if args == ["draft"]:
-        return seal_draft()
-    if len(args) == 2 and args[0] == "phase":
-        return seal_phase(args[1])
-    if len(args) == 2 and args[0] == "issue":
-        return seal_issue(args[1])
+    if args in (["roadmap"], ["draft"]):
+        return seal_roadmap() if args == ["roadmap"] else seal_draft()
+    owned = {"phase": seal_phase, "issue": seal_issue, "task": seal_task}
+    if len(args) == 2 and args[0] in owned:
+        return owned[args[0]](args[1])
     if len(args) == 1:
         return seal(args[0])
     print(
-        "usage: _guard.py seal <N.M.K|ISS-n.k> | roadmap | phase <NN> | issue <ISS-n> | draft",
+        "usage: _guard.py seal <N.M.K|ISS-n.k> | roadmap | phase <NN> | task <N.M> | issue <ISS-n>"
+        " | draft",
         file=sys.stderr,
     )
     return 2

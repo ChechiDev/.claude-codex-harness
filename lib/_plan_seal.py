@@ -6,7 +6,10 @@ changes afterwards. Any change needs a new Codex approval (which re-seals).
 
   progress/plan_roadmap.sha256   PLAN.md (minus the generated index) + the header
                                  (title + goal) of every phase file
-  progress/plan_phase_NN.sha256  the phase file (tasks) + every subtask spec
+  progress/plan_phase_NN.sha256  the phase file (tasks); for a phase broken down whole
+                                 (legacy, issue #62) also every subtask spec and its
+                                 legacy record progress/task_flow_legacy_NN.json
+  progress/plan_task_N.M.sha256  task flow: the subtask specs of task N.M (task gate)
   progress/plan_issue_ISS-n.sha256  the issue header + every issue subtask spec
 
 `- status:` lines are excluded: status moves through the cycle on its own.
@@ -19,7 +22,9 @@ is still open, a change to the in_progress spec is only a warning.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -40,6 +45,14 @@ def roadmap_manifest(root: Path) -> Path:
 
 def phase_manifest(root: Path, pid: str) -> Path:
     return root / "progress" / f"plan_phase_{pid}.sha256"
+
+
+def task_manifest(root: Path, tid: str) -> Path:
+    return root / "progress" / f"plan_task_{tid}.sha256"
+
+
+def legacy_record(root: Path, pid: str) -> Path:
+    return root / "progress" / f"task_flow_legacy_{pid}.json"
 
 
 def issue_manifest(root: Path, iid: str) -> Path:
@@ -79,12 +92,84 @@ def roadmap_entries(root: Path) -> Entries:
     return entries
 
 
+def _task_manifests(root: Path, pid: str) -> list[Path]:
+    return sorted((root / "progress").glob(f"plan_task_{int(pid)}.*.sha256"))
+
+
+def whole(root: Path, pid: str) -> bool:
+    """The phase seal covers its specs: it was sealed with them (legacy), or it is
+    sealed now for the first time with specs and no task seal (issue #62)."""
+    manifest = phase_manifest(root, pid)
+    if manifest.is_file():
+        return _harness.sealed_specs(manifest)
+    return not _task_manifests(root, pid)
+
+
 def phase_entries(root: Path, pid: str) -> Entries:
     path = _phase_files(root).get(pid)
     if path is None:
         return {}
-    files = [path, *sorted(path.with_suffix("").glob("*.md"), key=_spec_key)]
-    return {_rel(root, f): _digest(RE_STATUS.sub("", f.read_text("utf-8"))) for f in files}
+    files = [path]
+    if whole(root, pid):
+        files += sorted(path.with_suffix("").glob("*.md"), key=_spec_key)
+    entries = {_rel(root, f): _digest(RE_STATUS.sub("", f.read_text("utf-8"))) for f in files}
+    record = legacy_record(root, pid)
+    if record.is_file() and len(files) > 1:
+        entries[_rel(root, record)] = _digest(record.read_text("utf-8"))
+    return entries
+
+
+def _task_of_spec(path: Path) -> str:
+    return path.name.split("-", 1)[0].rsplit(".", 1)[0]
+
+
+def task_entries(root: Path, tid: str) -> Entries:
+    path = _phase_files(root).get(f"{int(tid.split('.')[0]):02d}")
+    if path is None:
+        return {}
+    specs = [f for f in path.with_suffix("").glob("*.md") if _task_of_spec(f) == tid]
+    return {
+        _rel(root, f): _digest(RE_STATUS.sub("", f.read_text("utf-8")))
+        for f in sorted(specs, key=_spec_key)
+    }
+
+
+def record_legacy(root: Path, data: dict[str, object]) -> list[str]:
+    """Write, once, the legacy record of every phase sealed with its specs: the tasks
+    already done now (issue #62). It goes into the phase seal, so editing or removing
+    it fails `make check`; a seal that already lists it is never rewritten."""
+    written = []
+    tasks = data.get("features")
+    for pid in _phase_files(root):
+        manifest = phase_manifest(root, pid)
+        record = legacy_record(root, pid)
+        rel = _rel(root, record)
+        if not manifest.is_file() or not _harness.sealed_specs(manifest):
+            continue
+        sealed = read(manifest)
+        if rel in sealed or record.exists():
+            continue
+        done = [
+            str(t["id"])
+            for t in (tasks if isinstance(tasks, list) else [])
+            if t.get("phase") == pid
+            and t.get("subtasks")
+            and all(s.get("status") in ("done", "baseline") for s in t["subtasks"])
+        ]
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, check=False
+        )
+        body = {
+            "phase": pid,
+            "tasks_done": done,
+            "commit": head.stdout.strip() if head.returncode == 0 else "",
+            "recorded_by": "make plan (issue #62: tasks exempt from the task-close gate)",
+        }
+        record.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+        sealed[rel] = _digest(record.read_text("utf-8"))
+        write(manifest, sealed)
+        written.append(rel)
+    return written
 
 
 def _spec_key(path: Path) -> tuple[int, ...]:
@@ -132,10 +217,19 @@ def reseal_spec(root: Path, spec: str, owner: str) -> bool:
     plan gate approved it."""
     is_issue = owner.startswith("ISS-")
     manifest = issue_manifest(root, owner) if is_issue else phase_manifest(root, owner)
+    if not is_issue:
+        tid = _task_of_spec(Path(spec))
+        if task_manifest(root, tid).is_file():
+            manifest = task_manifest(root, tid)
     if not manifest.is_file():
         return False
     entries = read(manifest)
-    current = issue_entries(root, owner) if is_issue else phase_entries(root, owner)
+    if is_issue:
+        current = issue_entries(root, owner)
+    elif manifest.name.startswith("plan_task_"):
+        current = task_entries(root, _task_of_spec(Path(spec)))
+    else:
+        current = phase_entries(root, owner)
     if spec in current:
         entries[spec] = current[spec]
         write(manifest, entries)
@@ -226,8 +320,32 @@ def verify(root: Path, exempt: Callable[[str], bool] | None = None) -> tuple[lis
                 warnings.append(f"{msg}: its subtask is still in its plan gate")
             else:
                 problems.append(msg + gate.format(f"phase {pid}"))
+    _verify_tasks(root, open_spec, problems, warnings)
     _verify_issues(root, open_spec, problems, warnings, is_exempt)
     return problems, warnings
+
+
+def _verify_tasks(
+    root: Path, open_spec: str | None, problems: list[str], warnings: list[str]
+) -> None:
+    gate = " (re-run its Codex gate: ./harness/review_with_codex.sh task {})"
+    for review in sorted((root / "progress").glob("task_review_*.md")):
+        tid = review.name.removeprefix("task_review_").removesuffix(".md")
+        approved = _harness.read_verdict(review) == "TASK_APPROVED"
+        if approved and not task_manifest(root, tid).is_file():
+            problems.append(
+                f"task {tid} is TASK_APPROVED but not sealed: its specs are unprotected "
+                f"(human: review_with_codex.sh seal task {tid}, or re-run its gate)"
+            )
+    for manifest in sorted((root / "progress").glob("plan_task_*.sha256")):
+        tid = manifest.name.removeprefix("plan_task_").removesuffix(".sha256")
+        if _harness.assumed("task", tid):
+            continue
+        for rel, msg in _diff(read(manifest), task_entries(root, tid), f"task {tid}"):
+            if rel == open_spec:
+                warnings.append(f"{msg}: its subtask is still in its plan gate")
+            else:
+                problems.append(msg + gate.format(tid))
 
 
 def _verify_issues(

@@ -201,6 +201,9 @@ def test_gate_tokens_cover_every_review_gate() -> None:
         "issue-draft": "DRAFT_APPROVED",
         "plan": "PLAN_APPROVED",
         "code": "APPROVED",
+        "task": "TASK_APPROVED",
+        "task-close": "TASK_CLOSE_APPROVED",
+        "phase-close": "PHASE_CLOSE_APPROVED",
     }
 
 
@@ -210,7 +213,9 @@ def test_commit_accepts_the_gate_tokens(env: Env, gate: str, token: str) -> None
     accepted = GATE_TOKENS[gate] if token == "approval" else token
     slot = env.slot(gate=gate)
     slot.begin()
-    data = f"# Review\n\n**Verdict:** {accepted}\n".encode()
+    matrix = "\n## Traceability\n\n| Point | Test | Status |\n|---|---|---|\n| g | t | met |\n"
+    extra = matrix if gate in ("task-close", "phase-close") else ""
+    data = f"# Review\n\n**Verdict:** {accepted}\n{extra}".encode()
     env.write_verdict(data)
     assert slot.commit() == accepted
     assert env.receipt() == receipt_of(data, gate)

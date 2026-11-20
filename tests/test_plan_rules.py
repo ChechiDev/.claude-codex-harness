@@ -78,11 +78,11 @@ def test_phase_ready_needs_roadmap_and_a_breakdown(plan: Plan) -> None:
     assert plan.run_py("_harness.py", "phase-ready", "01").returncode == 0
 
 
-def test_phase_ready_rejects_a_phase_without_subtasks(plan: Plan) -> None:
+def test_phase_ready_rejects_a_phase_without_tasks(plan: Plan) -> None:
     plan.phase("01").approve_roadmap().sync()
     res = plan.run_py("_harness.py", "phase-ready", "01")
     assert res.returncode == 1
-    assert "no subtasks" in res.stdout + res.stderr
+    assert "no tasks" in res.stdout + res.stderr
 
 
 def test_subtask_ready_needs_its_phase_approved(plan: Plan) -> None:
