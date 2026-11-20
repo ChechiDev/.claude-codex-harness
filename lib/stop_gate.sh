@@ -1,59 +1,35 @@
 #!/usr/bin/env bash
-# Stop hook. Before closing the session, force a full verification:
-#   - make check  (verify + invariants + gate consistency + integrity backstop)
-# If it fails, block the close (exit 2) with the detail for Claude to see.
-#
-# Loop protection: when the stop was already blocked once (stop_hook_active),
-# a still-red check is reported but no longer blocks, so the session cannot spin.
-# Cache: a green result is remembered per working-tree fingerprint (git state +
-# untracked contents), so an unchanged tree does not re-run the whole suite.
+# Stop hook — ADVISORY ONLY (issue #55). Claude Code fires it at the end of EVERY
+# assistant turn, not only when the session closes, so it must stay cheap:
+#   - it computes the working-tree fingerprint (_guard.py fingerprint, ~1 s) and
+#     compares it with the last green full-check record (.git/harness-check.ok);
+#   - it prints whether that record matches the exact current state, and
+#     "unknown" when the fingerprint cannot be computed (never green);
+#   - it NEVER runs `make check`/check.sh and NEVER blocks (always exit 0).
+# The real full `make check` runs at the gates, at close and before a PR; those
+# are the only writers of the green record and the PR path requires it to match.
 set -uo pipefail
 # Inherited exported functions could stand in for any command this script runs
 # (issue #31): drop them all before anything else.
 for _f in $(builtin compgen -A function); do builtin unset -f "$_f"; done; builtin unset _f
 if [ -n "$(builtin compgen -A function)" ]; then
-  echo "[FAIL] inherited shell functions remain: refusing to run" >&2; exit 1
+  echo "[harness] inherited shell functions remain: green full check unknown" >&2; exit 0
 fi
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 cd "$PROJECT_DIR" || exit 0
+cat >/dev/null  # the payload is not needed: the hook decides nothing from it
 
-INPUT="$(cat)"
-ACTIVE="$(printf '%s' "$INPUT" | python3 -c '
-import json, sys
-try:
-    print(str(json.load(sys.stdin).get("stop_hook_active", False)).lower())
-except ValueError:
-    print("false")' 2>/dev/null)"
-
+WHERE="the full make check runs at the gates, at close and before a PR"
 FP="$(python3 "$HARNESS_DIR/_guard.py" fingerprint 2>/dev/null)"
-CACHE="$(git rev-parse --git-path harness-check.ok 2>/dev/null)"
-if [ -n "$FP" ] && [ -n "$CACHE" ] && [ -f "$CACHE" ] && [ "$(cat "$CACHE")" = "$FP" ]; then
-  echo "[harness] make check already green for this exact tree — session ready to close."
+if [ -z "$FP" ]; then
+  echo "[harness] green full check: unknown (no fingerprint for this tree) — $WHERE."
   exit 0
 fi
-
-LOG="$(mktemp)"
-# Never under the gate's counterfactual assumption (issue #27).
-. "$HARNESS_DIR/_clean_env.sh"
-# make check takes the per-repo lock (issue #52): this waits for a gate's check
-# in progress instead of building the same tree at once. An inherited
-# HARNESS_CHECK_LOCK_HELD would skip that lock, so it is dropped here.
-if "${CLEAN_ENV[@]}" -u HARNESS_CHECK_LOCK_HELD make check >"$LOG" 2>&1; then
-  echo "[harness] make check OK — session ready to close."
-  rm -f "$LOG"
-  if [ -n "$FP" ] && [ -n "$CACHE" ]; then printf '%s' "$FP" >"$CACHE"; fi
+RECORD="$(git rev-parse --git-path harness-check.ok 2>/dev/null)"
+if [ -n "$RECORD" ] && [ -f "$RECORD" ] && [ "$(cat "$RECORD")" = "$FP" ]; then
+  echo "[harness] last green full check matches this exact state."
   exit 0
 fi
-
-if [ "$ACTIVE" = "true" ]; then
-  echo "[harness] make check is still red after a blocked stop; not blocking again (avoids a loop). Resolve it before the next session:" >&2
-  tail -30 "$LOG" >&2
-  rm -f "$LOG"
-  exit 0
-fi
-
-echo "[harness] make check FAILED — do not close the session until resolved:" >&2
-tail -30 "$LOG" >&2
-rm -f "$LOG"
-exit 2
+echo "[harness] no green full check for this state — $WHERE."
+exit 0

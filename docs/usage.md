@@ -80,7 +80,7 @@ created from `main` for the first subtask of a task), sets the subtask to `in_pr
 
 `make check` is **red** from here until the code exists: the acceptance tests
 fail by design, unless the spec declares a confirmed marker (structural refactor
-or test-only verification), whose tests may already pass. The Stop hook reports it when the session pauses; that is
+or test-only verification), whose tests may already pass. The advisory Stop hook warns that there is no green full check; that is
 expected, not a harness fault.
 
 ## 4. Implement and code gate
@@ -356,10 +356,21 @@ instead of running Codex. After an approved roadmap, phase or plan gate,
 
 ## Stop hook
 
-`stop_gate.sh` runs `make check` before the session ends. A green result is
-cached per working-tree fingerprint, so an unchanged tree does not re-run the
-suite. If the stop was already blocked once and the check is still red, it
-reports but does not block again, so the session cannot loop.
+Claude Code runs the Stop hook at the end of **every** assistant turn, not only
+when the session closes, so `stop_gate.sh` is advisory and cheap:
+
+- **What it does:** computes the working-tree fingerprint (about a second) and
+  compares it with the last green full-check record (`.git/harness-check.ok`).
+- **What it says:** `last green full check matches this exact state`, or
+  `no green full check for this state`, or `unknown` when the fingerprint cannot
+  be computed (never reported as green).
+- **What it never does:** run `make check`/`check.sh` or block the stop.
+
+The real full `make check` runs at the gates, at close and before a PR. Gates
+and close write the green record only after a clean, green check of an
+unchanged tree; the PR path blocks unless that record matches the exact current
+state. After each Edit/Write, `post_write.sh` runs only `make lint` (feedback,
+never blocks).
 
 ## Recovery when a hook blocks Claude
 

@@ -96,24 +96,30 @@ def test_lock_lives_in_git_dir_and_tree_stays_clean(proj: Path) -> None:
     assert _git(proj, "status", "--porcelain") == ""
 
 
-def test_stop_hook_waits_for_a_running_check(proj: Path) -> None:
+def _stop(proj: Path, **env: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "harness/stop_gate.sh"],
+        input='{"stop_hook_active": false}',
+        cwd=proj,
+        env=_env(CLAUDE_PROJECT_DIR=str(proj), **env),
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+
+def test_stop_hook_does_not_wait_for_a_running_check(proj: Path) -> None:
+    """#55: the Stop is advisory; it never runs make check, so it never queues."""
     gate = _check(proj, VERIFY_SLEEP="2")
     deadline = time.time() + 10
     while not (proj / "run.log").exists() and time.time() < deadline:
         time.sleep(0.05)
-    stop = subprocess.run(
-        ["bash", "harness/stop_gate.sh"],
-        input='{"stop_hook_active": false}',
-        cwd=proj,
-        env=_env(CLAUDE_PROJECT_DIR=str(proj)),
-        text=True,
-        capture_output=True,
-        timeout=60,
-    )
+    stop = _stop(proj)
+    assert gate.poll() is None, "the Stop returned before the gate's check ended"
     assert gate.wait(30) == 0, gate.communicate()
     assert stop.returncode == 0, stop.stdout + stop.stderr
     log = (proj / "run.log").read_text().splitlines()
-    assert len(log) == 4 and _serial(log), log
+    assert len(log) == 2 and _serial(log), log
 
 
 def _hold_lock(root: Path) -> subprocess.Popen[bytes]:
@@ -134,22 +140,18 @@ def test_check_times_out_with_a_clear_error(proj: Path) -> None:
     assert not (proj / "run.log").exists()
 
 
-def test_stop_hook_times_out_and_blocks(proj: Path) -> None:
+@pytest.mark.parametrize("held", ["", "1"])
+def test_stop_hook_never_takes_the_lock_nor_blocks(proj: Path, held: str) -> None:
+    """#55: with the lock held (and even a stray HARNESS_CHECK_LOCK_HELD) the Stop
+    returns at once, allows the stop and runs nothing."""
+    extra = {"HARNESS_CHECK_LOCK_HELD": held} if held else {}
     holder = _hold_lock(proj)
     try:
-        stop = subprocess.run(
-            ["bash", "harness/stop_gate.sh"],
-            input='{"stop_hook_active": false}',
-            cwd=proj,
-            env=_env(CLAUDE_PROJECT_DIR=str(proj), HARNESS_CHECK_LOCK_TIMEOUT="1"),
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
+        stop = _stop(proj, HARNESS_CHECK_LOCK_TIMEOUT="1", **extra)
     finally:
         holder.kill()
-    assert stop.returncode == 2, stop.stdout + stop.stderr
-    assert "timed out" in stop.stderr
+    assert stop.returncode == 0, stop.stdout + stop.stderr
+    assert "timed out" not in stop.stdout + stop.stderr
     assert not (proj / "run.log").exists()
 
 
@@ -167,29 +169,6 @@ def test_missing_flock_fails_clearly(proj: Path, tmp_path: Path) -> None:
     _, err = p.communicate(timeout=30)
     assert p.returncode != 0
     assert "flock" in err and "not found" in err, err
-    assert not (proj / "run.log").exists()
-
-
-def test_stop_hook_ignores_an_inherited_lock_held_flag(proj: Path) -> None:
-    """A stray HARNESS_CHECK_LOCK_HELD in the session must not skip the lock."""
-    holder = _hold_lock(proj)
-    try:
-        stop = subprocess.run(
-            ["bash", "harness/stop_gate.sh"],
-            input='{"stop_hook_active": false}',
-            cwd=proj,
-            env=_env(
-                CLAUDE_PROJECT_DIR=str(proj),
-                HARNESS_CHECK_LOCK_TIMEOUT="1",
-                HARNESS_CHECK_LOCK_HELD="1",
-            ),
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-    finally:
-        holder.kill()
-    assert stop.returncode == 2, stop.stdout + stop.stderr
     assert not (proj / "run.log").exists()
 
 

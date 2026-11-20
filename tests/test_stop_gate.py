@@ -1,10 +1,14 @@
-"""stop_gate.sh: no infinite Stop loop, and no redundant `make check` runs."""
+"""stop_gate.sh (#55): advisory only. It compares the tree with the last green full
+check record and warns; it never blocks and never runs `make check`."""
 
 from __future__ import annotations
 
+import subprocess
+
 from conftest import Project
 
-BLOCKED = 2
+NO_GREEN = "no green full check for this state"
+MATCHES = "last green full check matches this exact state"
 
 # Fake `make check`: counts its runs and fails when the FAIL marker file exists.
 MAKEFILE = (
@@ -23,45 +27,61 @@ def _runs(project: Project) -> int:
     return len(path.read_text().splitlines()) if path.exists() else 0
 
 
-def _stop(project: Project, active: bool = False) -> int:
-    payload = {"hook_event_name": "Stop", "stop_hook_active": active}
-    return project.run("stop_gate.sh", payload).returncode
+def _record(project: Project) -> str:
+    """Write the green record the way gates/close do (fingerprint of the tree)."""
+    fp = subprocess.run(
+        ["python3", "harness/_guard.py", "fingerprint"],
+        cwd=project.root, text=True, capture_output=True, check=True,
+    ).stdout.strip()  # fmt: skip
+    assert fp
+    (project.root / ".git" / "harness-check.ok").write_text(fp)
+    return fp
 
 
-def test_red_check_blocks_the_stop(project: Project) -> None:
+def _stop(project: Project, active: bool = False) -> subprocess.CompletedProcess[str]:
+    return project.run("stop_gate.sh", {"hook_event_name": "Stop", "stop_hook_active": active})
+
+
+def test_without_a_record_it_warns_and_allows_the_stop(project: Project) -> None:
     _setup(project)
-    project.write("FAIL", "")
-    assert _stop(project) == BLOCKED
-
-
-def test_does_not_block_again_when_stop_hook_already_active(project: Project) -> None:
-    _setup(project)
-    project.write("FAIL", "")
-    res = project.run("stop_gate.sh", {"hook_event_name": "Stop", "stop_hook_active": True})
+    res = _stop(project)
     assert res.returncode == 0
-    assert "still red" in res.stderr
+    assert NO_GREEN in res.stdout + res.stderr
+    assert _runs(project) == 0
 
 
-def test_green_check_is_cached_while_the_tree_is_unchanged(project: Project) -> None:
-    _setup(project)
-    assert _stop(project) == 0
-    assert _stop(project) == 0
-    assert _runs(project) == 1
-
-
-def test_any_change_invalidates_the_cache(project: Project) -> None:
-    _setup(project)
-    assert _stop(project) == 0
-    project.write("src/pkg/domain/user.py", "x = 1\n")
-    assert _stop(project) == 0
-    project.write("tests/acceptance/test_new.py", "untracked\n")
-    assert _stop(project) == 0
-    assert _runs(project) == 3
-
-
-def test_red_result_is_never_cached(project: Project) -> None:
+def test_a_red_tree_never_blocks_nor_runs_check(project: Project) -> None:
     _setup(project)
     project.write("FAIL", "")
-    assert _stop(project) == BLOCKED
-    assert _stop(project) == BLOCKED
-    assert _runs(project) == 2
+    for active in (False, True):
+        assert _stop(project, active).returncode == 0
+    assert _runs(project) == 0
+
+
+def test_a_matching_record_is_reported(project: Project) -> None:
+    _setup(project)
+    _record(project)
+    res = _stop(project)
+    assert res.returncode == 0
+    assert MATCHES in res.stdout
+    assert NO_GREEN not in res.stdout + res.stderr
+
+
+def test_any_change_makes_the_record_stale(project: Project) -> None:
+    _setup(project)
+    _record(project)
+    project.write("src/pkg/domain/user.py", "x = 1\n")
+    res = _stop(project)
+    assert res.returncode == 0
+    assert NO_GREEN in res.stdout + res.stderr
+    assert MATCHES not in res.stdout
+
+
+def test_the_stop_never_writes_the_record(project: Project) -> None:
+    _setup(project)
+    record = project.root / ".git" / "harness-check.ok"
+    _stop(project)
+    assert not record.exists()
+    record.write_text("stale")
+    _stop(project)
+    assert record.read_text() == "stale"

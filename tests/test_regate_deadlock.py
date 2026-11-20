@@ -419,8 +419,9 @@ def test_a_fresh_stop_ignores_an_inherited_variable(tmp_path: Path) -> None:
         input=json.dumps({"hook_event_name": "Stop", "stop_hook_active": False}),
         capture_output=True, check=False, timeout=900,
     )  # fmt: skip
-    assert res.returncode == 2, res.stdout + res.stderr
-    assert f"issue {IID}" in res.stderr
+    # #55: the Stop is advisory: it allows the stop and never runs make check.
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "no green full check for this state" in res.stdout + res.stderr
 
 
 @pytest.mark.parametrize(
