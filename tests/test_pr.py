@@ -366,8 +366,16 @@ def _close(project: Project, env: dict[str, str]) -> subprocess.CompletedProcess
     return project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
 
 
+def _real_check(project: Project, env: dict[str, str]) -> dict[str, str]:
+    """A green `make check` the close really runs (issue #55: only that run writes the
+    green record the PR barrier needs); no HARNESS_CHECK_CMD override."""
+    project.write("Makefile", "check:\n\t@echo ok\n")
+    project.commit_all("build: check")
+    return {k: v for k, v in env.items() if k != "HARNESS_CHECK_CMD"}
+
+
 def test_closing_the_last_subtask_pushes_and_opens_the_pr(project: Project, tmp_path: Path) -> None:
-    env = _fake_tools(project, tmp_path)
+    env = _real_check(project, _fake_tools(project, tmp_path))
     res = _close(project, env)
     assert res.returncode == 0, res.stdout + res.stderr
     remote_head = _git(tmp_path / "remote.git", "rev-parse", "feat/1.1-users")
@@ -406,7 +414,7 @@ def test_a_middle_close_opens_no_pr(project: Project, tmp_path: Path) -> None:
 
 
 def test_an_existing_pr_is_not_duplicated(project: Project, tmp_path: Path) -> None:
-    env = _fake_tools(project, tmp_path)
+    env = _real_check(project, _fake_tools(project, tmp_path))
     (tmp_path / "gh.log.exists").write_text("")
     res = _close(project, env)
     assert res.returncode == 0, res.stdout + res.stderr
@@ -418,6 +426,16 @@ def test_auto_pr_off_keeps_the_branch_local(project: Project, tmp_path: Path) ->
     res = _close(project, env)
     assert res.returncode == 0, res.stdout + res.stderr
     assert not (tmp_path / "gh.log").exists()
+
+
+def test_close_without_a_real_check_opens_no_pr(project: Project, tmp_path: Path) -> None:
+    # HARNESS_CHECK_CMD=true is no real `make check`: no green record, so the PR is blocked.
+    env = _fake_tools(project, tmp_path)
+    res = _close(project, env)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "closed ->" in res.stdout
+    assert not (tmp_path / "gh.log").exists()
+    assert "make check" in res.stderr
 
 
 def test_without_gh_the_close_still_succeeds(project: Project, tmp_path: Path) -> None:
