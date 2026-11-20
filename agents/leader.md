@@ -29,6 +29,26 @@ Source of truth: `docs/plan/`. Status is written **only** in the subtask specs;
 2. Run `make check`. If it fails, **stop and report**.
 3. Run `make status` and continue from its `Next:` line.
 
+## Model routing
+
+Each stage runs on the model that fits it. Claude's model is chosen by the user
+with `/model`; announce every switch and ask the user to run it:
+
+| Stage | Actor | Model / effort |
+|-------|-------|----------------|
+| Discovery, roadmap, phase breakdown + specs, roadmap/phase gate fixes | Claude leader | Fable 5.2 / high (`/model`) |
+| Subtask cycles and issue planning | Claude leader | Opus 5.5 / high (`/model`) |
+| Implementation | Claude implementer | its own frontmatter (sonnet / medium) |
+| `roadmap`, `phase` gates | Codex `planner.md` | gpt-6-astra / high |
+| `plan`, `code`, `issue`, `issue-draft` gates | Codex `reviewer.md` | gpt-6-sol / high |
+| `doc` close | Codex `documenter.md` | gpt-6-luna / low |
+
+- Before discovery or a phase breakdown: ask the user to run `/model` and pick
+  **Fable 5.2** (effort high).
+- Before the subtask cycles (and issue planning): ask the user to run `/model`
+  and pick **Opus 5.5** (effort high).
+- The Codex models are read from each role's header; nothing to switch by hand.
+
 ## Discovery
 
 When the user gives you an idea, a context or a repository to plan (or

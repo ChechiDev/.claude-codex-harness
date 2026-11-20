@@ -352,8 +352,9 @@ case "$PHASE" in
   seal)    exec python3 "$HARNESS_DIR/_guard.py" seal "$@" ;;
   close)   [ -n "${1:-}" ] || usage; close_commit "$1" || exit 1; open_pr_if_due "$1"; exit 0 ;;
   pr)      [ -n "${1:-}" ] || usage; open_pr "$1"; exit $? ;;
-  roadmap) ID="roadmap"; ROLE="$CODEX_DIR/reviewer.md" ;;
-  phase|plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
+  roadmap) ID="roadmap"; ROLE="$CODEX_DIR/planner.md" ;;
+  phase)   ID="${1:-}"; ROLE="$CODEX_DIR/planner.md" ;;
+  plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
   issue)   ID="${1:-}"; [[ "$ID" =~ ^[0-9]+$ ]] && ID="ISS-$ID"; ROLE="$CODEX_DIR/reviewer.md" ;;
   issue-draft) ID="draft"; ROLE="$CODEX_DIR/reviewer.md" ;;
   doc)     ID="${1:-}"; ROLE="$CODEX_DIR/documenter.md" ;;
