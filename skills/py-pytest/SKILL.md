@@ -57,9 +57,9 @@ Load `py-pydantic` when testing models or validators.
 14. **Float assertions use `pytest.approx`**: Never use `==` to compare floats directly. Always use `assert result == pytest.approx(expected, rel=1e-6)`. Direct float equality fails silently due to floating-point precision.
 15. **`pytest.raises` requires `match=`**: When testing an exception that has a meaningful message, always assert the message with `pytest.raises(ErrorType, match=r"expected pattern")`. A bare `pytest.raises(ErrorType)` passes for any instance of the error — including the wrong one.
 16. **A test must fail if the behavior it covers is broken.** Tests that only mirror the implementation without asserting observable behavior are invalid. Write tests against the contract, not the code.
-17. **e2e tests never run automatically** (never on push or PR triggers). Run them only manually: `pytest -m e2e` locally, or via `workflow_dispatch` in GitHub Actions. Never add e2e to push/PR triggers — they rely on real networks and are not deterministic in automated environments.
+17. **e2e tests are manual-only**: run explicitly with `pytest -m e2e`; every automated run deselects them with `-m "not e2e"`. They rely on real networks and are not deterministic.
 
-> **Ruff enforcement**: Rules 8 (parametrize — `PT006`/`PT007`), 12 (test docstrings — `D103` via `per-file-ignores`), 15 (`pytest.raises match=` — `PT011`) are enforced at commit time. Rule 6 (no `setup_method`) has no active ruff rule — enforced at review. All other rules are guidance enforced at review.
+> **Ruff enforcement**: Rules 8 (parametrize — `PT006`/`PT007`), 12 (test docstrings — `D103` via `per-file-ignores`), 15 (`pytest.raises match=` — `PT011`) are enforced by ruff. Rule 6 (no `setup_method`) has no active ruff rule — enforced at review. All other rules are guidance enforced at review.
 
 ## Decision Gates
 
@@ -97,7 +97,7 @@ Load `py-pydantic` when testing models or validators.
 - Coverage command targets `tests/unit/` only with `--cov-fail-under=80`.
 - Float comparisons use `pytest.approx` — never `==` on floats.
 - `pytest.raises` includes `match=` whenever the error message is part of the contract.
-- e2e tests never appear in CI workflows.
+- e2e tests are excluded from every automated run.
 
 ## References
 
