@@ -192,26 +192,36 @@ Never plan an issue as a task of a phase.
 2. **When**: `next` starts once the task in progress is merged into `main`;
    `now` interrupts a task **between subtasks**, run from that task's branch;
    `backlog` only when the user asks. `make status` shows the queue and `Next:`.
-3. **Start**: `make issue-start N=<n>` claims it (assigned, `status:in-progress`,
+3. **Intake** (before the claim, no branch, leaf, oracle or seal yet):
+   `harness/issue.sh intake <n>` diagnoses duplicates, missing information and
+   scope (`READY`, `CHECK` or `NEEDS-INFO`). Show every finding to the user; a
+   rescope (split, narrow) is only proposed, the user approves it. When only the
+   author can answer: draft the question, show it, and only with the user's OK
+   write it to `progress/issue_question-ISS-<n>.md` and run
+   `harness/issue.sh ask <n>` (posts it, parks the issue with `needs-info`, out
+   of the queue). It stays parked until the user says the author answered:
+   `harness/issue.sh unblock <n> [PRIORITY]`, then intake again.
+   `issue-start` refuses a parked issue.
+4. **Start**: `make issue-start N=<n>` claims it (assigned, `status:in-progress`,
    exclusive claim tag) and creates the branch `<type>/ISS-<n>-<slug>` and the
    header `docs/plan/issues/ISS-<n>-<slug>.md`.
-4. **Plan** with the user, one question per message, then delegate the specs
+5. **Plan** with the user, one question per message, then delegate the specs
    `ISS-<n>.<k>` and the header's `origin:` / `goal:` to claude-planner (same
    format and rules as `N.M.K`; it knows `migrates:` and the size limit).
-5. `make plan` + `make check`, then the **issue gate**:
+6. `make plan` + `make check`, then the **issue gate**:
    `./harness/review_with_codex.sh issue ISS-<n>` (on `CHANGES_REQUESTED`, call
    claude-planner with the verdict) → `ISSUE_APPROVED` (sealed) →
    **stop for the user's OK**, quoting every `## Assumptions` entry of the
    specs that would change behaviour, as at the task kickoff (a rejected one
    goes back to claude-planner).
-6. **Per subtask** `ISS-<n>.<k>`: exactly the per-subtask cycle above (in_progress
+7. **Per subtask** `ISS-<n>.<k>`: exactly the per-subtask cycle above (in_progress
    + `make plan`, plan gate, `make check`, implementer, code gate, close). After
    a plan gate with `migrates:`, the migrated oracles may be red too, as the new one.
    The last close opens one PR with `Closes #<n>`; merging it is the user's call.
-7. **After a `now` issue**: once its PR is merged, `harness/issue.sh resume`
+8. **After a `now` issue**: once its PR is merged, `harness/issue.sh resume`
    returns to the interrupted task and updates it from `main` (a conflict is
    left for the user).
-8. **A new issue**: `make issue-new` → write `progress/issue_draft.md` (front
+9. **A new issue**: `make issue-new` → write `progress/issue_draft.md` (front
    matter `title`, `labels`, `priority` + the template sections) →
    `./harness/review_with_codex.sh issue-draft` → `DRAFT_APPROVED` → show it to
    the user → only with their OK, `harness/issue.sh publish`.
