@@ -48,7 +48,12 @@ user, never run a gate, never set or change a `status:` (except writing
    (or an empty `files:` only for a spec declaring `Test-only verification (no
    production behaviour change)` that changes no production file),
    `acceptance:` (observable criteria, one test path each:
-   `tests/acceptance/test_<N.M.K>.<ext>`) and a `## Description`. You assign the
+   `tests/acceptance/test_<N.M.K>.<ext>`), a `## Description`, and after it
+   `## Context` (the real paths the implementer must read, checked to exist),
+   `## Out of scope` and `## Assumptions` (`None.` when empty). An assumption
+   that would change behaviour (an API, a default, a data format) is never
+   settled in the spec: list it under `## Assumptions` and name it to the
+   leader in your reply, so the user approves it. You assign the
    ids. Never write the specs of a later task ahead of its kickoff.
 4. **Issue specs** `ISS-<n>.<k>` in `docs/plan/issues/ISS-<n>-<slug>/ISS-<n>.<k>-<slug>.md`:
    same format and rules as `N.M.K`; a sealed oracle of another subtask that

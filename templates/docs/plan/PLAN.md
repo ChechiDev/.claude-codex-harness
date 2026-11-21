@@ -79,6 +79,15 @@ When `harness.toml` `[git]` uses `{ticket}` (for example
 
 ## Description
 Immutable value object that validates and normalizes an email address…
+
+## Context
+- src/<pkg>/domain/ holds the other value objects; follow their style.
+
+## Out of scope
+- Persisting the address (a later infrastructure subtask).
+
+## Assumptions
+- None.
 ```
 
 - `status` ∈ `pending | in_progress | done | blocked | baseline` (`baseline`: already built before the harness; only the phase gate reviews it).
@@ -89,6 +98,10 @@ Immutable value object that validates and normalizes an email address…
   `Test-only verification (no production behaviour change)` that changes no
   production file. Unit tests (`tests/unit/`) are not declared.
 - `acceptance:` observable criteria, one test each; Codex writes those tests.
+- `## Context` (real paths the implementer must read), `## Out of scope` and
+  `## Assumptions` are free text after `## Description` (not parsed). Write
+  `None.` when there is nothing to say. An assumption that would change
+  behaviour is not decided in the spec: it goes to the user's approval first.
 
 <!-- plan:index:start -->
 <!-- plan:index:end -->
