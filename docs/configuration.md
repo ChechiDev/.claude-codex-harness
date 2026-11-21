@@ -159,17 +159,37 @@ Only the human sets the cap: there is no environment variable for it, so an agen
 cannot lift it. To resume after deciding what to do, raise `max_rounds` (or set it
 to `0`) in `harness.toml`. A value that is not an integer `>= 0` fails closed.
 
+## Codex and PR controls (`harness.toml` `[codex]`, `[pr]`)
+
+```toml
+[codex]
+mode = "auto"               # auto (default) | manual: print the codex exec command and prompt
+sandbox = "workspace-write" # workspace-write (default) | read-only | danger-full-access
+network = false             # true: network inside workspace-write
+
+[pr]
+auto = true                 # false: the last close keeps the branch local (no push, no PR)
+gh = "gh"                   # the GitHub CLI the PR step and the issue cleanup use
+```
+
+`[pr] auto = false` and `[git] auto_pr = false` both turn the PR step off. A value
+outside these fails closed: the gate exits non-zero before doing anything.
+
+Only the human sets them (issue #90). `review_with_codex.sh` ignores the old
+environment overrides `HARNESS_CODEX_MODE`, `HARNESS_CODEX_SANDBOX`,
+`HARNESS_CODEX_NETWORK`, `HARNESS_GH` and `HARNESS_AUTO_PR`: each one found
+prints a warning naming it and pointing here, and is dropped before any child
+script runs. The Bash guard blocks a command that assigns one of them inline next
+to a gate (`review_with_codex.sh` or `make`). `harness/issue.sh`, `_issue.py` and
+`plan_status.py` (not decision runs) still read `HARNESS_GH`.
+
 ## Environment variables
 
 | Variable | Values | Default | Read by |
 |----------|--------|---------|---------|
-| `HARNESS_CODEX_MODE` | `auto`, `manual` | `auto` | `review_with_codex.sh`: `manual` prints the `codex exec` command and prompt instead of running it |
-| `HARNESS_CODEX_SANDBOX` | `workspace-write`, `read-only`, `danger-full-access` | `workspace-write` | `review_with_codex.sh`: the `--sandbox` passed to Codex |
-| `HARNESS_CODEX_NETWORK` | `1` | off | `review_with_codex.sh`: allows network inside `workspace-write` |
-| `HARNESS_CHECK_CMD` | a shell command | `make check` | `review_with_codex.sh`: the check it runs outside the sandbox before each gate and before the close commit |
+| `HARNESS_CHECK_CMD` | a shell command | `make check` | `review_with_codex.sh`: the check it runs outside the sandbox before each gate and before the close commit (test fixtures only: a decision run warns) |
 | `HARNESS_ALLOW_COMMIT` | `1` | unset | `guard_bash.sh`: lets Claude run `git commit` for a conscious manual commit |
-| `HARNESS_AUTO_PR` | `0` | on | `review_with_codex.sh`: `0` keeps the task branch local at its last close (no push, no PR) |
-| `HARNESS_GH` | a path | `gh` | `review_with_codex.sh`: the GitHub CLI used to open the task PR; also `_issue.py` and `plan_status.py` (issues lane) |
+| `HARNESS_GH` | a path | `gh` | `_issue.py`, `plan_status.py` and `issue.sh` outside the gates; the gates use `[pr] gh` |
 
 Set them for the whole Claude Code session, not inline on one command. The
 guard reads the environment of the hook process, so `HARNESS_ALLOW_COMMIT=1 git commit`
@@ -177,7 +197,6 @@ typed as a command is still blocked:
 
 ```bash
 HARNESS_ALLOW_COMMIT=1 claude          # this session may commit
-HARNESS_CODEX_MODE=manual claude       # gates print the Codex command instead
 ```
 
 ### Codex sandbox
@@ -197,7 +216,7 @@ In manual mode, run `./harness/review_with_codex.sh close <N.M.K>` after Codex
 writes the message.
 
 Network is needed only if uv must download dependencies during a gate. Run
-`uv sync --all-groups` before the gates instead of setting `HARNESS_CODEX_NETWORK=1`.
+`uv sync --all-groups` before the gates instead of setting `[codex] network = true`.
 
 ## Codex model and effort per role
 

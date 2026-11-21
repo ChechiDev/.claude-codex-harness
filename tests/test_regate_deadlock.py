@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import TOOLKIT, bash_payload, bind_code_approval
+from conftest import TOOLKIT, bash_payload, bind_code_approval, write_control
 from i0_projects import Installed, install_project
 
 VAR = "HARNESS_ASSUME_APPROVED"
@@ -210,9 +210,12 @@ def _check(project: Installed, assume: str | None = None) -> subprocess.Complete
 def _gate_env(project: Installed, tmp: Path, **extra: str) -> dict[str, str]:
     logs = tmp / "logs"
     logs.mkdir(exist_ok=True)
+    # Test-only channel (#90): the gate reads its mode from harness.toml.
+    mode = extra.pop("HARNESS_CODEX_MODE", "manual")
+    write_control(project.root, f'[codex]\nmode = "{mode}"\n')
     return {
         **project.env, "CLAUDE_PROJECT_DIR": str(project.root),
-        "HARNESS_CODEX_MODE": "manual", "TMPDIR": str(logs), **extra,
+        "TMPDIR": str(logs), **extra,
     }  # fmt: skip
 
 

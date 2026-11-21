@@ -27,7 +27,6 @@ type, linking the GitHub issue, and ending with `Closes #n`.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
@@ -169,7 +168,7 @@ def pr_due(sid: str) -> int:
         return 1
     tid = _task_of(sid)
     leaves = _task_leaves(tid)
-    if os.environ.get("HARNESS_AUTO_PR", "1") == "0" or not cfg.auto_pr or not leaves:
+    if not cfg.auto_pr or not leaves:  # harness.toml only: no env switch (#90)
         return 1
     if not all(_harness.complete(leaf) for leaf in leaves):
         return 1

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from conftest import TOOLKIT, Plan, Project, bash_payload, write_payload
+from conftest import TOOLKIT, Plan, Project, bash_payload, write_control, write_payload
 from i3a_helpers import BLOCKED, git
 
 pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
@@ -628,9 +628,8 @@ def test_manual_mode_never_supersedes(plan: Plan, tmp_path: Path) -> None:
     proj, _ = _with_record(plan, tmp_path)
     record = proj.read(f"{RECORDS}/{LEAF}.json")
     proj.set_migrates(LEAF, [A, B])
-    res = proj.run(
-        "bash", "harness/review_with_codex.sh", "issue", IID, HARNESS_CODEX_MODE="manual"
-    )
+    write_control(proj.root)
+    res = proj.run("bash", "harness/review_with_codex.sh", "issue", IID)
     assert res.returncode == 0, res.stdout + res.stderr
     proj.write(f"progress/issue_review_{IID}.md", "# Review\n\n**Verdict:** ISSUE_APPROVED\n")
     assert not proj.ticket(IID).exists()

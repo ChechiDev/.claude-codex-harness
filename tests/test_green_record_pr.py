@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import LEAF_ID, Project
+from conftest import LEAF_ID, Project, write_control
 
 pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
 
@@ -52,12 +52,13 @@ def _makefile(project: Project, recipe: str) -> None:
 
 
 def _code_gate(project: Project, env: dict[str, str] | None = None) -> None:
+    write_control(project.root)
     res = project.run(
         "review_with_codex.sh",
         None,
         "code",
         LEAF_ID,
-        env={"HARNESS_CODEX_MODE": "manual", **(env or {})},
+        env=env or {},
     )
     assert "MANUAL MODE" in res.stdout or res.returncode != 0, res.stdout + res.stderr
 
@@ -108,7 +109,8 @@ def test_counterfactual_run_writes_no_record(project: Project) -> None:
     project.write("docs/plan/PLAN.md", "# Plan\n")
     project.write("docs/plan/phase-01-users.md", "# Phase 01: users\n\nGoal: users.\n")
     project.commit_all("plan")
-    res = project.run("review_with_codex.sh", None, "roadmap", env={"HARNESS_CODEX_MODE": "manual"})
+    write_control(project.root)
+    res = project.run("review_with_codex.sh", None, "roadmap")
     assert "Counterfactual run" in res.stdout, res.stdout + res.stderr
     assert "exit code 0" in res.stdout.split("Counterfactual run", 1)[1]
     assert not _record(project).exists()

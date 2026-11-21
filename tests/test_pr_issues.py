@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import Plan
+from conftest import Plan, write_control
 
 
 def _git(root: Path, *args: str) -> str:
@@ -146,9 +146,9 @@ def test_pr_command_opens_the_issue_pr_and_cleans_the_claim(plan: Plan, tmp_path
     )
     gh.chmod(0o755)
     toolkit = Path(__file__).resolve().parents[1]
+    write_control(plan.root, f'[pr]\ngh = "{gh}"\n')  # test-only channel (#90)
     env = {
         "PATH": "/usr/bin:/bin",
-        "HARNESS_GH": str(gh),
         "CLAUDE_PROJECT_DIR": str(plan.root),
         "HOME": str(tmp_path),
     }

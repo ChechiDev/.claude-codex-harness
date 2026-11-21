@@ -18,13 +18,16 @@
 # it approved so `make check` catches any later silent change.
 #
 # Reads the model and effort from the role prompt header (codex/*.md) and passes
-# them to the codex CLI. Execution mode via HARNESS_CODEX_MODE:
+# them to the codex CLI. Execution mode via harness.toml [codex] mode:
 #   auto   (default) → runs codex
 #   manual           → prints the command and prompt for you to launch it yourself
 #
-# Sandbox (least privilege by default):
-#   HARNESS_CODEX_SANDBOX  workspace-write (default) | read-only | danger-full-access
-#   HARNESS_CODEX_NETWORK  1 → allow network inside workspace-write (default: off)
+# Sandbox (least privilege by default), harness.toml [codex]:
+#   sandbox  workspace-write (default) | read-only | danger-full-access
+#   network  true → allow network inside workspace-write (default: false)
+# Issue #90: the old HARNESS_CODEX_MODE/_SANDBOX/_NETWORK, HARNESS_GH and
+# HARNESS_AUTO_PR environment overrides are ignored (a warning names each): the
+# environment is the caller's, harness.toml is the human's.
 # Under workspace-write Codex can write the project but not .git; the only extra
 # writable root is the uv cache.
 #
@@ -38,8 +41,8 @@
 # Every gate verdict is appended to progress/review_history/, so rejected rounds
 # survive. When a close finishes the last subtask of a task, Codex has also
 # written progress/pr_<N.M>.md and the harness pushes the task branch and opens
-# one PR for the task with `gh` (harness.toml [git] auto_pr; HARNESS_AUTO_PR=0
-# turns it off; HARNESS_GH overrides the gh binary). A failed push or PR never
+# one PR for the task with `gh` (harness.toml [git] auto_pr or [pr] auto = false
+# turns it off; [pr] gh sets the gh binary). A failed push or PR never
 # undoes the close: it warns and prints the command to retry.
 set -uo pipefail
 # Inherited exported functions could stand in for any command this script runs
@@ -53,8 +56,24 @@ HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HARNESS_DIR/_colors.sh"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 CODEX_DIR="$PROJECT_DIR/.claude/codex"
-MODE_EXEC="${HARNESS_CODEX_MODE:-auto}"
 cd "$PROJECT_DIR" || exit 1
+
+# Gate controls (issue #90): from harness.toml only. A control variable in the
+# environment is dropped with one warning, so no child script can read it either.
+for _v in HARNESS_CODEX_MODE HARNESS_CODEX_SANDBOX HARNESS_CODEX_NETWORK HARNESS_GH \
+  HARNESS_AUTO_PR; do
+  if [ -n "${!_v+set}" ]; then
+    warn "review_with_codex: $_v from the environment is ignored — fix: unset $_v;" \
+      "the setting lives in harness.toml ([codex] mode/sandbox/network, [pr] auto/gh)" >&2
+    unset "$_v"
+  fi
+done
+unset _v
+_CONTROL="$(python3 "$HARNESS_DIR/_config.py" control)" || exit 1
+IFS=$'\t' read -r MODE_EXEC SANDBOX NETWORK _ GH <<<"$_CONTROL"
+unset _CONTROL
+# _oracle.py contract-review reads the mode; set from harness.toml, never inherited.
+export HARNESS_CODEX_MODE="$MODE_EXEC"
 
 usage() {
   echo "usage: review_with_codex.sh roadmap | phase <NN> | task <N.M> | task-close <N.M>" \
@@ -66,7 +85,6 @@ usage() {
 PHASE="${1:-}"; shift || true
 HARNESS_PY="$HARNESS_DIR/_harness.py"
 PR_PY="$HARNESS_DIR/_pr.py"
-GH="${HARNESS_GH:-gh}"
 CHECK_CMD="${HARNESS_CHECK_CMD:-make check}"
 
 # Every decision run goes through the trusted launcher harness/run_check.sh (issue
@@ -608,7 +626,6 @@ EOF
 # Sandbox: the reviewer must WRITE (acceptance tests + verdict) and may run static
 # tools through uv, so read-only fails. workspace-write covers the project; it
 # keeps .git read-only and blocks the network (verified with `codex sandbox`).
-SANDBOX="${HARNESS_CODEX_SANDBOX:-workspace-write}"
 CODEX_ARGS=(--model "$MODEL" --sandbox "$SANDBOX")
 case "$EFFORT" in
   low|medium|high|xhigh) CODEX_ARGS+=(-c "model_reasoning_effort=$EFFORT") ;;
@@ -618,7 +635,7 @@ if [ "$SANDBOX" = "workspace-write" ]; then
   # A JSON array of strings is valid TOML for the -c override.
   ROOTS_TOML="$(python3 -c 'import json,sys; print(json.dumps(sorted({p for p in sys.argv[1:] if p})))' "${ROOTS[@]}")"
   CODEX_ARGS+=(-c "sandbox_workspace_write.writable_roots=$ROOTS_TOML")
-  if [ "${HARNESS_CODEX_NETWORK:-0}" = "1" ]; then
+  if [ "$NETWORK" = "1" ]; then
     CODEX_ARGS+=(-c "sandbox_workspace_write.network_access=true")
   fi
 fi
@@ -654,7 +671,7 @@ if [ "$MODE_EXEC" = "manual" ]; then
 fi
 
 if ! command -v codex >/dev/null 2>&1; then
-  fail "codex is not in PATH. Use HARNESS_CODEX_MODE=manual or install Codex." >&2
+  fail "codex is not in PATH. Set [codex] mode = \"manual\" in harness.toml or install Codex." >&2
   exit 1
 fi
 

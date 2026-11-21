@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import DECLARED, LEAF_ID, Project
+from conftest import DECLARED, LEAF_ID, Project, write_control
 
 pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
 
@@ -59,6 +59,8 @@ def _documenter(tmp: Path) -> dict[str, str]:
 
 
 def _code_gate(project: Project, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    if env.pop("HARNESS_CODEX_MODE", None) == "manual":  # test-only channel (#90)
+        write_control(project.root)
     return project.run("review_with_codex.sh", None, "code", LEAF_ID, env=env)
 
 

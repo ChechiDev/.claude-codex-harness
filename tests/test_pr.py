@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import LEAF_ID, Plan, Project, write_payload
+from conftest import LEAF_ID, Plan, Project, write_control, write_payload
 
 pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
 
@@ -86,14 +86,16 @@ def test_pr_due_respects_auto_pr_false(plan: Plan) -> None:
     assert plan.run_py("_pr.py", "pr-due", "1.1.1").returncode == 1
 
 
-def test_pr_due_respects_the_env_switch(plan: Plan) -> None:
-    plan.phase("01", "1.1").sub("1.1.1", "done").approve_roadmap().approve_phase("01").sync()
+def test_pr_due_respects_pr_auto(plan: Plan) -> None:
+    # Issue #90: the switch is harness.toml [pr] auto, no longer HARNESS_AUTO_PR.
+    plan.phase("01", "1.1").sub("1.1.1", "done").approve_roadmap().approve_phase("01")
+    plan.config("[pr]\nauto = false\n").sync()
     res = subprocess.run(
         ["python3", str(Path(__file__).resolve().parents[1] / "lib/_pr.py"), "pr-due", "1.1.1"],
         cwd=plan.root,
         text=True,
         capture_output=True,
-        env={**os.environ, "HARNESS_AUTO_PR": "0"},
+        env=dict(os.environ),
         check=False,
     )
     assert res.returncode == 1
@@ -357,8 +359,8 @@ def _fake_tools(project: Project, tmp: Path, *, with_gh: bool = True) -> dict[st
         "HARNESS_CHECK_CMD": "true",
         "FAKE_LOG": str(tmp / "gh.log"),
     }
-    if not with_gh:
-        env["HARNESS_GH"] = str(tmp / "no-such-gh")  # never reach a real gh
+    if not with_gh:  # never reach a real gh
+        write_control(project.root, f'[pr]\ngh = "{tmp / "no-such-gh"}"\n')
     return env
 
 
@@ -424,7 +426,8 @@ def test_an_existing_pr_is_not_duplicated(project: Project, tmp_path: Path) -> N
 
 
 def test_auto_pr_off_keeps_the_branch_local(project: Project, tmp_path: Path) -> None:
-    env = {**_fake_tools(project, tmp_path), "HARNESS_AUTO_PR": "0"}
+    env = _fake_tools(project, tmp_path)
+    write_control(project.root, "[pr]\nauto = false\n")
     res = _close(project, env)
     assert res.returncode == 0, res.stdout + res.stderr
     assert not (tmp_path / "gh.log").exists()
@@ -450,9 +453,8 @@ def test_without_gh_the_close_still_succeeds(project: Project, tmp_path: Path) -
 
 def test_manual_close_prints_the_pr_step(project: Project) -> None:
     project.set_verdict("code", "APPROVED", with_gate_record=True)
-    res = project.run(
-        "review_with_codex.sh", None, "doc", LEAF_ID, env={"HARNESS_CODEX_MODE": "manual"}
-    )
+    write_control(project.root)
+    res = project.run("review_with_codex.sh", None, "doc", LEAF_ID)
     assert res.returncode == 0, res.stdout + res.stderr
     assert "./harness/review_with_codex.sh pr 1.1" in res.stdout
 

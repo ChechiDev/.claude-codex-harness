@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import DECLARED, LEAF_ID, TOOLKIT, Project, write_payload
+from conftest import DECLARED, LEAF_ID, TOOLKIT, Project, write_control, write_payload
 from i0_cycle import SID
 from i0_legacy import build_legacy, copy_legacy
 from i0_projects import Installed
@@ -292,12 +292,13 @@ def _verdict_cli(project: Project, *args: str) -> subprocess.CompletedProcess[st
 
 @pytest.mark.e2e
 def test_manual_mode_prints_the_receipt_step_before_record(project: Project) -> None:
+    write_control(project.root)
     res = project.run(
         "review_with_codex.sh",
         None,
         "code",
         LEAF_ID,
-        env={"HARNESS_CODEX_MODE": "manual", "HARNESS_CHECK_CMD": "true"},
+        env={"HARNESS_CHECK_CMD": "true"},
     )
     assert res.returncode == 0, res.stdout + res.stderr
     out = res.stdout
@@ -308,9 +309,8 @@ def test_manual_mode_prints_the_receipt_step_before_record(project: Project) -> 
 
 def test_manual_mode_of_the_doc_gate_prints_no_receipt_step(project: Project) -> None:
     project.set_verdict("code", "APPROVED")
-    res = project.run(
-        "review_with_codex.sh", None, "doc", LEAF_ID, env={"HARNESS_CODEX_MODE": "manual"}
-    )
+    write_control(project.root)
+    res = project.run("review_with_codex.sh", None, "doc", LEAF_ID)
     assert "_verdict.py receipt" not in res.stdout
 
 
