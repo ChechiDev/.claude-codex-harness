@@ -25,6 +25,16 @@
   auto = true                            false: no push/PR at the last close (with [git] auto_pr)
   gh = "gh"                              the GitHub CLI the gates use
 
+  [sessions]                             parallel Claude sessions (harness/session_launch.sh)
+  model = "sonnet"                       model of a session that executes a task/subtask
+  effort = "medium"                      its effort: low | medium | high | xhigh | max
+  high_risk_model = "opus"               model when the task's files: match high_risk_paths
+  high_risk_effort = "high"              effort in that case
+  high_risk_paths = ["migrations/**"]    project-relative globs (* within a dir, ** across);
+                                         only * ? ** (no [..] {..}); default none. Unknown
+                                         keys fail closed, so a typo
+                                         cannot silently drop the escalation.
+
 The gates ignore the old HARNESS_CODEX_* / HARNESS_GH / HARNESS_AUTO_PR environment
 overrides (issue #90): these values live here, where Claude cannot change them.
 
@@ -39,6 +49,7 @@ import re
 import string
 import sys
 import tomllib
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -53,6 +64,12 @@ PLACEHOLDERS = frozenset({"task", "slug", "ticket"})
 # What a rendered branch may contain: a conservative subset of git ref names.
 RE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 RE_TICKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+# A model alias or id (sonnet, claude-opus-5-5, opus[1m]): no spaces, no leading dash.
+RE_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9]+\])?$")
+SESSION_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+SESSION_KEYS = frozenset(
+    {"model", "effort", "high_risk_model", "high_risk_effort", "high_risk_paths"}
+)
 
 
 class ConfigError(Exception):
@@ -73,6 +90,11 @@ class Config:
     codex_sandbox: str = "workspace-write"
     codex_network: bool = False
     gh: str = "gh"
+    session_model: str = "sonnet"
+    session_effort: str = "medium"
+    session_high_risk_model: str = "opus"
+    session_high_risk_effort: str = "high"
+    session_high_risk_paths: tuple[str, ...] = ()
 
     @property
     def needs_ticket(self) -> bool:
@@ -186,6 +208,53 @@ def _gh(section: dict[str, Any]) -> str:
     return gh
 
 
+def _session_model(section: dict[str, Any], key: str, default: str) -> str:
+    value = section.get(key, default)
+    if not isinstance(value, str) or len(value) > 100 or not RE_MODEL.fullmatch(value):
+        raise ConfigError(f"{CONFIG_FILE}: [sessions] {key} must be a model alias or id")
+    return value
+
+
+def _session_effort(section: dict[str, Any], key: str, default: str) -> str:
+    value = section.get(key, default)
+    if value not in SESSION_EFFORTS:
+        raise ConfigError(
+            f"{CONFIG_FILE}: [sessions] {key} must be one of {', '.join(SESSION_EFFORTS)}"
+        )
+    return str(value)
+
+
+def _risk_glob(glob: object) -> str | None:
+    """The glob without `.` segments, or None if invalid. Only `*`, `?` and `**` are
+    glob syntax: `[...]`/`{...}` would match literally, so they are refused."""
+    if not isinstance(glob, str) or glob.startswith("/"):
+        return None
+    if any(c in "\\[]{}" or unicodedata.category(c).startswith("C") for c in glob):
+        return None
+    parts = [p for p in glob.split("/") if p not in ("", ".")]
+    return "/".join(parts) if parts and ".." not in parts else None
+
+
+def _sessions(section: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(section) - SESSION_KEYS
+    if unknown:
+        raise ConfigError(f"{CONFIG_FILE}: [sessions] unknown key(s) {sorted(unknown)}")
+    raw = section.get("high_risk_paths", [])
+    paths = [_risk_glob(g) for g in raw] if isinstance(raw, list) else [None]
+    if None in paths:
+        raise ConfigError(
+            f"{CONFIG_FILE}: [sessions] high_risk_paths must be a list of project-relative "
+            "globs (* ? ** only)"
+        )
+    return {
+        "session_model": _session_model(section, "model", "sonnet"),
+        "session_effort": _session_effort(section, "effort", "medium"),
+        "session_high_risk_model": _session_model(section, "high_risk_model", "opus"),
+        "session_high_risk_effort": _session_effort(section, "high_risk_effort", "high"),
+        "session_high_risk_paths": tuple(p for p in paths if p is not None),
+    }
+
+
 def _section(data: dict[str, Any], name: str) -> dict[str, Any] | None:
     section = data.get(name)
     if section is None:
@@ -217,6 +286,7 @@ def load(root: Path) -> Config:
         max_rounds=_max_rounds(review),
         gh=_gh(pr),
         **_codex(_section(data, "codex") or {}),
+        **_sessions(_section(data, "sessions") or {}),
         **git_values,
     )
 

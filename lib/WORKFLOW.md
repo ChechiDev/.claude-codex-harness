@@ -75,6 +75,16 @@ frontmatter `model:` if you have them).
 | reviewer (`codex/reviewer.md`: `plan`, `code`, `issue`, `issue-draft` gates) | gpt-6-sol / high |
 | documenter (`codex/documenter.md`: `doc` close) | gpt-6-luna / low |
 
+### Parallel sessions
+
+A parallel Claude session that executes a task or subtask is launched through
+`harness/session_launch.sh <id> --worktree <path>`, never with a hand-written
+`claude` command. It picks the model and effort from `harness.toml [sessions]`
+(sonnet / medium by default; opus / high when the unit's `files:` match
+`high_risk_paths`) and prints the command with every word shell-quoted. The
+worktree must already exist: the launcher never creates one. The implementer and
+claude-planner subagents keep the model of their own frontmatter.
+
 ### Task flow and phases broken down whole
 
 A phase sealed with its specs (broken down whole, before the task flow) keeps

@@ -183,6 +183,25 @@ script runs. The Bash guard blocks a command that assigns one of them inline nex
 to a gate (`review_with_codex.sh` or `make`). `harness/issue.sh`, `_issue.py` and
 `plan_status.py` (not decision runs) still read `HARNESS_GH`.
 
+## Parallel sessions (`harness.toml` `[sessions]`)
+
+```toml
+[sessions]
+model = "sonnet"            # a session that executes a task/subtask (default)
+effort = "medium"           # low | medium | high | xhigh | max
+high_risk_model = "opus"    # when the unit's files: match high_risk_paths
+high_risk_effort = "high"
+high_risk_paths = []        # globs, e.g. ["migrations/**", "src/*/auth/**"]
+```
+
+`harness/session_launch.sh <id> [--worktree <path>] [--prompt <text>] [--exec | --hook <prog>]`
+prints `cd <worktree> && claude --model … --effort … --permission-mode auto "<prompt>"`
+for a subtask, a task or an issue (a task or issue uses the files of all its
+subtasks), every word shell-quoted. In a glob `*` and `?` stay within one path
+segment and `**` crosses them; a glob that matches a directory covers the files
+under it. An unknown key or invalid value fails closed. The launcher never
+creates the worktree.
+
 ## Environment variables
 
 | Variable | Values | Default | Read by |
