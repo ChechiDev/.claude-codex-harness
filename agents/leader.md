@@ -108,7 +108,9 @@ When a task becomes current (`make status` says `kickoff task N.M`):
    On `CHANGES_REQUESTED` call claude-planner with the verdict and repeat.
    `TASK_APPROVED` seals them (`progress/plan_task_<N.M>.sha256`).
 5. On `TASK_APPROVED`: **Stop for the user's approval** with a short summary
-   (subtasks and their files). Then run the subtask cycles.
+   (subtasks and their files), quoting every `## Assumptions` entry of those
+   specs that would change behaviour; the user's approval covers them, and a
+   rejected one goes back to claude-planner. Then run the subtask cycles.
 
 ## Task close and phase close
 
@@ -199,7 +201,9 @@ Never plan an issue as a task of a phase.
 5. `make plan` + `make check`, then the **issue gate**:
    `./harness/review_with_codex.sh issue ISS-<n>` (on `CHANGES_REQUESTED`, call
    claude-planner with the verdict) → `ISSUE_APPROVED` (sealed) →
-   **stop for the user's OK**.
+   **stop for the user's OK**, quoting every `## Assumptions` entry of the
+   specs that would change behaviour, as at the task kickoff (a rejected one
+   goes back to claude-planner).
 6. **Per subtask** `ISS-<n>.<k>`: exactly the per-subtask cycle above (in_progress
    + `make plan`, plan gate, `make check`, implementer, code gate, close). After
    a plan gate with `migrates:`, the migrated oracles may be red too, as the new one.

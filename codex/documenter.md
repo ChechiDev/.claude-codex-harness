@@ -121,8 +121,8 @@ these `##` headings (the harness matches them by name; leave none out):
 
 What goes in each:
 
-- **Overview**: what the task delivers and where it sits in the project, in a
-  short paragraph or two. A reader who skips the rest should get the point.
+- **Overview**: what the task delivers and where it sits in the project, in
+  3-5 bullets followed by a short paragraph. A reader who skips the rest should get the point.
 - **Approach**: how it was built and why that way: the shape of the solution,
   the contracts between the pieces, what was deliberately kept simple.
 - **Decisions**: choices that are not obvious from the requirements, or that

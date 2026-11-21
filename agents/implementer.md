@@ -49,7 +49,10 @@ persistence model is not the domain entity.
    within the subtask's scope; if it needs files outside scope, **stop** and report a blocker.
 4. Run `make verify` (lint + type + tests). Repeat step 3 until acceptance
    + unit + lint + type are all green.
-5. Write `progress/impl_<N.M.K>.md`: files touched + the real output of `make verify`.
+5. Write `progress/impl_<N.M.K>.md`: a `## Summary` of 3-5 bullets (what
+   changed and why, any deviation from the spec), then files touched + the
+   real output of `make verify`. After a `CHANGES_REQUESTED`, add
+   `## Finding → fix`: one line per finding of the verdict with the fix applied.
 6. **Do NOT set `done`. Do NOT commit.** Return control to the leader for the Codex gate.
 
 ## Communication with the leader
