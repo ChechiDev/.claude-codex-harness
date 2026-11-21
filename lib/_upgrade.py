@@ -99,9 +99,12 @@ class MigrationError(Exception):
     """Refused: nothing was changed."""
 
 
-def _blocks(lines: list[str]) -> dict[str, tuple[int, int, int]]:
-    """target -> (first comment line, rule line, end) of each rule with its recipe."""
-    found: dict[str, tuple[int, int, int]] = {}
+def _blocks(lines: list[str]) -> dict[str, list[tuple[int, int, int]]]:
+    """target -> every (first comment line, rule line, end) of its rules, in order.
+
+    A target may have several rules (make keeps the last recipe and warns): all of
+    them count, so a customised earlier one is never missed."""
+    found: dict[str, list[tuple[int, int, int]]] = {}
     for i, line in enumerate(lines):
         m = RE_RULE.match(line)
         if not m or line.startswith(".") or "%" in m.group(1):
@@ -112,12 +115,19 @@ def _blocks(lines: list[str]) -> dict[str, tuple[int, int, int]]:
         first = i
         while first > 0 and lines[first - 1].startswith("#"):
             first -= 1
-        found[m.group(1)] = (first, i, end)
+        found.setdefault(m.group(1), []).append((first, i, end))
     return found
 
 
+def _norm(line: str) -> str:
+    """Trailing blanks are ignored, except after a backslash: there they end the
+    line continuation, so they change the recipe."""
+    stripped = line.rstrip()
+    return line if stripped.endswith("\\") and stripped != line else stripped
+
+
 def _recipe(lines: list[str], block: tuple[int, int, int]) -> list[str]:
-    return [line.rstrip() for line in lines[block[1] : block[2]]]
+    return [_norm(line) for line in lines[block[1] : block[2]]]
 
 
 # Earlier harness.mk recipes, still recognised (exactly) as not customised: a
@@ -142,7 +152,7 @@ def _is_shared(name: str, recipe: list[str], current: list[str]) -> bool:
 
 def _harness_recipes() -> dict[str, list[str]]:
     lines = HARNESS_MK.read_text("utf-8").splitlines()
-    return {name: _recipe(lines, b) for name, b in _blocks(lines).items()}
+    return {name: _recipe(lines, bs[-1]) for name, bs in _blocks(lines).items()}
 
 
 def migrated_makefile(text: str) -> str | None:
@@ -157,7 +167,9 @@ def migrated_makefile(text: str) -> str | None:
     shared = _harness_recipes()
     blocks = {name: b for name, b in _blocks(lines).items() if name in shared}
     custom = [
-        name for name, b in blocks.items() if not _is_shared(name, _recipe(lines, b), shared[name])
+        name
+        for name, bs in blocks.items()
+        if not all(_is_shared(name, _recipe(lines, b), shared[name]) for b in bs)
     ]
     if custom:
         raise MigrationError(
@@ -167,7 +179,7 @@ def migrated_makefile(text: str) -> str | None:
     if INCLUDE in lines and not blocks:
         return None
     drop: set[int] = set()
-    for first, _, end in blocks.values():
+    for first, _, end in (b for bs in blocks.values() for b in bs):
         stop = end + 1 if end < len(lines) and not lines[end].strip() else end
         drop |= set(range(first, stop))
     kept = [line for i, line in enumerate(lines) if i not in drop]

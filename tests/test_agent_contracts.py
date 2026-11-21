@@ -367,3 +367,39 @@ def test_leader_docs_describe_model_routing(doc: Path) -> None:
     for word in ("Model routing", "Opus", "claude-planner"):
         assert word in text, f"{doc.name} lacks {word!r}"
     assert "/model" not in text, doc.name
+
+
+# ── #61 item 6: routing checked on the real gate run, not by parsing the script ──
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("roadmap", "progress/roadmap_review.md", "ROADMAP_APPROVED", "codex-planner.md"),
+        ("plan", "progress/plan_review_1.1.1.md", "PLAN_APPROVED", "reviewer.md"),
+    ],
+    ids=lambda c: c[0],
+)
+def test_gate_prompt_names_the_routed_role_file(
+    project: Project, tmp_path: Path, case: tuple[str, str, str, str]
+) -> None:
+    gate, verdict_file, verdict, role = case
+    prompt = tmp_path / "prompt.txt"
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text(
+        f"#!/usr/bin/env bash\ncat > '{prompt}'\n"
+        f"printf '# r\\n\\n**Verdict:** {verdict}\\n' > {verdict_file}\n"
+    )
+    codex.chmod(0o755)
+    project.write("docs/plan/PLAN.md", "# Plan\n")
+    args = [gate] if gate == "roadmap" else [gate, "1.1.1"]
+    res = project.run(
+        "review_with_codex.sh", None, *args, env={"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    )
+    assert prompt.is_file(), res.stdout + res.stderr
+    lines = [ln for ln in prompt.read_text().splitlines() if "according to your role" in ln]
+    assert len(lines) == 1, prompt.read_text()
+    assert lines[0].endswith(f"/codex/{role}"), lines[0]
+    assert all(other not in lines[0] for other in ("documenter.md", "claude-planner.md"))
