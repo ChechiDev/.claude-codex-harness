@@ -204,13 +204,62 @@ run() {
   fi
 }
 
+# Oracle execution evidence (issue #65, I4b, WARN): pytest writes node-level results
+# (junit xunit1) and the C template a run log; _oracle.py checks every sealed oracle
+# of a live leaf ran (done: passed, not skipped). Set after the CLEAN_ENV drops, so an
+# inherited PYTEST_ADDOPTS never reaches the check. Inactive without the I4 baseline.
+# Instrumented only once the I4 baseline is sealed: before that the check runs exactly
+# as it did. The junit path is quoted for pytest's shlex split (spaces in TMPDIR).
+EVID=""
+if [ -f progress/oracle_baseline.json ] && [ -f progress/oracle_baseline.sha256 ]; then
+  # Best effort: without a temp dir or the quoting the check runs uninstrumented and
+  # the evidence step reports "cannot establish".
+  if EVID="$(mktemp -d "${TMPDIR:-/tmp}/run-check-oracle.XXXXXX" 2>/dev/null)" &&
+      [ -d "$EVID" ] &&
+      _q="$(python3 -E -s -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' \
+        "$EVID/junit.xml")" && [ -n "$_q" ]; then
+    ENVCMD+=(PYTEST_ADDOPTS="--junitxml=$_q -o junit_family=xunit1"
+      HARNESS_ORACLE_CLOG="$EVID/c.log")
+  else
+    [ -z "$EVID" ] || [ ! -d "$EVID" ] || rm -rf -- "$EVID"
+    EVID=""
+  fi
+  unset _q
+fi
+# The re-gate's expected-red set is never taken from the environment here: the gate's
+# third run (review_with_codex.sh) passes its validated set to _oracle.py itself.
+if [ -n "${HARNESS_EXPECT_RED:-}" ]; then
+  warn "run_check: HARNESS_EXPECT_RED is set: ignored for the oracle evidence (only the" \
+    "gate's third run omits its validated set) — fix: unset HARNESS_EXPECT_RED" >&2
+fi
+oracle_evidence() {
+  local args=()
+  if [ -n "$EVID" ]; then
+    [ -f "$EVID/junit.xml" ] && args+=(--junit "$EVID/junit.xml")
+    [ -f "$EVID/c.log" ] && args+=(--clog "$EVID/c.log")
+  fi
+  "${ENVCMD[@]}" python3 -E -s "$HARNESS_DIR/_oracle.py" evidence "${args[@]}" 2>&1
+}
+
 before=""
 [ "$RECORD" = 0 ] || before="$(fingerprint)" || before=""
 if [ -n "$LOG" ]; then run >>"$LOG" 2>&1; else run; fi
 rc=$?
+_ev="$(oracle_evidence)"
+[ -z "$EVID" ] || rm -rf -- "$EVID"
+if [ -n "$_ev" ]; then
+  if [ -n "$LOG" ]; then
+    printf '%s\n' "$_ev" >>"$LOG"
+    printf '%s\n' "$_ev" | grep '\[WARN\]' >&2
+  else
+    printf '%s\n' "$_ev" >&2
+  fi
+fi
+unset _ev
 if [ "$RECORD" = 1 ] && [ -n "$GREEN_RECORD" ]; then
   after="$(fingerprint)" || after=""
   if [ "$rc" -eq 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ] && [ -z "$ASSUME" ] &&
+      [ -z "${HARNESS_EXPECT_RED:-}" ] &&
       [ -n "$before" ] && [ "$before" = "$after" ] && index_flags_clear; then
     printf '%s' "$after" >"$GREEN_RECORD" ||
       warn "could not write the green record $GREEN_RECORD" >&2
