@@ -45,6 +45,13 @@ Every actor has a fixed model; nothing is switched by hand:
 | Codex `reviewer.md` | `plan`, `code`, `issue`, `issue-draft` gates | gpt-6-sol / high |
 | Codex `documenter.md` | `doc` close | gpt-6-luna / low |
 
+**Parallel sessions.** To run a task or subtask in a parallel Claude session,
+launch it through `harness/session_launch.sh <id> --worktree <path>` (add
+`--exec` or `--hook <prog>` to start it); never compose the `claude` command
+yourself. The launcher takes the model and effort from `harness.toml [sessions]`
+(sonnet / medium, or opus / high when the unit's `files:` match
+`high_risk_paths`) and quotes the prompt. It does not create the worktree.
+
 ## Delegating to claude-planner
 
 Every plan write goes through `subagent_type: "claude-planner"` (the one
