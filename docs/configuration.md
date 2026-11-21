@@ -112,6 +112,13 @@ placeholders, each as many times as it likes, and leave out any of them:
 | `{subtasks}` | harness | table: subtask, commit, spec, Codex reviews, reference note |
 | `{files}` | harness | files added/modified/deleted on the branch, without harness bookkeeping |
 | `{branch}` | harness + Codex | head and base, task dependencies, Codex's branch notes |
+| `{attention}` | harness + Codex | "For the human": base drift (commits behind `origin/<base>`, `git merge-tree` conflicts; information only, nothing is rebased), changed dependency / migration / CI / auth paths (path heuristic), and Codex's `## For the human` note |
+
+Before pushing, the PR step checks the branch (issue #80): it never pushes the
+base, `main` or `master`; it refuses a branch other than the one the task or
+issue lives on (for tasks only with a `[git]` section; without one it warns);
+and it refuses a branch that contains commits of the local base that
+`origin/<base>` does not have. A refusal pushes nothing and exits non-zero.
 
 A missing `pr_template` file fails the PR step with a warning (never the close).
 

@@ -305,6 +305,15 @@ open_pr() {
       "--no-skip-worktree <file>) first; $retry" >&2
     return 1
   fi
+  # Branch guard (issue #80): only the branch the task/issue lives on, never the
+  # base or main/master, never one carrying base commits origin does not have.
+  if ! python3 "$PR_PY" guard "$tid" "$base"; then
+    fail "the PR for task $tid was not pushed or opened; $retry" >&2
+    return 1
+  fi
+  case "$branch" in main|master|"$base"|HEAD)
+    fail "refusing to push $branch for task $tid; $retry" >&2; return 1 ;;
+  esac
   if ! green_record_current; then
     # No record of this exact state: run the real, clean check here (the same
     # producer as gates and close) and go on only if it records green.
