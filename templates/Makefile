@@ -7,9 +7,14 @@
 # Colored status tags (ok/skip/warn/fail), plain when not on a terminal.
 STATUS := ./harness/status.sh
 
+# Scoped lint (#76): the post-write hook runs `make lint LINT_FILES=<written file>`
+# for files with a LINT_EXTS extension; plain `make lint` checks the whole project.
+LINT_FILES ?= .
+LINT_EXTS := .py .pyi
+
 lint:
-	uv run ruff check .
-	uv run ruff format --check .
+	uv run ruff check -- $(LINT_FILES)
+	uv run ruff format --check -- $(LINT_FILES)
 
 type:
 	uv run mypy src

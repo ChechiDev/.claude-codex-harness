@@ -451,6 +451,14 @@ An optional `LINT_EXTS` (for example `LINT_EXTS := .py .pyi`) limits the
 scoping to files with those extensions, so a docs edit is not passed to the
 linter; other files get the full lint.
 
+The Python template (`templates/Makefile`) declares both (`LINT_FILES ?= .`,
+`LINT_EXTS := .py .pyi`), so plain `make lint` still checks the whole project.
+`install.sh <project> --migrate` upgrades the exact pre-#92 template `lint`
+recipe (dry-run, `--apply`, `--rollback`); a customised `lint` recipe is left
+as is, with a `[WARN]` that says how to scope it by hand. The C template does
+not support it: its `lint` (clang-format, cppcheck, clang-tidy) runs over the
+whole tree, so every write gets the full lint.
+
 ## Stop hook
 
 Claude Code runs the Stop hook at the end of **every** assistant turn, not only
