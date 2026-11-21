@@ -402,6 +402,26 @@ instead of running Codex. After an approved roadmap, phase or plan gate,
 ./harness/review_with_codex.sh seal 1.1.1
 ```
 
+## Hooks
+
+`settings.json` wires four hooks, each with an explicit `timeout` (seconds) so a
+hung hook cannot stall a session for Claude Code's 600 s default:
+
+| Event | Matcher | Script | Timeout | On failure / timeout |
+|---|---|---|---|---|
+| PreToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `guard_write.sh` | 15 | blocks (`onFailure: "block"`) |
+| PreToolUse | `Bash` | `guard_bash.sh` | 15 | blocks (`onFailure: "block"`) |
+| PostToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `post_write.sh` | 120 | never blocks (feedback only) |
+| Stop | — | `stop_gate.sh` | 15 | never blocks (advisory) |
+
+`post_write.sh` runs `make lint`. If the project `Makefile` declares a
+`LINT_FILES` variable (for example `LINT_FILES ?= .` used by the `lint`
+recipe), it runs `make lint LINT_FILES=<written file>` instead; without it, or
+when the payload has no plain path inside the project, the full lint runs.
+An optional `LINT_EXTS` (for example `LINT_EXTS := .py .pyi`) limits the
+scoping to files with those extensions, so a docs edit is not passed to the
+linter; other files get the full lint.
+
 ## Stop hook
 
 Claude Code runs the Stop hook at the end of **every** assistant turn, not only
@@ -417,7 +437,7 @@ when the session closes, so `stop_gate.sh` is advisory and cheap:
 The real full `make check` runs at the gates, at close and before a PR. Gates
 and close write the green record only after a clean, green check of an
 unchanged tree; the PR path blocks unless that record matches the exact current
-state. After each Edit/Write, `post_write.sh` runs only `make lint` (feedback,
+state. After each Edit/Write/MultiEdit/NotebookEdit, `post_write.sh` runs only `make lint` (feedback,
 never blocks).
 
 ## Recovery when a hook blocks Claude
