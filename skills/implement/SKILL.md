@@ -9,6 +9,10 @@ metadata:
 
 ## Activation Contract
 
+> **Harness projects:** when the project has `harness/WORKFLOW.md`, the harness
+> `implementer` agent and `harness/WORKFLOW.md` rule; this skill only applies to
+> projects without the harness. On any conflict, the harness wins.
+
 Claude only. Load when receiving a subtask `N.M.K` to implement from the leader.
 An issue subtask `ISS-<n>.<k>` (issues lane) follows the same loop: read `N.M.K` as
 `ISS-<n>.<k>` and `docs/plan/phase-NN-<slug>/` as `docs/plan/issues/ISS-<n>-<slug>/`.
