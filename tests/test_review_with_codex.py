@@ -8,26 +8,27 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import LEAF_ID, Project
+from conftest import LEAF_ID, Project, write_control
 
 UV_CACHE = "/tmp/fake-uv-cache"
 
 
-def _manual(project: Project, phase: str, *args: str, **env: str) -> str:
-    res = _manual_run(project, phase, *(args or (LEAF_ID,)), **env)
+def _manual(project: Project, phase: str, *args: str, toml: str = "", **env: str) -> str:
+    res = _manual_run(project, phase, *(args or (LEAF_ID,)), toml=toml, **env)
     assert res.returncode == 0, res.stdout + res.stderr
     return res.stdout
 
 
 def _manual_run(
-    project: Project, phase: str, *args: str, **env: str
+    project: Project, phase: str, *args: str, toml: str = "", **env: str
 ) -> subprocess.CompletedProcess[str]:
+    write_control(project.root, '[codex]\nmode = "manual"\n' + toml)
     return project.run(
         "review_with_codex.sh",
         None,
         phase,
         *args,
-        env={"HARNESS_CODEX_MODE": "manual", "UV_CACHE_DIR": UV_CACHE, **env},
+        env={"UV_CACHE_DIR": UV_CACHE, **env},
     )
 
 
@@ -55,13 +56,13 @@ def test_doc_phase_cannot_write_git(project: Project) -> None:
 
 @pytest.mark.e2e
 def test_network_is_opt_in(project: Project) -> None:
-    out = _manual(project, "code", HARNESS_CODEX_NETWORK="1", HARNESS_CHECK_CMD="true")
+    out = _manual(project, "code", toml="network = true\n", HARNESS_CHECK_CMD="true")
     assert "sandbox_workspace_write.network_access=true" in out
 
 
 @pytest.mark.e2e
 def test_full_access_is_an_explicit_override(project: Project) -> None:
-    out = _manual(project, "plan", HARNESS_CODEX_SANDBOX="danger-full-access")
+    out = _manual(project, "plan", toml='sandbox = "danger-full-access"\n')
     assert "--sandbox danger-full-access" in out
     assert "writable_roots" not in out
 

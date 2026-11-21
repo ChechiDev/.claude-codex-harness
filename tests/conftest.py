@@ -180,6 +180,20 @@ def bind_code_approval(root: Path, sid: str) -> None:
     log.unlink()
 
 
+def write_control(root: Path, toml: str = '[codex]\nmode = "manual"\n') -> None:
+    """Test-only gate controls (issue #90): the gates ignore HARNESS_CODEX_* /
+    HARNESS_GH / HARNESS_AUTO_PR from the environment and read harness.toml. The
+    file is excluded in .git/info/exclude so the fixture's tree stays clean."""
+    (root / "harness.toml").write_text(toml, encoding="utf-8")
+    if not (root / ".git").is_dir():
+        return
+    exclude = root / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.is_file() else []
+    if "/harness.toml" not in lines:
+        exclude.write_text("\n".join([*lines, "/harness.toml"]) + "\n", encoding="utf-8")
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> Iterator[Project]:
     root = tmp_path / "proj"

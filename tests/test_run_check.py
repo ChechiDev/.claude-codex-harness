@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import LEAF_ID, TOOLKIT, Project
+from conftest import LEAF_ID, TOOLKIT, Project, write_control
 
 # A valid project Makefile: own targets, then the harness include last.
 VALID = "verify:\n\t@echo verify-ok\nenv-check:\n\t@echo env-ok\ninclude harness/harness.mk\n"
@@ -252,9 +252,8 @@ def test_only_the_launcher_writes_the_green_record() -> None:
 @pytest.mark.e2e
 def test_gate_runs_through_the_launcher(project: Project) -> None:
     _makefile(project, BARE_GREEN)  # no include: the launcher warns
-    res = project.run(
-        "review_with_codex.sh", None, "code", LEAF_ID, env={"HARNESS_CODEX_MODE": "manual"}
-    )
+    write_control(project.root)
+    res = project.run("review_with_codex.sh", None, "code", LEAF_ID)
     assert "harness/harness.mk" in res.stderr, res.stdout + res.stderr
     assert _record(project).is_file()
 

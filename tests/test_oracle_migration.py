@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import Plan
+from conftest import Plan, write_control
 
 ORACLE = "tests/acceptance/test_1.1.1.py"
 OTHER = "tests/acceptance/test_1.1.2.py"
@@ -221,6 +221,7 @@ def test_retry_refuses_an_incomplete_record(plan: Plan) -> None:
 def test_plan_gate_refuses_when_a_declared_oracle_is_not_ready(plan: Plan) -> None:
     _issue_with_migration(plan)
     (plan.root / ORACLE).write_text("tampered\n")
+    write_control(plan.root)  # manual mode (#90)
     toolkit = Path(__file__).resolve().parents[1]
     (plan.root / ".claude").mkdir()
     (plan.root / ".claude/codex").symlink_to(toolkit / "codex")
@@ -237,7 +238,6 @@ def test_plan_gate_refuses_when_a_declared_oracle_is_not_ready(plan: Plan) -> No
         check=False,
         env={
             "PATH": "/usr/bin:/bin",
-            "HARNESS_CODEX_MODE": "manual",
             "CLAUDE_PROJECT_DIR": str(plan.root),
         },
     )

@@ -159,6 +159,20 @@ MSG_COMMIT = (
 )
 
 
+# Gate controls (issue #90): the gates read them from harness.toml and ignore the
+# environment; an inline assignment next to a gate call is refused outright.
+RE_CONTROL_ASSIGN = re.compile(
+    r"\b(HARNESS_CODEX_SANDBOX|HARNESS_CODEX_MODE|HARNESS_CODEX_NETWORK|HARNESS_GH|"
+    r"HARNESS_AUTO_PR)\+?="
+)
+RE_GATE_CALL = re.compile(r"review_with_codex\.sh|\bmake\b")
+MSG_CONTROL = (
+    "BLOCKED: {name} steers how the harness gates run Codex or publish the PR; the gates "
+    "ignore it from the environment. The human sets it in harness.toml ([codex] "
+    "mode/sandbox/network, [pr] auto/gh)."
+)
+
+
 # Exporting a shell function hands it to every child Bash, the harness scripts
 # included, where it could replace a command of a decision-making check.
 RE_EXPORT_FUNCTION = re.compile(
@@ -1508,6 +1522,9 @@ def guard_bash(payload: object) -> None:
         raise Blocked(MSG_ASSUME)
     if "HARNESS_EXPECT_RED" in command:  # best effort (issue #31)
         raise Blocked(MSG_EXPECT_RED)
+    control = RE_CONTROL_ASSIGN.search(command)
+    if control and RE_GATE_CALL.search(command):  # best effort (issue #90)
+        raise Blocked(MSG_CONTROL.format(name=control.group(1)))
     if RE_STARTUP.search(command):  # best effort (issue #31)
         raise Blocked(MSG_STARTUP)
     if RE_EXPORT_FUNCTION.search(command):  # best effort (issue #31)

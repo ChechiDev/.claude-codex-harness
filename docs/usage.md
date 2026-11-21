@@ -419,7 +419,7 @@ an inventory, `make check` is unchanged.
 
 ## Manual Codex mode
 
-With `HARNESS_CODEX_MODE=manual` (see [configuration](configuration.md)), each
+With `[codex] mode = "manual"` in `harness.toml` (see [configuration](configuration.md)), each
 gate prints the exact `codex exec …` command, the prompt and the verdict file
 instead of running Codex. After an approved roadmap, phase or plan gate,
 **you** seal what was approved; the Bash guard blocks Claude from doing it:

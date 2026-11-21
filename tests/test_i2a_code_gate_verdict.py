@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from conftest import write_control
 from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, spec
 from i0_projects import Installed, install_project
 
@@ -41,7 +42,12 @@ class Cycle:
         return res
 
     def manual(self, name: str) -> str:
-        return self.run_gate(name, HARNESS_CODEX_MODE="manual").stdout
+        # Test-only channel (#90): manual mode for this one run, from harness.toml.
+        write_control(self.project.root)
+        try:
+            return self.run_gate(name).stdout
+        finally:
+            (self.project.root / "harness.toml").unlink()
 
     def rounds(self) -> list[str]:
         return ROUND.findall(self.read(HISTORY))

@@ -20,7 +20,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import TOOLKIT, Plan
+from conftest import TOOLKIT, Plan, write_control
 
 SPEC_DIR = "docs/plan/phase-01-p01"
 LEGACY = "progress/task_flow_legacy_01.json"
@@ -490,7 +490,8 @@ def _gate_project(plan: Plan, counter: Path) -> Plan:
 
 def _gate(plan: Plan, *args: str) -> subprocess.CompletedProcess[str]:
     base = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
-    env = {**base, "CLAUDE_PROJECT_DIR": str(plan.root), "HARNESS_CODEX_MODE": "manual"}
+    write_control(plan.root)  # manual mode (#90)
+    env = {**base, "CLAUDE_PROJECT_DIR": str(plan.root)}
     env["PYTHONDONTWRITEBYTECODE"] = "1"  # new toolkit .pyc files change the fingerprint
     return subprocess.run(
         ["bash", str(plan.root / "harness/review_with_codex.sh"), *args],
