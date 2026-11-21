@@ -13,6 +13,32 @@ from the leader's brief; you never switch models by hand.
 cd /path/to/project && claude
 ```
 
+## 0. Create a new Python project (py-init, then the harness)
+
+For a brand-new project, ask Claude to "init project <name>" (the `py-init`
+skill). One guided flow, always in this order:
+
+1. **py-init** scaffolds the Python project (uv, `src/` layout, tests, canonical
+   `pyproject.toml`, Graphify, Archify). It writes no `CLAUDE.md`, `AGENTS.md`,
+   `Makefile` or anything under `.claude/`: those belong to the harness.
+2. It **offers `install.sh <project-dir>`** (with your OK, without `--python`, so
+   py-init's `pyproject.toml` stays). On a repo without history this makes the
+   single initial commit `chore: install harness` (scaffold + harness), switches
+   to `chore/project-setup` and requires `make check` green.
+3. On `chore/project-setup` it adds the CI workflows (`ci.yml` runs the same
+   ruff / mypy / pytest commands as `make check`; empty suites are green) and
+   opens the draft PR.
+
+If the harness is already installed, py-init detects it
+(`skills/py-init/scripts/detect_harness.sh`) and only scaffolds Python: no role
+files, commits or branches. On a repo that already had history py-init never
+commits; you commit through the usual authorised flow.
+
+Archify is installed only under the project's `.agents/skills/archify/`
+(`skills/py-init/scripts/install_archify.sh`), never through the shared
+`.claude/skills` link. Claude does not load it automatically: ask
+"Read `.agents/skills/archify/SKILL.md` and follow it".
+
 ## 1. Plan the roadmap
 
 Tell the leader what to build. It reads the repo first if there is code, then
