@@ -65,6 +65,11 @@ Common criteria (what a senior engineer would look at):
   `py-style`, `py-pydantic`, `py-typing` as authoritative. For **C** projects use
   the project's `docs/conventions.md` (C11, warning-clean compile, ownership/leaks).
 
+Every verdict file, in every mode, puts a `## Summary` of 3-5 bullets right
+after the `**Verdict:**` line, and on a re-review a `## Finding → fix` section
+mapping each finding of the previous round to its fix (`file:line`) or `still
+open`. The verdict line and its tokens stay exactly as each mode shows them.
+
 ---
 
 ## `roadmap` mode
@@ -373,6 +378,9 @@ Verdict in `progress/plan_review_<N.M.K>.md`:
 
 **Verdict:** PLAN_APPROVED | CHANGES_REQUESTED
 
+## Summary
+- 3-5 bullets: the verdict's reasons, most important first.
+
 ## Plan analysis
 - Layers / scope / test strategy: ...
 
@@ -381,6 +389,9 @@ Verdict in `progress/plan_review_<N.M.K>.md`:
 
 ## Requested changes (if CHANGES_REQUESTED)
 1. ...
+
+## Finding → fix (re-review only)
+- <finding of the previous round> → fixed at <file:line> | still open
 ```
 
 Final response in one line: `PLAN_APPROVED -> progress/plan_review_<N.M.K>.md`
@@ -427,6 +438,9 @@ Verdict in `progress/review_<N.M.K>.md`:
 
 **Verdict:** APPROVED | CHANGES_REQUESTED
 
+## Summary
+- 3-5 bullets: the verdict's reasons, most important first.
+
 ## Checkpoints
 - C1: [x]
 - C3: [ ]  ← Reason: src/domain/user.py imports sqlalchemy (violates layers)
@@ -436,10 +450,16 @@ Verdict in `progress/review_<N.M.K>.md`:
 
 ## Requested changes (if CHANGES_REQUESTED)
 1. ...
+
+## Finding → fix (re-review only)
+- <finding of the previous round> → fixed at <file:line> | still open
 ```
 
 Final response in one line: `APPROVED -> progress/review_<N.M.K>.md`
 or `CHANGES_REQUESTED -> progress/review_<N.M.K>.md`.
+
+In a spec, flag in `plan` mode a `## Context` path that does not exist and an
+`## Assumptions` entry that changes behaviour without the user's approval.
 
 ## Hard rules
 
