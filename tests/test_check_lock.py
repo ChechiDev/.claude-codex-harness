@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -190,18 +191,24 @@ def test_stop_hook_never_takes_the_lock_nor_blocks(proj: Path, held: str) -> Non
     assert not (proj / "run.log").exists()
 
 
+# What the `check` recipe runs before it looks for flock; nothing else is linked.
+_RECIPE_TOOLS = ("make", "sh", "git")
+
+
+def _path_without_flock(bin_dir: Path) -> str:
+    """A PATH holding only the recipe's tools, so `flock` is surely absent."""
+    bin_dir.mkdir()
+    for name in _RECIPE_TOOLS:
+        found = shutil.which(name)
+        assert found, f"{name} is required to run this test"
+        (bin_dir / name).symlink_to(found)
+    assert shutil.which("flock", path=str(bin_dir)) is None
+    return str(bin_dir)
+
+
 @pytest.mark.e2e
 def test_missing_flock_fails_clearly(proj: Path, tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    for d in os.environ["PATH"].split(os.pathsep):
-        if not os.path.isdir(d):
-            continue
-        for name in os.listdir(d):
-            dst = bin_dir / name
-            if name != "flock" and not dst.exists() and not dst.is_symlink():
-                dst.symlink_to(Path(d) / name)
-    p = _check(proj, PATH=str(bin_dir))
+    p = _check(proj, PATH=_path_without_flock(tmp_path / "bin"))
     _, err = p.communicate(timeout=30)
     assert p.returncode != 0
     assert "flock" in err and "not found" in err, err

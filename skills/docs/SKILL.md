@@ -76,5 +76,4 @@ One-sentence description of what it does.
 
 ## References
 
-- `../github/commit/SKILL.md` — `docs` commit type for documentation changes
 - `../py-style/SKILL.md` — code-level docstring and comment conventions (distinct from project docs)

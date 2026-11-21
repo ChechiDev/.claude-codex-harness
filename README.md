@@ -29,7 +29,45 @@ per issue:    a GitHub issue, at any point, in its own issues lane (never a task
 
 Claude cannot write `src/` before the plan gate, cannot touch files outside the
 subtask's declared `files:`, cannot edit the acceptance tests or Codex verdicts,
-and cannot commit. Details: [architecture](docs/architecture.md).
+and cannot commit. Details: [architecture](docs/architecture.md); the
+task-by-task breakdown and the close gates: [task flow](docs/design/task-flow.md).
+
+### Roles
+
+| Role | Runs on | Does |
+|------|---------|------|
+| `leader` (`agents/leader.md`) | Claude, `opus` | talks to you, runs every gate, never writes the plan or code |
+| `claude-planner` (`agents/claude-planner.md`) | Claude, `opus` | writes `PLAN.md`, phases, task kickoffs and subtask specs |
+| `implementer` (`agents/implementer.md`) | Claude, `sonnet` | TDD on one subtask until `make verify` is green |
+| `codex-planner` (`codex/codex-planner.md`) | Codex, `gpt-6-astra` / `high` | roadmap, phase, task, task-close and phase-close gates |
+| `reviewer` (`codex/reviewer.md`) | Codex, `gpt-6-sol` / `high` | plan, code, issue and issue-draft gates |
+| `documenter` (`codex/documenter.md`) | Codex, `gpt-6-luna` / `low` | the doc step of the close |
+
+The Codex model and effort come from each role file's header:
+[Codex model per role](docs/configuration.md#codex-model-and-effort-per-role).
+
+### Gates, green record and verification integrity
+
+Gates, close and the PR step decide through one launcher,
+`harness/run_check.sh`, which runs plain `make check` in a cleaned environment
+and writes the green record (`.git/harness-check.ok`) only for a clean, green
+check of an unchanged tree; the PR step requires that record to match the exact
+current state. Launcher findings are `[WARN]` for now
+([check launcher](docs/design/check-launcher.md)).
+
+Two more layers are also WARN only, and stay inactive (one-line note) until the
+human creates and seals their baseline with the sealer verbs Claude cannot run:
+
+- **I4b, oracle execution** — the acceptance tests really ran and were selected
+  as sealed: `python3 harness/_oracle.py baseline-create --from <pre-rule-commit>`,
+  then `baseline-seal` ([oracle execution](docs/design/oracle-exec.md)).
+- **I5, verification contract** — the lint/type/build config that decides
+  "done": `python3 harness/_contract.py baseline-create --from <pre-rule-commit>`,
+  then `baseline-seal`. A later config change goes `_contract.py contract-propose` →
+  `./harness/review_with_codex.sh contract` → human
+  `python3 harness/_contract.py contract-approve <hash>`
+  ([verification contract](docs/design/verification-contract.md),
+  [changing lint/type/build config](docs/configuration.md#changing-linttypebuild-config)).
 
 ## Requirements
 
@@ -60,7 +98,13 @@ machine where you will not install a project yet.
 
 ### 2. Install it onto a project
 
-**New Python project** (one command; no `uv init` needed):
+**New Python project, guided:** open Claude Code in an empty dir and ask
+`init project <name>`. The `py-init` skill scaffolds the project (uv, `src/`
+layout, tests, `pyproject.toml`) and then offers `install.sh <project-dir>`
+(without `--python`, so its `pyproject.toml` stays) and adds the CI workflows.
+Details: [usage, step 0](docs/usage.md#0-create-a-new-python-project-py-init-then-the-harness).
+
+**New Python project, one command** (no `uv init` needed):
 
 ```bash
 ~/.claude-codex-harness/install.sh /path/to/project --python my_pkg
@@ -134,6 +178,13 @@ cd /path/to/project && claude
 6. **Next:** check `make status` and `git log -1`, then approve the next
    subtask. Merge the task branch into `main` when the task is done.
 
+When the last subtask of a task closes, the harness pushes the task branch and
+opens one PR. The PR step never pushes `main`, `master` or the base, refuses a
+branch other than the task's (with a `[git]` section; without one it warns),
+and the body has a **For the human** section: base drift, changed
+dependency / migration / CI / auth paths, and Codex's note
+([task pull request](docs/configuration.md#task-pull-request)).
+
 What each gate writes, what to check before approving, manual Codex mode and
 troubleshooting: [usage](docs/usage.md).
 
@@ -148,7 +199,9 @@ make plan    # regenerate feature_list.json + the PLAN.md index from docs/plan/
 make status  # the whole plan: done / in progress / pending, gate verdicts, issue queue, next step
 make verify  # lint + type + test (Python: ruff, strict mypy, pytest)
 make check   # verify + harness invariants (plan sync, gates, seals, src/ scope)
-make issue N=14 [PRIORITY=now|next|backlog]   # issues lane: queue a GitHub issue
+harness/issue.sh intake 14                    # issues lane: duplicates, missing info, scope (read only)
+harness/issue.sh ask 14                       # with your OK: post the question, park it as needs-info
+make issue N=14 [PRIORITY=now|next|backlog]   # queue a GitHub issue
 make issue-start N=14                         # claim it and create its branch
 make issue-new                                # draft a new issue (Codex reviews it)
 ```
@@ -157,13 +210,23 @@ The workflow rules Claude follows are shared the same way: each project's
 `CLAUDE.md` imports `@harness/WORKFLOW.md`. A project installed before that
 moves to it with `install.sh <project> --migrate`: a dry-run by default,
 `--apply` to write (all-or-nothing, backed up, `--rollback <id>` to undo; it never
-touches links). Human-only; see [usage](docs/usage.md).
+touches links). Human-only; see [usage](docs/usage.md). The issues lane in
+full: [issues lane](docs/design/issues-lane.md).
+
+### Hooks
+
+`settings.json` wires four hooks, each with an explicit timeout: `guard_write.sh`
+and `guard_bash.sh` (PreToolUse, 15 s, fail closed: a crash or timeout blocks the
+call), `post_write.sh` (PostToolUse, 120 s, `make lint` feedback, never blocks) and
+`stop_gate.sh` (Stop, 15 s, advisory). Claude Code >= 2.1.295 is required.
+Details and recovery: [usage, hooks](docs/usage.md#hooks).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md): distribution model, planning model, rules and enforcement layers, on-disk state.
 - [Usage](docs/usage.md): the full cycle step by step, verification, manual mode, troubleshooting.
 - [Configuration](docs/configuration.md): `install.sh` options, `HARNESS_*` variables, Codex model per role, hooks.
+- [Design notes](docs/design/): task flow, check launcher, oracle execution, verification contract, issues lane.
 - [Testing](docs/testing.md): the toolkit suite's two tiers (fast / e2e) and when to run each.
 
 ## Developing the toolkit
@@ -178,4 +241,5 @@ uv run ruff check lib/_guard.py lib/_harness.py tests
 uv run mypy              # strict, over lib/_guard.py, lib/_harness.py and tests/
 ```
 
-Tiers, the e2e guard and the session rule: [docs/testing.md](docs/testing.md).
+CI (`.github/workflows/ci.yml`) runs the fast tier, ruff and mypy on every PR and
+push to `main`, and the e2e tier nightly or by hand. Tiers, the e2e guard, CI and the session rule: [docs/testing.md](docs/testing.md).

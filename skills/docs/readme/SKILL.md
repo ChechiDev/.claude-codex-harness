@@ -59,10 +59,9 @@ Optional sections — include only when the trigger holds:
 
 ## Update Discipline
 
-The README must never go stale. At **pre-PR**, `codex-write` (planned, not built
-yet) judges whether the change affects what the README documents (prerequisites,
-install, quickstart, architecture, config) and updates it in the same PR if it
-does. Claude triggers; Codex authors. Mid-work commits do not trigger an update.
+The README must never go stale. Any change that affects what the README documents
+(prerequisites, install, quickstart, architecture, config) updates the README in
+the same change.
 
 ## Execution Steps
 
@@ -85,4 +84,3 @@ does. Claude triggers; Codex authors. Mid-work commits do not trigger an update.
 
 - `assets/README.template.md` — the template to fill
 - `../SKILL.md` — root `docs` standard (README vs `docs/` split)
-- `../../github/commit/SKILL.md` — `docs` commit type for README changes
