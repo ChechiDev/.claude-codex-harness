@@ -96,7 +96,8 @@ Immutable value object that validates and normalizes an email address…
 - `files:` the **1-3 production files under `src/`** it creates/modifies (the
   harness blocks writes outside them), or an empty `files:` only for a spec declaring
   `Test-only verification (no production behaviour change)` that changes no
-  production file. Unit tests (`tests/unit/`) are not declared.
+  production file. Unit tests (`tests/unit/`) are not declared. `make check`
+  (validate) warns on any other count; done, baseline and unchanged legacy leaves are exempt.
 - `acceptance:` observable criteria, one test each; Codex writes those tests.
 - `## Context` (real paths the implementer must read), `## Out of scope` and
   `## Assumptions` are free text after `## Description` (not parsed). Write
