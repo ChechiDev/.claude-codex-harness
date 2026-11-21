@@ -17,6 +17,8 @@ from conftest import TOOLKIT
 from i0_legacy import build_legacy
 from i0_projects import Installed, install_project
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 SCRIPTS = {"gate.sh": "gates consistent", "doc_gate.sh": "reference docs complete"}
 SKIP = shutil.ignore_patterns(".git", ".venv", "__pycache__", "*_cache", "scratchpad")
 FUTURE = "from __future__ import annotations\n"

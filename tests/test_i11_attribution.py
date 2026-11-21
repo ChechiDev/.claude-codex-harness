@@ -60,6 +60,7 @@ def _guard_bash(project: Project, cmd: str) -> tuple[int, str]:
     return res.returncode, res.stderr
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("text", ATTRIBUTION)
 def test_guard_bash_blocks_attribution_in_commit_and_pr(project: Project, text: str) -> None:
     q = _shell_quote(text)
@@ -82,6 +83,7 @@ def test_guard_bash_blocks_glued_option_forms(project: Project, cmd: str) -> Non
     assert "attribution" in err
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("text", NOT_ATTRIBUTION)
 def test_guard_bash_allows_words_containing_a_term(project: Project, text: str) -> None:
     q = _shell_quote(text)

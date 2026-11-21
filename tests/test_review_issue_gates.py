@@ -6,6 +6,7 @@ import hashlib
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import Project
 from test_review_with_codex import _codex_writing, _manual, _manual_run
 
@@ -39,6 +40,7 @@ def _with_issue(project: Project, spec: bool = True) -> Project:
     return project
 
 
+@pytest.mark.e2e
 def test_issue_gate_names_the_issue_and_its_verdict_file(project: Project) -> None:
     out = _manual(_with_issue(project), "issue", "ISS-14")
     assert "Phase: issue" in out
@@ -48,6 +50,7 @@ def test_issue_gate_names_the_issue_and_its_verdict_file(project: Project) -> No
     assert "--sandbox workspace-write" in out
 
 
+@pytest.mark.e2e
 def test_issue_gate_accepts_the_bare_number(project: Project) -> None:
     out = _manual(_with_issue(project), "issue", "14")
     assert "progress/issue_review_ISS-14.md" in out
@@ -59,11 +62,13 @@ def test_issue_gate_refuses_an_issue_without_subtasks(project: Project) -> None:
     assert "has no subtasks yet" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_issue_gate_does_not_need_the_roadmap(project: Project) -> None:
     (project.root / "progress/roadmap_review.md").unlink()
     assert _manual_run(_with_issue(project), "issue", "ISS-14").returncode == 0
 
 
+@pytest.mark.e2e
 def test_approved_issue_gate_seals_the_issue(project: Project, tmp_path: Path) -> None:
     _with_issue(project)
     env = _codex_writing(tmp_path, "progress/issue_review_ISS-14.md", "ISSUE_APPROVED")
@@ -73,6 +78,7 @@ def test_approved_issue_gate_seals_the_issue(project: Project, tmp_path: Path) -
     assert (project.root / "progress/review_history/ISS-14.md").is_file()
 
 
+@pytest.mark.e2e
 def test_rejected_issue_gate_does_not_seal(project: Project, tmp_path: Path) -> None:
     _with_issue(project)
     env = _codex_writing(tmp_path, "progress/issue_review_ISS-14.md", "CHANGES_REQUESTED")
@@ -80,6 +86,7 @@ def test_rejected_issue_gate_does_not_seal(project: Project, tmp_path: Path) -> 
     assert not (project.root / "progress/plan_issue_ISS-14.sha256").exists()
 
 
+@pytest.mark.e2e
 def test_plan_gate_of_an_issue_subtask_needs_the_issue_approved(project: Project) -> None:
     _with_issue(project)
     res = _manual_run(project, "plan", "ISS-14.1")
@@ -99,6 +106,7 @@ def test_draft_review_needs_a_draft(project: Project) -> None:
     assert "no progress/issue_draft.md" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_draft_review_names_the_draft_and_its_verdict(project: Project) -> None:
     project.write("progress/issue_draft.md", DRAFT)
     out = _manual(project, "issue-draft", "")
@@ -108,6 +116,7 @@ def test_draft_review_names_the_draft_and_its_verdict(project: Project) -> None:
     assert "seal draft" in out
 
 
+@pytest.mark.e2e
 def test_approved_draft_is_sealed(project: Project, tmp_path: Path) -> None:
     project.write("progress/issue_draft.md", DRAFT)
     env = _codex_writing(tmp_path, "progress/issue_draft_review.md", "DRAFT_APPROVED")
@@ -119,6 +128,7 @@ def test_approved_draft_is_sealed(project: Project, tmp_path: Path) -> None:
     assert (project.root / "progress/review_history/issue-draft.md").is_file()
 
 
+@pytest.mark.e2e
 def test_rejected_draft_is_not_sealed(project: Project, tmp_path: Path) -> None:
     project.write("progress/issue_draft.md", DRAFT)
     env = _codex_writing(tmp_path, "progress/issue_draft_review.md", "CHANGES_REQUESTED")

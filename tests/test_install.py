@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from conftest import TOOLKIT
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 IDENTITY = {
     "GIT_AUTHOR_NAME": "dev",
     "GIT_AUTHOR_EMAIL": "dev@example.com",

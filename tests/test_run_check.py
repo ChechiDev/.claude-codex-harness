@@ -249,6 +249,7 @@ def test_only_the_launcher_writes_the_green_record() -> None:
 # ── wiring ───────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_gate_runs_through_the_launcher(project: Project) -> None:
     _makefile(project, BARE_GREEN)  # no include: the launcher warns
     res = project.run(
@@ -258,6 +259,7 @@ def test_gate_runs_through_the_launcher(project: Project) -> None:
     assert _record(project).is_file()
 
 
+@pytest.mark.e2e
 def test_direct_make_check_says_it_is_not_a_decision(project: Project) -> None:
     _makefile(project, VALID)
     env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}

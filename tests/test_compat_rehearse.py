@@ -120,6 +120,7 @@ def _driver_module() -> ModuleType:
 # ── driver: the sequence and its evidence ────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_a_clean_project_passes_every_step(tmp_path: Path) -> None:
     root = _project(tmp_path)
     code, report = _drive(root, tmp_path)
@@ -136,6 +137,7 @@ def test_a_clean_project_passes_every_step(tmp_path: Path) -> None:
     assert all(e["state"] in ("installed", "nofile") for e in rec["templates"].values())
 
 
+@pytest.mark.e2e
 def test_the_report_lists_what_apply_changed(tmp_path: Path) -> None:
     root = _project(tmp_path)
     _, report = _drive(root, tmp_path)
@@ -145,6 +147,7 @@ def test_the_report_lists_what_apply_changed(tmp_path: Path) -> None:
     assert not [p for p in changed if p.startswith("src/")]
 
 
+@pytest.mark.e2e
 def test_the_copy_is_back_after_the_rehearsal(tmp_path: Path) -> None:
     root = _project(tmp_path)
     before = {p: (root / p).read_text() for p in ("Makefile", "CLAUDE.md", "AGENTS.md")}
@@ -272,6 +275,7 @@ def _driver_out(verdict: str) -> str:
     return json.dumps({"verdict": verdict, "steps": []})
 
 
+@pytest.mark.e2e
 def test_host_runs_the_driver_in_the_locked_down_container(fake: dict[str, Path]) -> None:
     repo = _project(fake["tmp"])
     _set(fake, run_stdout=_driver_out("pass"))
@@ -287,6 +291,7 @@ def test_host_runs_the_driver_in_the_locked_down_container(fake: dict[str, Path]
     assert not (fake["tmp"] / "scratch" / "rh1").exists()
 
 
+@pytest.mark.e2e
 def test_host_fails_and_keeps_the_copy_when_the_driver_fails(fake: dict[str, Path]) -> None:
     repo = _project(fake["tmp"])
     _set(fake, run_stdout=_driver_out("fail"), run_exit=1)
@@ -297,6 +302,7 @@ def test_host_fails_and_keeps_the_copy_when_the_driver_fails(fake: dict[str, Pat
     assert report["kept"]
 
 
+@pytest.mark.e2e
 def test_host_treats_unreadable_driver_output_as_an_error(fake: dict[str, Path]) -> None:
     repo = _project(fake["tmp"])
     _set(fake, run_stdout="not json")
@@ -306,6 +312,7 @@ def test_host_treats_unreadable_driver_output_as_an_error(fake: dict[str, Path])
     assert report["projects"][str(repo)]["verdict"] == "error"
 
 
+@pytest.mark.e2e
 def test_host_inconclusive_exits_2(fake: dict[str, Path]) -> None:
     repo = _project(fake["tmp"])
     _set(fake, run_stdout=_driver_out("inconclusive"), run_exit=2)
@@ -325,6 +332,7 @@ def test_host_refuses_a_reused_run_id(fake: dict[str, Path]) -> None:
 # ── evidence a reviewer can check from the saved report (Codex rh1 review) ───
 
 
+@pytest.mark.e2e
 def test_the_report_carries_the_initial_and_final_snapshots(tmp_path: Path) -> None:
     import hashlib
 

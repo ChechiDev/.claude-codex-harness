@@ -107,6 +107,7 @@ def _upgrade() -> ModuleType:
 # ── links are never touched ──────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("args", [("--migrate",), ("--migrate", "--apply", "--yes")])
 def test_migrate_never_retargets_a_wrong_link(tmp_path: Path, args: tuple[str, ...]) -> None:
     wrong = dict(EXPECTED_LINKS, **{".claude/agents": "codex"})
@@ -118,6 +119,7 @@ def test_migrate_never_retargets_a_wrong_link(tmp_path: Path, args: tuple[str, .
     assert _snapshot(root) == before  # link still wrong, nothing written
 
 
+@pytest.mark.e2e
 def test_migrate_stops_on_a_missing_link(tmp_path: Path) -> None:
     root = _project(tmp_path, {k: v for k, v in EXPECTED_LINKS.items() if k != ".claude/codex"})
     before = _snapshot(root)
@@ -127,6 +129,7 @@ def test_migrate_stops_on_a_missing_link(tmp_path: Path) -> None:
     assert _snapshot(root) == before
 
 
+@pytest.mark.e2e
 def test_migrate_stops_on_the_per_skill_shape(tmp_path: Path) -> None:
     root = _project(tmp_path, {k: v for k, v in EXPECTED_LINKS.items() if k != ".claude/skills"})
     (root / ".claude/skills").mkdir()
@@ -141,6 +144,7 @@ def test_migrate_stops_on_the_per_skill_shape(tmp_path: Path) -> None:
 # ── dry-run by default ───────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_migrate_is_a_dry_run_by_default(tmp_path: Path) -> None:
     root = _project(tmp_path)
     before = _snapshot(root)
@@ -152,6 +156,7 @@ def test_migrate_is_a_dry_run_by_default(tmp_path: Path) -> None:
     assert "--apply" in res.stdout  # says how to write it
 
 
+@pytest.mark.e2e
 def test_apply_without_a_tty_needs_yes(tmp_path: Path) -> None:
     root = _project(tmp_path)
     before = _snapshot(root)
@@ -161,6 +166,7 @@ def test_apply_without_a_tty_needs_yes(tmp_path: Path) -> None:
     assert _snapshot(root) == before
 
 
+@pytest.mark.e2e
 def test_apply_writes_only_harness_files_and_keeps_links(tmp_path: Path) -> None:
     root = _project(tmp_path)
     before = _snapshot(root)
@@ -237,6 +243,7 @@ def test_a_link_change_during_apply_fails_and_restores(
 # ── rollback ─────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_rollback_restores_files_and_removes_created_ones(tmp_path: Path) -> None:
     root = _project(tmp_path)
     before = _snapshot(root)
@@ -257,6 +264,7 @@ def test_rollback_restores_files_and_removes_created_ones(tmp_path: Path) -> Non
     assert not (root / ".harness/templates.json").exists()
 
 
+@pytest.mark.e2e
 def test_rollback_stops_when_a_created_file_was_edited(tmp_path: Path) -> None:
     root = _project(tmp_path)
     assert _install(root, "--migrate", "--apply", "--yes").returncode == 0

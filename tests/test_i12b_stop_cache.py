@@ -15,6 +15,8 @@ import pytest
 from conftest import TOOLKIT
 from i0_projects import Installed, install_project
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 ALREADY_GREEN = "last green full check matches this exact state"
 NO_GREEN = "no green full check for this state"
 UNKNOWN = "unknown"

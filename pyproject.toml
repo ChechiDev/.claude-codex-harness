@@ -8,7 +8,12 @@ requires-python = ">=3.12"
 dependencies = []
 
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.6", "mypy>=1.11"]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest-xdist>=3.8.0",
+]
 
 [tool.uv]
 package = false
@@ -16,8 +21,9 @@ package = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["lib"]
-addopts = "-q"
+addopts = "-q -m 'not e2e'"
 markers = [
+  "e2e: heavy end-to-end test (real install.sh, real make check); excluded by default, run with -m e2e or make test-e2e (#68)",
   "docker: needs the local Docker Engine and the harness-compat image (C0)",
   "pins(issue): characterisation of a known-wrong behaviour; that issue flips it (I0)",
 ]

@@ -194,6 +194,7 @@ def lrepo(legacy: Installed, tmp_path: Path) -> Repo:
     return Repo(root=copy.root, repo=copy.repo, env=_fake_codex(tmp_path, copy.env))
 
 
+@pytest.mark.e2e
 def test_create_records_the_done_leaf_with_its_evidence(lrepo: Repo) -> None:
     head = lrepo.git("rev-parse", "HEAD")
     res = lrepo.inv("create", "--at", head)
@@ -217,6 +218,7 @@ def test_create_records_the_done_leaf_with_its_evidence(lrepo: Repo) -> None:
         assert leaf[key] == {"path": rel, "sha256": _sha(lrepo.root / rel), "verdict": verdict}
 
 
+@pytest.mark.e2e
 def test_create_marks_the_baseline_leaf_without_changing_its_status(lrepo: Repo) -> None:
     assert lrepo.inv("create", "--at", "HEAD").returncode == 0
     leaf = lrepo.data()["leaves"]["1.2.1"]
@@ -226,6 +228,7 @@ def test_create_marks_the_baseline_leaf_without_changing_its_status(lrepo: Repo)
     assert '"status": "baseline"' in (lrepo.root / "feature_list.json").read_text()
 
 
+@pytest.mark.e2e
 def test_create_records_approved_phase_and_roadmap_content(lrepo: Repo) -> None:
     from_seal = _seal_module()
     assert lrepo.inv("create", "--at", "HEAD").returncode == 0
@@ -240,6 +243,7 @@ def test_create_records_approved_phase_and_roadmap_content(lrepo: Repo) -> None:
     assert roadmap["approved"] == from_seal.roadmap_entries(lrepo.root)
 
 
+@pytest.mark.e2e
 def test_create_leaves_out_a_leaf_added_after_the_commit(lrepo: Repo) -> None:
     old = lrepo.git("rev-parse", "HEAD")
     folder = lrepo.root / BASELINE_SPEC
@@ -261,6 +265,7 @@ def test_create_leaves_out_a_leaf_added_after_the_commit(lrepo: Repo) -> None:
     assert lrepo.data()["commit"] == old
 
 
+@pytest.mark.e2e
 def test_create_reads_the_commit_not_the_working_tree(lrepo: Repo) -> None:
     spec = lrepo.root / BASELINE_SPEC
     committed = _sha(spec)
@@ -305,6 +310,7 @@ def _extend(lrepo: Repo) -> None:
     lrepo.commit("more legacy states")
 
 
+@pytest.mark.e2e
 def test_create_records_issue_draft_and_pending_states(lrepo: Repo) -> None:
     _extend(lrepo)
     assert lrepo.inv("create", "--at", "HEAD").returncode == 0
@@ -325,6 +331,7 @@ def test_create_records_issue_draft_and_pending_states(lrepo: Repo) -> None:
     assert pending["plan_review"] is None and pending["review"] is None
 
 
+@pytest.mark.e2e
 def test_pending_leaf_is_never_reported_as_done(lrepo: Repo, lib: ModuleType) -> None:
     _extend(lrepo)
     _sealed(lrepo)
@@ -387,6 +394,7 @@ def test_create_refuses_a_second_time(tmp_path: Path) -> None:
     assert (repo.root / INVENTORY).read_bytes() == before
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("left", [REVIEW, SEAL])
 def test_create_refuses_when_any_artifact_is_left(tmp_path: Path, left: str) -> None:
     repo = _basic(tmp_path)
@@ -414,6 +422,7 @@ def test_review_approved_writes_the_review_tied_to_the_json(tmp_path: Path) -> N
     assert "-s read-only" in log and "-o " in log
 
 
+@pytest.mark.e2e
 def test_review_changes_requested_is_written_and_blocks_seal(tmp_path: Path) -> None:
     repo = _basic(tmp_path)
     assert repo.inv("create", "--at", "HEAD").returncode == 0
@@ -475,6 +484,7 @@ def test_verify_warns_when_not_created(tmp_path: Path) -> None:
     assert res.returncode == 0 and "WARN" in res.stdout and "not created" in res.stdout
 
 
+@pytest.mark.e2e
 def test_verify_ok_when_sealed(tmp_path: Path) -> None:
     repo = _basic(tmp_path)
     _sealed(repo)
@@ -499,6 +509,7 @@ def _invalid_json(repo: Repo) -> None:
     (repo.root / INVENTORY).write_text("{not json")
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("breaker", [_tamper, _drop_seal, _rewrite_history, _invalid_json])
 def test_verify_fails(tmp_path: Path, breaker: Any) -> None:
     repo = _basic(tmp_path)
@@ -536,6 +547,7 @@ def _append(path: Path, text: str = "\nchanged\n") -> None:
     path.write_text(path.read_text() + text)
 
 
+@pytest.mark.e2e
 def test_unchanged_leaf_spec_and_oracle(lrepo: Repo, lib: ModuleType) -> None:
     _sealed(lrepo)
     assert lib.is_legacy_unchanged(lrepo.root, SID) is True
@@ -543,12 +555,14 @@ def test_unchanged_leaf_spec_and_oracle(lrepo: Repo, lib: ModuleType) -> None:
     assert lib.is_legacy_unchanged(lrepo.root, SID) is False
 
 
+@pytest.mark.e2e
 def test_leaf_spec_change(lrepo: Repo, lib: ModuleType) -> None:
     _sealed(lrepo)
     _append(lrepo.root / lrepo.data()["leaves"][SID]["spec"]["path"])
     assert lib.is_legacy_unchanged(lrepo.root, SID) is False
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "rel",
     [
@@ -564,6 +578,7 @@ def test_leaf_evidence_that_appears_is_a_change(lrepo: Repo, lib: ModuleType, re
     assert lib.is_legacy_unchanged(lrepo.root, "1.2.1") is False
 
 
+@pytest.mark.e2e
 def test_leaf_evidence_that_disappears_is_a_change(lrepo: Repo, lib: ModuleType) -> None:
     _sealed(lrepo)
     (lrepo.root / f"progress/review_{SID}.md").unlink()
@@ -599,6 +614,7 @@ def test_phase_with_a_new_spec_is_a_change(tmp_path: Path, lib: ModuleType) -> N
     assert lib.is_legacy_unchanged(repo.root, "01") is False
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("rel", ["docs/plan/PLAN.md", "docs/plan/phase-01-p01.md"])
 def test_roadmap_plan_md_and_phase_header(tmp_path: Path, lib: ModuleType, rel: str) -> None:
     repo = _basic(tmp_path)
@@ -609,6 +625,7 @@ def test_roadmap_plan_md_and_phase_header(tmp_path: Path, lib: ModuleType, rel: 
     assert lib.is_legacy_unchanged(repo.root, "roadmap") is False
 
 
+@pytest.mark.e2e
 def test_issue_spec_and_draft(lrepo: Repo, lib: ModuleType) -> None:
     _extend(lrepo)
     _sealed(lrepo)
@@ -716,6 +733,7 @@ def test_writes_never_follow_a_planted_temp_file(tmp_path: Path) -> None:
 # ── Codex review round 2 (codex_verdict_m0b_b1_decisions2.md) ────────────────
 
 
+@pytest.mark.e2e
 def test_a_rerun_on_an_invalid_json_removes_the_previous_review(tmp_path: Path) -> None:
     """D5: the old review goes before anything else can fail."""
     repo = _basic(tmp_path)
@@ -729,6 +747,7 @@ def test_a_rerun_on_an_invalid_json_removes_the_previous_review(tmp_path: Path) 
 MISSING_SPEC = "docs/plan/phase-01-p01/1.1.1-missing.md"
 
 
+@pytest.mark.e2e
 def test_a_declared_spec_absent_at_the_commit_keeps_its_path(
     tmp_path: Path, lib: ModuleType
 ) -> None:
@@ -769,6 +788,7 @@ def _edit_spec(repo: Repo, rel: str, old: str, new: str) -> None:
     _sync(repo)
 
 
+@pytest.mark.e2e
 def test_leaf_status_change_is_a_change(tmp_path: Path, lib: ModuleType) -> None:
     repo = _basic(tmp_path)
     _sealed(repo)
@@ -777,6 +797,7 @@ def test_leaf_status_change_is_a_change(tmp_path: Path, lib: ModuleType) -> None
     assert lib.is_legacy_unchanged(repo.root, "1.1.1") is False
 
 
+@pytest.mark.e2e
 def test_leaf_declared_files_change_is_a_change(tmp_path: Path, lib: ModuleType) -> None:
     repo = _basic(tmp_path)
     _sealed(repo)
@@ -872,6 +893,7 @@ VERDICTS = {
 }
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("item", list(REAPPROVALS))
 @pytest.mark.parametrize("which", ["review", "seal"])
 def test_plan_item_reapproved_with_same_content_is_a_change(

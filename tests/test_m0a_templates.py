@@ -168,6 +168,7 @@ def test_the_current_whole_base_is_the_shipped_template(tset: str) -> None:
 # ── fresh install records from the start ─────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     ("tset", "args"), [("templates", ["--lang", "python"]), ("templates-c", ["--c", "demo"])]
 )
@@ -187,6 +188,7 @@ def test_a_fresh_install_writes_the_record(tmp_path: Path, tset: str, args: list
 # ── first registration ───────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("tset", SETS)
 def test_a_current_project_without_record_only_gets_registered(tmp_path: Path, tset: str) -> None:
     root = _current_project(tmp_path, tset)
@@ -200,6 +202,7 @@ def test_a_current_project_without_record_only_gets_registered(tmp_path: Path, t
     assert _record(root)["set"] == tset
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "path",
     [
@@ -227,6 +230,7 @@ def test_pre_workflow_templates_register_as_fragment_absent(tmp_path: Path, path
         assert "harness/WORKFLOW.md" in res.stdout, rev
 
 
+@pytest.mark.e2e
 def test_an_absent_readme_is_registered_created_and_rolled_back(tmp_path: Path) -> None:
     root = _project(tmp_path)
     assert _apply(root, tmp_path).returncode == 0
@@ -237,6 +241,7 @@ def test_an_absent_readme_is_registered_created_and_rolled_back(tmp_path: Path) 
     assert not (root / README).exists()
 
 
+@pytest.mark.e2e
 def test_unknown_provenance_stops_first_registration(tmp_path: Path) -> None:
     root = _current_project(tmp_path)
     (root / README).write_text("# my own issues notes\n")
@@ -250,6 +255,7 @@ def test_unknown_provenance_stops_first_registration(tmp_path: Path) -> None:
 # ── whole: customised → 3-way stop ───────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_a_customised_whole_file_stops_with_a_three_way_diff(tmp_path: Path) -> None:
     root = _current_project(tmp_path)
     assert _apply(root, tmp_path).returncode == 0  # registered at the current version
@@ -265,6 +271,7 @@ def test_a_customised_whole_file_stops_with_a_three_way_diff(tmp_path: Path) -> 
 # ── fragments: project parts free, harness parts guarded ─────────────────────
 
 
+@pytest.mark.e2e
 def test_project_text_and_targets_never_stop_it(tmp_path: Path) -> None:
     root = _current_project(tmp_path)
     makefile = (root / "Makefile").read_text()
@@ -284,6 +291,7 @@ EDITS = {
 }
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("name", sorted(EDITS))
 def test_a_modified_fragment_after_registration_stops_without_duplicate(
     tmp_path: Path, name: str
@@ -301,6 +309,7 @@ def test_a_modified_fragment_after_registration_stops_without_duplicate(
     assert _files(root) == files
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("name", ["AGENTS.md", "Makefile"])
 def test_a_partial_signature_stops_first_registration(tmp_path: Path, name: str) -> None:
     root = _current_project(tmp_path)
@@ -313,6 +322,7 @@ def test_a_partial_signature_stops_first_registration(tmp_path: Path, name: str)
     assert _files(root) == files and not (root / ".harness").exists()
 
 
+@pytest.mark.e2e
 def test_a_fully_rewritten_import_is_the_documented_residual_limit(tmp_path: Path) -> None:
     root = _current_project(tmp_path)
     (root / "CLAUDE.md").write_text(

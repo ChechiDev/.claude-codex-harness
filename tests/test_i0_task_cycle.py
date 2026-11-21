@@ -17,6 +17,8 @@ import pytest
 from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, hook, spec
 from i0_projects import Installed, install_project
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 SPEC = f"docs/plan/phase-01-greetings/{SID}-greet.md"
 
 PY_ORACLE = (

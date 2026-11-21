@@ -16,6 +16,8 @@ from i0_legacy import BASELINE_SPEC, ORACLE, build_legacy, copy_legacy
 from i0_projects import Installed
 from test_m0b_inventory import Repo, _fake_codex, _sealed
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 STATUS = "feature_list.json"
 
 

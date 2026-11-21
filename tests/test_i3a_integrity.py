@@ -102,6 +102,7 @@ def test_per_skill_shape_warns_not_checkable(ready: Project) -> None:
 # ── settings.local.json ─────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "content",
     [
@@ -165,6 +166,7 @@ def test_absent_templates_record_ok(ready: Project) -> None:
 # ── Unchanged behaviour (characterization): check.sh base-file failures ─────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("rel", [".claude/agents", ".claude/codex"])
 @pytest.mark.parametrize("broken", [False, True])
 def test_missing_base_links_still_fail_check(

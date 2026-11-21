@@ -255,6 +255,7 @@ GATES = {
 # ── 1-3. The cleared failures: first run red, counterfactual green ───────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     ("gate", "mutate", "expected"),
     [
@@ -327,6 +328,7 @@ INDEPENDENT = {
 }
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("failure", sorted(INDEPENDENT))
 def test_independent_failure_keeps_the_counterfactual_red(tmp_path: Path, failure: str) -> None:
     project = _issue_project(tmp_path)
@@ -339,6 +341,7 @@ def test_independent_failure_keeps_the_counterfactual_red(tmp_path: Path, failur
     assert needle in cf_log
 
 
+@pytest.mark.e2e
 def test_other_targets_failures_keep_the_counterfactual_red(tmp_path: Path) -> None:
     """A seal mismatch and a plan-rule failure of phase 01 survive the issue's run."""
     project = _phase_project(tmp_path)
@@ -367,6 +370,7 @@ def _issue_changes_requested_pending(project: Installed) -> None:
 # ── 5. The variable only covers its target and never reaches a decision ──────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("other", ["issue:ISS-99", "phase:02", "roadmap", "phase:01", "bogus"])
 def test_the_variable_changes_nothing_for_another_target(tmp_path: Path, other: str) -> None:
     project = _issue_project(tmp_path)
@@ -377,6 +381,7 @@ def test_the_variable_changes_nothing_for_another_target(tmp_path: Path, other: 
     assert f"./harness/review_with_codex.sh issue {IID})" in res.stdout
 
 
+@pytest.mark.e2e
 def test_make_check_under_the_variable_labels_the_assumption(tmp_path: Path) -> None:
     project = _issue_project(tmp_path)
     _issue_changes_requested(project)
@@ -385,6 +390,7 @@ def test_make_check_under_the_variable_labels_the_assumption(tmp_path: Path) -> 
     assert _assumed_line(res.stdout, f"issue:{IID}"), res.stdout
 
 
+@pytest.mark.e2e
 def test_the_gates_first_run_ignores_an_inherited_variable(tmp_path: Path) -> None:
     project = _issue_project(tmp_path)
     _issue_changes_requested(project)
@@ -395,6 +401,7 @@ def test_the_gates_first_run_ignores_an_inherited_variable(tmp_path: Path) -> No
     assert not _assumed_line(log, IID)
 
 
+@pytest.mark.e2e
 def test_the_close_check_ignores_an_inherited_variable(tmp_path: Path) -> None:
     project = _issue_project(tmp_path)
     _issue_changes_requested(project)
@@ -410,6 +417,7 @@ def test_the_close_check_ignores_an_inherited_variable(tmp_path: Path) -> None:
     assert _sh(project, "git", "rev-parse", "HEAD") == head
 
 
+@pytest.mark.e2e
 def test_a_fresh_stop_ignores_an_inherited_variable(tmp_path: Path) -> None:
     project = _issue_project(tmp_path)
     _issue_changes_requested(project)
@@ -424,6 +432,7 @@ def test_a_fresh_stop_ignores_an_inherited_variable(tmp_path: Path) -> None:
     assert "no green full check for this state" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -447,6 +456,7 @@ def test_the_bash_guard_blocks_commands_that_spell_the_variable(tmp_path: Path, 
 # ── 6. Other modes unchanged; HARNESS_CHECK_CMD gets no counterfactual run ───
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("mode", ["plan", "code", "doc"])
 def test_subtask_gates_get_no_counterfactual_run(tmp_path: Path, mode: str) -> None:
     project = _issue_project(tmp_path)
@@ -456,6 +466,7 @@ def test_subtask_gates_get_no_counterfactual_run(tmp_path: Path, mode: str) -> N
     assert VAR not in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_issue_draft_gets_no_counterfactual_run(tmp_path: Path) -> None:
     project = _issue_project(tmp_path)
     _issue_seal_mismatch(project)
@@ -464,6 +475,7 @@ def test_issue_draft_gets_no_counterfactual_run(tmp_path: Path) -> None:
     assert VAR not in prompt
 
 
+@pytest.mark.e2e
 def test_a_check_cmd_override_gets_no_counterfactual_run(tmp_path: Path) -> None:
     project = _issue_project(tmp_path)
     _issue_changes_requested(project)
@@ -472,6 +484,7 @@ def test_a_check_cmd_override_gets_no_counterfactual_run(tmp_path: Path) -> None
     assert VAR not in prompt
 
 
+@pytest.mark.e2e
 def test_a_green_first_run_needs_no_counterfactual_run(tmp_path: Path) -> None:
     project = _issue_project(tmp_path)
     prompt = _prompt(project, tmp_path, "issue", IID)
@@ -509,6 +522,7 @@ def test_reviewer_keeps_never_approve_red_for_the_other_modes() -> None:
 # ── 8. make check without the variable is unchanged ──────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "mutate", [_issue_seal_mismatch, _issue_changes_requested], ids=["seal", "cr"]
 )

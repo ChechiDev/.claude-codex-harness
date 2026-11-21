@@ -141,6 +141,7 @@ def _assumed_names(log: str, files: set[str]) -> bool:
 # ── AC1. The reproduced sequence: third run green ────────────────────────────
 
 
+@pytest.mark.e2e
 def test_repro_third_run_green(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     prompt = _prompt(project, tmp_path, "issue", IID)
@@ -160,6 +161,7 @@ def test_repro_third_run_green(tmp_path: Path) -> None:
 # ── AC2. Only the subtask's own acceptance tests red ─────────────────────────
 
 
+@pytest.mark.e2e
 def test_own_acceptance_only_third_run_green(tmp_path: Path) -> None:
     project = _inflight(tmp_path)
     _issue_seal_mismatch(project)
@@ -171,6 +173,7 @@ def test_own_acceptance_only_third_run_green(tmp_path: Path) -> None:
     assert rc3 == 0, log3
 
 
+@pytest.mark.e2e
 def test_own_acceptance_with_a_collection_error_third_run_green(tmp_path: Path) -> None:
     """TDD red often means a missing name: pytest fails to collect the file, which
     --deselect would not avoid; the third run ignores the file instead."""
@@ -195,6 +198,7 @@ def test_own_acceptance_with_a_collection_error_third_run_green(tmp_path: Path) 
 # ── AC3. Still blocked: any failure outside T ────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("failure", sorted(INDEPENDENT))
 def test_independent_failure_keeps_the_third_run_red(tmp_path: Path, failure: str) -> None:
     project = _repro(tmp_path)
@@ -208,6 +212,7 @@ def test_independent_failure_keeps_the_third_run_red(tmp_path: Path, failure: st
     assert needle in log3
 
 
+@pytest.mark.e2e
 def test_a_done_oracle_not_in_migrates_keeps_the_third_run_red(tmp_path: Path) -> None:
     project = _inflight(tmp_path)
     _break_oracle(project)
@@ -249,6 +254,7 @@ def _code_approved(project: Installed) -> None:
     _verdict(project, f"review_{LEAF2}.md", "APPROVED")
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("mutate", [_not_plan_approved, _code_approved], ids=["plan-cr", "code-ok"])
 def test_t_excludes_subtasks_out_of_the_open_window(
     tmp_path: Path, mutate: Callable[[Installed], None]
@@ -261,6 +267,7 @@ def test_t_excludes_subtasks_out_of_the_open_window(
     assert rc3 != 0 and OWN in log3, log3
 
 
+@pytest.mark.e2e
 def test_t_excludes_subtasks_of_other_issues(tmp_path: Path) -> None:
     project = _inflight(tmp_path)
     other, leaf = "ISS-15", "ISS-15.1"
@@ -292,6 +299,7 @@ INHERITED = {
 }
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("var", sorted(INHERITED))
 def test_the_gates_first_and_second_runs_ignore_inherited_variables(
     tmp_path: Path, var: str
@@ -311,6 +319,7 @@ def _tests_only_red(tmp: Path) -> Installed:
     return project
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("var", sorted(INHERITED))
 def test_the_close_check_ignores_inherited_variables(tmp_path: Path, var: str) -> None:
     project = _tests_only_red(tmp_path)
@@ -326,6 +335,7 @@ def test_the_close_check_ignores_inherited_variables(tmp_path: Path, var: str) -
     assert _sh(project, "git", "rev-parse", "HEAD") == head
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("var", sorted(INHERITED))
 def test_a_fresh_stop_ignores_inherited_variables(tmp_path: Path, var: str) -> None:
     project = _tests_only_red(tmp_path)
@@ -341,6 +351,7 @@ def test_a_fresh_stop_ignores_inherited_variables(tmp_path: Path, var: str) -> N
     assert "FAILED" not in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_make_check_does_not_tolerate_by_itself(tmp_path: Path) -> None:
     """HARNESS_EXPECT_RED is a label: make check excludes nothing because of it."""
     project = _tests_only_red(tmp_path)
@@ -350,6 +361,7 @@ def test_make_check_does_not_tolerate_by_itself(tmp_path: Path) -> None:
     assert f"FAILED {ORACLE1}::test_ac1" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -370,6 +382,7 @@ def test_the_bash_guard_blocks_commands_that_spell_the_variable(tmp_path: Path, 
     assert EXPECT in res.stderr
 
 
+@pytest.mark.e2e
 def test_a_check_cmd_override_gets_no_third_run(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     prompt = _prompt(project, tmp_path, "issue", IID, HARNESS_CHECK_CMD="make check")
@@ -388,6 +401,7 @@ TWO_TESTS_BODY = (
 )
 
 
+@pytest.mark.e2e
 def test_the_prompt_requires_a_full_accounting_of_every_file_in_t(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     prompt = _prompt(project, tmp_path, "issue", IID)
@@ -418,6 +432,7 @@ printf '# Review\n\n**Verdict:** CHANGES_REQUESTED\n' > "progress/issue_review_$
 """
 
 
+@pytest.mark.e2e
 def test_a_rejection_records_nothing_and_seals_nothing(tmp_path: Path) -> None:
     """A file of T with two tests, one red for the declared change and one for an
     unrelated regression: the prompt asks for both, the rejection seals nothing."""
@@ -469,6 +484,7 @@ def _changed(project: Installed) -> str:
 INELIGIBLE = {"missing": _missing, "unsealed": _unsealed, "changed": _changed}
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("with_valid", [False, True], ids=["alone", "with-valid"])
 @pytest.mark.parametrize("kind", sorted(INELIGIBLE))
 def test_an_ineligible_entry_gets_no_third_run(tmp_path: Path, kind: str, with_valid: bool) -> None:
@@ -484,6 +500,7 @@ def test_an_ineligible_entry_gets_no_third_run(tmp_path: Path, kind: str, with_v
     assert named, prompt
 
 
+@pytest.mark.e2e
 def test_a_path_the_gate_cannot_exclude_exactly_gets_no_third_run(tmp_path: Path) -> None:
     """A path with a space would split in PYTEST_ADDOPTS: fail closed, no third run."""
     project = _inflight(tmp_path)
@@ -499,6 +516,7 @@ def test_a_path_the_gate_cannot_exclude_exactly_gets_no_third_run(tmp_path: Path
     assert any(spaced in ln and "exactly" in ln for ln in prompt.splitlines()), prompt
 
 
+@pytest.mark.e2e
 def test_an_inherited_makefiles_never_reaches_the_python_first_run(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     extra = tmp_path / "inherited.mk"
@@ -511,6 +529,7 @@ def test_an_inherited_makefiles_never_reaches_the_python_first_run(tmp_path: Pat
         assert f"FAILED {ORACLE1}::test_ac1" in log, log
 
 
+@pytest.mark.e2e
 def test_an_inherited_bash_env_never_reaches_the_first_run(tmp_path: Path) -> None:
     """BASH_ENV runs in the check's shell after the filter: it is dropped too."""
     project = _repro(tmp_path)
@@ -524,6 +543,7 @@ def test_an_inherited_bash_env_never_reaches_the_first_run(tmp_path: Path) -> No
         assert f"FAILED {ORACLE1}::test_ac1" in log, log
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("name", ["GNUmakefile", "makefile"])
 def test_c_another_makefile_name_gets_no_third_run(tmp_path: Path, name: str) -> None:
     project = _c_inflight(tmp_path, "template")
@@ -533,6 +553,7 @@ def test_c_another_makefile_name_gets_no_third_run(tmp_path: Path, name: str) ->
     _no_third(prompt)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "extra",
     [
@@ -552,6 +573,7 @@ def test_c_an_unverified_makefile_gets_no_third_run(tmp_path: Path, extra: str) 
     _no_third(prompt)
 
 
+@pytest.mark.e2e
 def test_an_inherited_env_function_never_reaches_the_first_run(tmp_path: Path) -> None:
     """An exported `env` function that drops nothing: the gate runs an external env."""
     project = _repro(tmp_path)
@@ -565,6 +587,7 @@ def test_an_inherited_env_function_never_reaches_the_first_run(tmp_path: Path) -
         assert f"FAILED {ORACLE1}::test_ac1" in log, log
 
 
+@pytest.mark.e2e
 def test_c_a_test_list_conditional_gets_no_third_run(tmp_path: Path) -> None:
     """One global TESTS :=, but verify depends on it beyond the list itself."""
     project = _c_inflight(tmp_path, "template")
@@ -579,6 +602,7 @@ def test_c_a_test_list_conditional_gets_no_third_run(tmp_path: Path) -> None:
     _no_third(prompt)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -598,6 +622,7 @@ def test_the_bash_guard_blocks_exported_functions(tmp_path: Path, cmd: str) -> N
     assert "exporting shell functions" in res.stderr
 
 
+@pytest.mark.e2e
 def test_an_inherited_read_function_never_reaches_the_first_run(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     env = _gate_env(
@@ -611,6 +636,7 @@ def test_an_inherited_read_function_never_reaches_the_first_run(tmp_path: Path) 
         assert f"FAILED {ORACLE1}::test_ac1" in log, log
 
 
+@pytest.mark.e2e
 def test_c_a_shell_condition_on_the_test_list_gets_no_third_run(tmp_path: Path) -> None:
     """The T path appears outside the expanded list: the comparison fails closed."""
     project = _c_inflight(tmp_path, "template")
@@ -624,6 +650,7 @@ def test_c_a_shell_condition_on_the_test_list_gets_no_third_run(tmp_path: Path) 
     _no_third(_prompt(project, tmp_path, "issue", IID))
 
 
+@pytest.mark.e2e
 def test_the_bash_guard_blocks_bash_env(tmp_path: Path) -> None:
     project = install_project(tmp_path, "python")
     env = {**project.env, "CLAUDE_PROJECT_DIR": str(project.root)}
@@ -636,6 +663,7 @@ def test_the_bash_guard_blocks_bash_env(tmp_path: Path) -> None:
     assert "BASH_ENV" in res.stderr
 
 
+@pytest.mark.e2e
 def test_c_a_condition_on_the_whole_test_list_gets_no_third_run(tmp_path: Path) -> None:
     """A shell condition on "$(TESTS)" itself: only the whitelisted uses pass."""
     project = _c_inflight(tmp_path, "template")
@@ -648,6 +676,7 @@ def test_c_a_condition_on_the_whole_test_list_gets_no_third_run(tmp_path: Path) 
     _no_third(_prompt(project, tmp_path, "issue", IID))
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     ("old", "new"),
     [
@@ -666,6 +695,7 @@ def test_c_other_uses_of_the_test_list_get_no_third_run(tmp_path: Path, old: str
     _no_third(_prompt(project, tmp_path, "issue", IID))
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     ("rel", "text"),
     [
@@ -684,6 +714,7 @@ def test_an_uncommitted_test_configuration_gets_no_third_run(
     _no_third(_prompt(project, tmp_path, "issue", IID))
 
 
+@pytest.mark.e2e
 def test_an_ignored_conftest_gets_no_third_run(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     with (project.root / ".gitignore").open("a") as fh:
@@ -693,6 +724,7 @@ def test_an_ignored_conftest_gets_no_third_run(tmp_path: Path) -> None:
     _no_third(_prompt(project, tmp_path, "issue", IID))
 
 
+@pytest.mark.e2e
 def test_a_conftest_inside_the_venv_keeps_the_third_run(tmp_path: Path) -> None:
     """Third-party packages may ship a conftest.py: .venv is not test configuration."""
     project = _repro(tmp_path)
@@ -702,6 +734,7 @@ def test_a_conftest_inside_the_venv_keeps_the_third_run(tmp_path: Path) -> None:
     assert rc3 == 0, log3
 
 
+@pytest.mark.e2e
 def test_an_assume_unchanged_makefile_gets_no_third_run(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     _sh(project, "git", "update-index", "--assume-unchanged", "Makefile")
@@ -710,6 +743,7 @@ def test_an_assume_unchanged_makefile_gets_no_third_run(tmp_path: Path) -> None:
     _no_third(_prompt(project, tmp_path, "issue", IID))
 
 
+@pytest.mark.e2e
 def test_c_only_tolerated_tests_still_get_a_third_run(tmp_path: Path) -> None:
     """With every test in T the reduced list is empty: `[ -z "" ]` is still allowed."""
     project = _c_inflight(tmp_path, "template")
@@ -723,6 +757,7 @@ def test_c_only_tolerated_tests_still_get_a_third_run(tmp_path: Path) -> None:
 # ── AC6. Other prompts unchanged ─────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("mode", ["plan", "code", "doc"])
 def test_subtask_gates_get_no_third_run(tmp_path: Path, mode: str) -> None:
     project = _repro(tmp_path)
@@ -730,12 +765,14 @@ def test_subtask_gates_get_no_third_run(tmp_path: Path, mode: str) -> None:
     assert EXPECT not in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_issue_draft_gets_no_third_run(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     _write(project, "progress/issue_draft.md", "---\ntitle: t\n---\n## Problem\np.\n")
     assert EXPECT not in _prompt(project, tmp_path, "issue-draft")
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("gate", [("phase", "01"), ("roadmap",)], ids=["phase", "roadmap"])
 def test_phase_and_roadmap_get_no_third_run(tmp_path: Path, gate: tuple[str, ...]) -> None:
     project = _phase_project(tmp_path)
@@ -855,6 +892,7 @@ def _c_inflight(tmp: Path, shape: str) -> Installed:
     return project
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("shape", ["template", "codexion"])
 def test_c_third_run_overrides_tests_without_a_makefile_change(tmp_path: Path, shape: str) -> None:
     project = _c_inflight(tmp_path, shape)
@@ -889,6 +927,7 @@ def _c_inherited(tmp: Path, var: str) -> str:
     return str(extra)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("var", sorted(C_INHERITED))
 def test_c_first_run_ignores_an_inherited_tests_override(tmp_path: Path, var: str) -> None:
     project = _c_inflight(tmp_path, "template")
@@ -898,6 +937,7 @@ def test_c_first_run_ignores_an_inherited_tests_override(tmp_path: Path, var: st
         assert C_ORACLE1 in log or C_OWN in log, log
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("var", sorted(C_INHERITED))
 def test_c_fresh_stop_ignores_an_inherited_tests_override(tmp_path: Path, var: str) -> None:
     project = _c_inflight(tmp_path, "template")
@@ -915,6 +955,7 @@ def test_c_fresh_stop_ignores_an_inherited_tests_override(tmp_path: Path, var: s
     assert C_ORACLE1 not in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_c_prompt_requires_the_full_accounting_of_a_file_whose_log_stops_early(
     tmp_path: Path,
 ) -> None:
@@ -930,6 +971,7 @@ def test_c_prompt_requires_the_full_accounting_of_a_file_whose_log_stops_early(
 # ── AC8. make check without the variables is unchanged ───────────────────────
 
 
+@pytest.mark.e2e
 def test_make_check_without_the_variables_is_unchanged(tmp_path: Path) -> None:
     project = _repro(tmp_path)
     res = _check(project)

@@ -8,6 +8,8 @@ import pytest
 from conftest import Project, bash_payload, write_payload
 from i3a_helpers import BLOCKED, git
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 
 @pytest.fixture
 def linked(project: Project, tmp_path: Path) -> Project:

@@ -110,6 +110,7 @@ def test_task_flow_phase_seal_holds_no_specs(plan: Plan) -> None:
     assert res.returncode == 0, res.stdout
 
 
+@pytest.mark.e2e
 def test_task_seal_needs_task_approved(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1")
@@ -118,6 +119,7 @@ def test_task_seal_needs_task_approved(plan: Plan) -> None:
     assert "TASK_APPROVED" in _out(res)
 
 
+@pytest.mark.e2e
 def test_task_seal_protects_its_specs(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1")
@@ -135,6 +137,7 @@ def test_task_seal_protects_its_specs(plan: Plan) -> None:
     assert "review_with_codex.sh task 1.1" in res.stdout
 
 
+@pytest.mark.e2e
 def test_spec_added_to_an_approved_task_fails(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1")
@@ -145,6 +148,7 @@ def test_spec_added_to_an_approved_task_fails(plan: Plan) -> None:
     assert f"{SPEC_DIR}/1.1.2-s.md added after task 1.1 was approved" in res.stdout
 
 
+@pytest.mark.e2e
 def test_plan_gate_reseals_its_spec_in_the_task_seal(plan: Plan) -> None:
     import _plan_seal
 
@@ -175,6 +179,7 @@ def test_legacy_phase_keeps_its_whole_seal(plan: Plan) -> None:
 # ── legacy record ────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_make_plan_records_the_done_tasks_of_a_legacy_phase_once(plan: Plan) -> None:
     _legacy(plan, done=("1.1.1",))
     record = json.loads((plan.root / LEGACY).read_text())
@@ -201,6 +206,7 @@ def test_editing_the_legacy_record_fails_integrity(plan: Plan) -> None:
     assert f"{LEGACY} changed after phase 01 was approved" in res.stdout
 
 
+@pytest.mark.e2e
 def test_deleting_the_legacy_record_fails_and_is_not_recreated(plan: Plan) -> None:
     _legacy(plan, done=("1.1.1",))
     (plan.root / LEGACY).unlink()
@@ -251,6 +257,7 @@ def test_approved_unsealed_phase_passes_as_before(plan: Plan) -> None:
     assert res.returncode == 0, res.stdout
 
 
+@pytest.mark.e2e
 def test_next_task_needs_the_previous_task_close(plan: Plan) -> None:
     _task_flow(plan, "1.1", "1.2")
     _spec(plan, "1.1.1", "done")
@@ -265,6 +272,7 @@ def test_next_task_needs_the_previous_task_close(plan: Plan) -> None:
     assert res.returncode == 0, res.stdout
 
 
+@pytest.mark.e2e
 def test_legacy_record_exempts_only_the_tasks_done_at_detection(plan: Plan) -> None:
     _legacy(plan, done=("1.1.1",))
     _set_status(plan, "1.2.1", "in_progress")
@@ -276,6 +284,7 @@ def test_legacy_record_exempts_only_the_tasks_done_at_detection(plan: Plan) -> N
     assert "task 1.3 started but task 1.2 is not TASK_CLOSE_APPROVED" in res.stdout
 
 
+@pytest.mark.e2e
 def test_next_phase_needs_the_phase_close(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1", "done")
@@ -302,6 +311,7 @@ def test_legacy_phase_done_at_detection_needs_no_phase_close(plan: Plan) -> None
 # ── readiness ────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_task_ready(plan: Plan) -> None:
     _task_flow(plan, "1.1", "1.2")
     res = plan.run_py("_harness.py", "task-ready", "1.1")
@@ -320,6 +330,7 @@ def test_task_ready_rejects_a_legacy_phase(plan: Plan) -> None:
     assert "broken down whole" in res.stdout
 
 
+@pytest.mark.e2e
 def test_task_close_ready(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1", "done")
@@ -338,6 +349,7 @@ def test_task_close_ready_rejects_a_task_exempt_by_the_legacy_record(plan: Plan)
     assert LEGACY in res.stdout
 
 
+@pytest.mark.e2e
 def test_phase_close_ready(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1", "done")
@@ -348,6 +360,7 @@ def test_phase_close_ready(plan: Plan) -> None:
     assert plan.run_py("_harness.py", "phase-close-ready", "01").returncode == 0
 
 
+@pytest.mark.e2e
 def test_close_commits_lists_the_task_commits(plan: Plan) -> None:
     _task_flow(plan, "1.1", "1.2")
     root = plan.root
@@ -405,6 +418,7 @@ def test_task_gate_token() -> None:
 # ── make status ──────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_status_next_walks_the_task_flow(plan: Plan) -> None:
     plan.phase("01", "1.1", "1.2").phase("02").approve_roadmap().sync()
     assert "phase gate: ./harness/review_with_codex.sh phase 01" in _next(plan)
@@ -430,6 +444,7 @@ def test_status_next_walks_the_task_flow(plan: Plan) -> None:
     assert "break down phase 02 into tasks" in _next(plan)
 
 
+@pytest.mark.e2e
 def test_status_shows_the_task_verdicts(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1", "done")
@@ -491,6 +506,7 @@ def _runs(counter: Path) -> int:
     return len(counter.read_text().splitlines()) if counter.exists() else 0
 
 
+@pytest.mark.e2e
 def test_task_close_reuses_a_matching_green_record(plan: Plan, tmp_path: Path) -> None:
     counter = tmp_path.parent / f"{tmp_path.name}-runs.txt"
     _gate_project(plan, counter)
@@ -503,6 +519,7 @@ def test_task_close_reuses_a_matching_green_record(plan: Plan, tmp_path: Path) -
     assert "reused the green record" in second.stdout
 
 
+@pytest.mark.e2e
 def test_task_close_prompt_reads_only_specs_reports_and_range(plan: Plan, tmp_path: Path) -> None:
     _gate_project(plan, tmp_path.parent / f"{tmp_path.name}-runs.txt")
     res = _gate(plan, "task-close", "1.1")
@@ -515,6 +532,7 @@ def test_task_close_prompt_reads_only_specs_reports_and_range(plan: Plan, tmp_pa
     assert "progress/task_close_1.1.md" in out
 
 
+@pytest.mark.e2e
 def test_task_close_gate_refuses_an_unfinished_task(plan: Plan, tmp_path: Path) -> None:
     _gate_project(plan, tmp_path.parent / f"{tmp_path.name}-runs.txt")
     _spec(plan, "1.1.2")
@@ -523,6 +541,7 @@ def test_task_close_gate_refuses_an_unfinished_task(plan: Plan, tmp_path: Path) 
     assert "1.1.2 not done" in _out(res)
 
 
+@pytest.mark.e2e
 def test_task_gate_prints_its_seal_step(plan: Plan, tmp_path: Path) -> None:
     _gate_project(plan, tmp_path.parent / f"{tmp_path.name}-runs.txt")
     res = _gate(plan, "task", "1.1")
@@ -531,6 +550,7 @@ def test_task_gate_prints_its_seal_step(plan: Plan, tmp_path: Path) -> None:
     assert "review_with_codex.sh seal task 1.1" in res.stdout
 
 
+@pytest.mark.e2e
 def test_phase_close_gate_needs_every_task_close(plan: Plan, tmp_path: Path) -> None:
     _gate_project(plan, tmp_path.parent / f"{tmp_path.name}-runs.txt")
     res = _gate(plan, "phase-close", "01")
@@ -578,6 +598,7 @@ def test_cost_is_documented() -> None:
     assert "0 extra full checks" in text
 
 
+@pytest.mark.e2e
 def test_deleting_a_task_seal_fails_integrity(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1")
@@ -728,6 +749,7 @@ def test_phase_gate_accepts_a_tasks_only_phase(plan: Plan) -> None:
     assert res.returncode == 1
 
 
+@pytest.mark.e2e
 def test_deleting_a_task_seal_and_all_its_specs_fails(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1")
@@ -749,6 +771,7 @@ def test_matrix_row_without_a_leading_pipe_counts() -> None:
         _verdict.checked_token("task-close", "v.md", text.encode())
 
 
+@pytest.mark.e2e
 def test_a_subtask_without_close_commit_is_a_gap(plan: Plan) -> None:
     import _verdict
 
@@ -790,6 +813,7 @@ def test_close_manifest_follows_the_plan_order_not_the_ids(tmp_path: Path) -> No
     assert _close_scope.check(root, "3.1.1", leaf).disallowed == ("progress/task_close_1.1.md",)
 
 
+@pytest.mark.e2e
 def test_a_tag_in_the_commit_body_is_not_a_close_commit(plan: Plan) -> None:
     _task_flow(plan, "1.1")
     _spec(plan, "1.1.1", "done")
@@ -804,6 +828,7 @@ def test_a_tag_in_the_commit_body_is_not_a_close_commit(plan: Plan) -> None:
     assert plan.run_py("_harness.py", "close-commits", "1.1").stdout.split() == []
 
 
+@pytest.mark.e2e
 def test_status_names_the_first_task_close_still_missing(plan: Plan) -> None:
     _legacy(plan, done=("1.1.1",))
     _set_status(plan, "1.2.1", "done")

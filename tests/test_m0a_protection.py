@@ -105,6 +105,7 @@ def _upgrade() -> ModuleType:
 # ── backups out of git, record in git ────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_a_fresh_install_ignores_backups_and_commits_the_record(tmp_path: Path) -> None:
     dest = tmp_path / "fresh"
     res = _install(dest, tmp_path, "--lang", "python")
@@ -115,6 +116,7 @@ def test_a_fresh_install_ignores_backups_and_commits_the_record(tmp_path: Path) 
     assert _ignored(dest, ".harness/migrations/x/manifest.json", tmp_path)
 
 
+@pytest.mark.e2e
 def test_an_existing_project_ignores_backups_through_info_exclude(tmp_path: Path) -> None:
     root = _existing_repo(tmp_path)
     exclude = root / ".git/info/exclude"
@@ -134,6 +136,7 @@ def test_an_existing_project_ignores_backups_through_info_exclude(tmp_path: Path
     assert not _ignored(root, ".harness/templates.json", tmp_path)
 
 
+@pytest.mark.e2e
 def test_the_exclude_entry_is_added_once(tmp_path: Path) -> None:
     root = _existing_repo(tmp_path)
     assert _install(root, tmp_path, "--migrate", "--apply", "--yes").returncode == 0
@@ -143,6 +146,7 @@ def test_the_exclude_entry_is_added_once(tmp_path: Path) -> None:
     assert lines.count("/.harness/migrations/") == 1
 
 
+@pytest.mark.e2e
 def test_a_monorepo_subdir_gets_an_anchored_entry(tmp_path: Path) -> None:
     mono = tmp_path / "mono"
     mono.mkdir()
@@ -160,6 +164,7 @@ def test_a_monorepo_subdir_gets_an_anchored_entry(tmp_path: Path) -> None:
     assert not (root / ".git").exists()
 
 
+@pytest.mark.e2e
 def test_a_worktree_project_uses_the_shared_exclude(tmp_path: Path) -> None:
     main = _existing_repo(tmp_path)
     wt = tmp_path / "wt"
@@ -177,6 +182,7 @@ def test_a_worktree_project_uses_the_shared_exclude(tmp_path: Path) -> None:
     assert "/.harness/migrations/" in exclude.read_text().splitlines()
 
 
+@pytest.mark.e2e
 def test_a_project_without_git_writes_no_ignore_and_says_what_to_do(tmp_path: Path) -> None:
     root = tmp_path / "nogit"
     _files_and_links(root, tmp_path)
@@ -187,6 +193,7 @@ def test_a_project_without_git_writes_no_ignore_and_says_what_to_do(tmp_path: Pa
     assert not (root / ".git").exists() and not (root / ".gitignore").exists()
 
 
+@pytest.mark.e2e
 def test_git_add_stages_the_record_and_never_a_backup(tmp_path: Path) -> None:
     root = _existing_repo(tmp_path)
     assert _install(root, tmp_path, "--migrate", "--apply", "--yes").returncode == 0
@@ -196,6 +203,7 @@ def test_git_add_stages_the_record_and_never_a_backup(tmp_path: Path) -> None:
     assert not [p for p in staged if p.startswith(".harness/migrations/")]
 
 
+@pytest.mark.e2e
 def test_rollback_keeps_the_exclusion(tmp_path: Path) -> None:
     root = _existing_repo(tmp_path)
     assert _install(root, tmp_path, "--migrate", "--apply", "--yes").returncode == 0
@@ -208,6 +216,7 @@ def test_rollback_keeps_the_exclusion(tmp_path: Path) -> None:
 # ── the record is validated when read ────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "content",
     [
@@ -253,6 +262,7 @@ def _registered(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.mark.e2e
 def test_level_at_the_required_one_is_quiet(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -261,6 +271,7 @@ def test_level_at_the_required_one_is_quiet(
     assert "WARN" not in capsys.readouterr().out
 
 
+@pytest.mark.e2e
 def test_level_below_the_required_one_warns_and_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -280,6 +291,7 @@ def test_no_record_warns_and_passes(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert "WARN" in out and "--migrate" in out
 
 
+@pytest.mark.e2e
 def test_make_check_reports_the_level(tmp_path: Path) -> None:
     root = _existing_repo(tmp_path)  # no record yet
     env = {**_env(tmp_path), "CLAUDE_PROJECT_DIR": str(root)}

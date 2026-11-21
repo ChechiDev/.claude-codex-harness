@@ -175,6 +175,7 @@ def test_queue_rejects_an_unknown_priority(repo: Repo) -> None:
 # ── start: claim ─────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_start_claims_the_issue(repo: Repo) -> None:
     res = repo.issue("start", "14")
     assert res.returncode == 0, res.stdout + res.stderr
@@ -211,6 +212,7 @@ def test_start_refuses_an_issue_someone_else_holds(repo: Repo) -> None:
     assert "already in progress (bob)" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_second_claimant_loses_the_race_on_the_tag(repo: Repo, tmp_path: Path) -> None:
     # alice's tag lands but her GitHub update fails: GitHub still looks unclaimed
     res = repo.issue("start", "14", FAKE_GH_FAIL_EDIT="1")
@@ -226,6 +228,7 @@ def test_second_claimant_loses_the_race_on_the_tag(repo: Repo, tmp_path: Path) -
     assert bob.git("branch", "--show-current") == "main"
 
 
+@pytest.mark.e2e
 def test_start_retries_only_the_missing_steps(repo: Repo) -> None:
     assert repo.issue("start", "14", FAKE_GH_FAIL_EDIT="1").returncode == 1
     tag = repo.remote_tag()
@@ -247,6 +250,7 @@ def test_next_waits_for_an_open_task(repo: Repo) -> None:
     assert not repo.remote_tag()
 
 
+@pytest.mark.e2e
 def test_next_starts_once_the_task_is_merged(repo: Repo) -> None:
     _open_task(repo)
     repo.git("push", "-q", "origin", f"{TASK_BRANCH}:main")
@@ -255,6 +259,7 @@ def test_next_starts_once_the_task_is_merged(repo: Repo) -> None:
     assert res.returncode == 0, res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_a_squash_merge_closes_the_task(repo: Repo) -> None:
     _open_task(repo)
     repo.git("switch", "-q", "main")
@@ -264,6 +269,7 @@ def test_a_squash_merge_closes_the_task(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
 
 
+@pytest.mark.e2e
 def test_a_pr_merged_into_main_at_the_tip_closes_the_task(repo: Repo) -> None:
     tip = _open_task(repo)
     repo.git("switch", "-q", "main")
@@ -337,6 +343,7 @@ def test_start_refuses_an_in_progress_leaf_committed_on_a_local_branch(repo: Rep
 # ── release ──────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_release_gives_the_issue_back(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     res = repo.issue("release", "14")
@@ -350,6 +357,7 @@ def test_release_gives_the_issue_back(repo: Repo) -> None:
     assert not (repo.root / HEADER).exists()
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("edit", ["header", "spec"])
 def test_release_refuses_to_lose_work(repo: Repo, edit: str) -> None:
     assert repo.issue("start", "14").returncode == 0
@@ -366,6 +374,7 @@ def test_release_refuses_to_lose_work(repo: Repo, edit: str) -> None:
     assert repo.git("branch", "--show-current") == ISSUE_BRANCH
 
 
+@pytest.mark.e2e
 def test_release_interrupted_after_the_tag_is_finished_by_a_rerun(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     claim_file = repo.root / repo.git("rev-parse", "--git-path", "harness-claim-ISS-14")
@@ -469,6 +478,7 @@ def test_publish_creates_the_approved_draft(repo: Repo) -> None:
     assert not (repo.root / "progress/issue_draft.md").exists()
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     ("text", "verdict", "seal", "error"),
     [
@@ -536,6 +546,7 @@ def test_an_unreachable_origin_keeps_the_claim(repo: Repo) -> None:
     assert _claim(repo)["token"] == token
 
 
+@pytest.mark.e2e
 def test_start_interrupted_after_the_branch_is_resumed(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     claim = _claim(repo)
@@ -559,6 +570,7 @@ def test_start_refuses_an_untracked_file_in_the_way(repo: Repo) -> None:
     assert not repo.remote_tag()
 
 
+@pytest.mark.e2e
 def test_release_failing_on_github_is_finished_by_a_rerun(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     res = repo.issue("release", "14", FAKE_GH_FAIL_EDIT="1")
@@ -572,6 +584,7 @@ def test_release_failing_on_github_is_finished_by_a_rerun(repo: Repo) -> None:
     assert not repo.remote_tag()
 
 
+@pytest.mark.e2e
 def test_release_rerun_completes_the_missing_steps_even_without_the_tag(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     claim = _claim(repo)
@@ -611,6 +624,7 @@ def test_resume_refuses_an_in_progress_leaf_elsewhere(repo: Repo) -> None:
     assert "1.1.1 on wip" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_a_squash_merge_with_spaces_in_file_names_closes_the_task(repo: Repo) -> None:
     repo.git("switch", "-q", "-c", TASK_BRANCH)
     repo.commit("src/a b.py", "a = 1\n")
@@ -639,6 +653,7 @@ def test_pr_evidence_for_only_one_of_two_divergent_tips_keeps_the_task_open(repo
 # ── Codex review of increment 6, round 2 ─────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_release_rechecks_for_work_before_a_retried_branch_deletion(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     claim = _claim(repo)
@@ -651,6 +666,7 @@ def test_release_rechecks_for_work_before_a_retried_branch_deletion(repo: Repo) 
     assert "written meanwhile" in (repo.root / HEADER).read_text()
 
 
+@pytest.mark.e2e
 def test_release_clears_a_staged_header(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     repo.git("add", HEADER)
@@ -669,6 +685,7 @@ def test_start_refuses_a_pre_existing_issue_branch(repo: Repo) -> None:
     assert repo.git("branch", "--list", ISSUE_BRANCH)  # untouched
 
 
+@pytest.mark.e2e
 def test_start_after_an_unknown_push_outcome_keeps_its_claim(repo: Repo) -> None:
     assert repo.issue("start", "14", FAKE_GH_FAIL_EDIT="1").returncode == 1
     claim = _claim(repo)
@@ -699,6 +716,7 @@ def test_a_deleted_unmerged_task_branch_is_abandoned_work(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
 
 
+@pytest.mark.e2e
 def test_a_branch_created_by_someone_else_meanwhile_is_never_adopted(repo: Repo) -> None:
     assert repo.issue("start", "14", FAKE_GH_FAIL_EDIT="1").returncode == 1
     claim = _claim(repo)
@@ -712,6 +730,7 @@ def test_a_branch_created_by_someone_else_meanwhile_is_never_adopted(repo: Repo)
     assert repo.git("branch", "--list", ISSUE_BRANCH)  # left intact
 
 
+@pytest.mark.e2e
 def test_the_issue_branch_reflog_carries_the_claim_token(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     log = repo.git("reflog", "show", "--format=%gs", f"refs/heads/{ISSUE_BRANCH}")
@@ -728,6 +747,7 @@ def test_queue_refuses_an_issue_with_a_live_claim_tag(repo: Repo) -> None:
     assert "issue #14 is claimed (claim/ISS-14)" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_the_claim_takes_a_changed_valid_priority_and_clears_it(repo: Repo) -> None:
     assert repo.issue("start", "14", FAKE_GH_FAIL_EDIT="1").returncode == 1
     repo.set_gh(labels=["refactor", "priority:backlog"])  # changed meanwhile, still startable
@@ -737,6 +757,7 @@ def test_the_claim_takes_a_changed_valid_priority_and_clears_it(repo: Repo) -> N
     assert "- priority: backlog" in (repo.root / HEADER).read_text()
 
 
+@pytest.mark.e2e
 def test_an_ambiguous_priority_after_the_tag_gives_the_claim_back(repo: Repo) -> None:
     assert repo.issue("start", "14", FAKE_GH_FAIL_EDIT="1").returncode == 1
     repo.set_gh(labels=["refactor", "priority:next", "priority:backlog"])
@@ -759,6 +780,7 @@ def test_an_issue_body_cannot_inject_header_metadata(repo: Repo) -> None:
 # ── cleanup of the claim once the issue PR is open (increment 7) ─────────────
 
 
+@pytest.mark.e2e
 def test_cleanup_removes_the_claim_tag_and_file(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     claim_file = repo.root / repo.git("rev-parse", "--git-path", "harness-claim-ISS-14")
@@ -782,6 +804,7 @@ def test_cleanup_never_removes_someone_elses_claim(repo: Repo, tmp_path: Path) -
 # ── final review of the whole lane ───────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_a_title_change_after_the_claim_keeps_the_claimed_names(repo: Repo) -> None:
     assert repo.issue("start", "14", FAKE_GH_FAIL_EDIT="1").returncode == 1
     repo.set_gh(title="Something else entirely", labels=["bug", "priority:next"])
@@ -804,6 +827,7 @@ def test_a_title_cannot_inject_header_metadata(repo: Repo) -> None:
     assert [line for line in meta if line.startswith("- type:")] == ["- type: refactor"]
 
 
+@pytest.mark.e2e
 def test_the_priority_is_re_read_after_winning_the_tag(repo: Repo) -> None:
     _open_task(repo)
     repo.set_gh(labels=["refactor", "priority:now"])
@@ -866,6 +890,7 @@ def test_a_publish_retry_finds_its_issue_behind_many_newer_ones(repo: Repo) -> N
     assert "140" not in repo.gh_state()["issues"]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("change", [{"state": "CLOSED"}, {"assignees": ["bob"]}])
 def test_an_issue_closed_or_taken_after_the_tag_gives_the_claim_back(
     repo: Repo, change: dict[str, Any]
@@ -889,6 +914,7 @@ def test_a_title_without_letters_gets_a_fallback_slug(repo: Repo) -> None:
 # ── final review, round 4 ────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_the_fallback_slug_is_the_branch_the_guard_expects(repo: Repo) -> None:
     repo.set_gh(title="!!! ???")
     assert repo.issue("start", "14").returncode == 0
@@ -911,6 +937,7 @@ def test_the_fallback_slug_is_the_branch_the_guard_expects(repo: Repo) -> None:
     assert res.stdout.strip() == "refactor/ISS-14-issue" == repo.git("branch", "--show-current")
 
 
+@pytest.mark.e2e
 def test_release_keeps_a_branch_whose_commits_already_reached_main(repo: Repo) -> None:
     assert repo.issue("start", "14").returncode == 0
     repo.commit("src/fix.py", "x = 1\n", "work")
@@ -923,6 +950,7 @@ def test_release_keeps_a_branch_whose_commits_already_reached_main(repo: Repo) -
     assert repo.remote_tag()
 
 
+@pytest.mark.e2e
 def test_a_github_edit_applied_but_unanswered_is_finished_by_the_retry(repo: Repo) -> None:
     res = repo.issue("start", "14", FAKE_GH_EDIT_LOST="1")
     assert res.returncode == 1

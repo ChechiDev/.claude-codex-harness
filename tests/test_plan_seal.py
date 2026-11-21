@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import Plan
 
 SPEC_DIR = "docs/plan/phase-01-p01"
@@ -61,6 +62,7 @@ def test_adding_a_phase_after_roadmap_approval_fails(plan: Plan) -> None:
     assert "docs/plan/phase-03-p03.md added after the roadmap was approved" in res.stdout
 
 
+@pytest.mark.e2e
 def test_vision_edit_after_roadmap_approval_fails_but_the_index_does_not(plan: Plan) -> None:
     _approved_phase(plan)
     _edit(plan, f"{SPEC_DIR}/1.1.1-s.md", "status: pending", "status: blocked")
@@ -96,6 +98,7 @@ def test_adding_a_spec_after_phase_approval_fails(plan: Plan) -> None:
     assert f"{SPEC_DIR}/1.1.3-s.md added after phase 01 was approved" in res.stdout
 
 
+@pytest.mark.e2e
 def test_breaking_down_a_phase_keeps_the_roadmap_seal(plan: Plan) -> None:
     plan.phase("01").phase("02").approve_roadmap().sync()
     assert _guard(plan, "seal", "roadmap").returncode == 0
@@ -116,6 +119,7 @@ def test_spec_under_its_plan_gate_only_warns(plan: Plan) -> None:
     assert "1.1.1" in res.stdout
 
 
+@pytest.mark.e2e
 def test_plan_gate_approval_reseals_the_spec(plan: Plan) -> None:
     _approved_phase(plan)
     _edit(plan, f"{SPEC_DIR}/1.1.1-s.md", "status: pending", "status: in_progress")

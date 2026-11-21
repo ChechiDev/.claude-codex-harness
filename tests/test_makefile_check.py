@@ -53,6 +53,7 @@ def _check(root: Path, env: dict[str, str], check_rc: int) -> subprocess.Complet
 TEMPLATES = ["templates", "templates-c"]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("template", TEMPLATES)
 def test_harness_invariants_still_run_when_verify_is_red(tmp_path: Path, template: str) -> None:
     root, env = _project(tmp_path, template, verify_red=True)
@@ -61,6 +62,7 @@ def test_harness_invariants_still_run_when_verify_is_red(tmp_path: Path, templat
     assert "CHECK_SH_RAN" in res.stdout
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("template", TEMPLATES)
 @pytest.mark.parametrize(("verify_red", "check_rc"), [(True, 0), (False, 1)])
 def test_check_is_red_if_either_half_fails(
@@ -70,6 +72,7 @@ def test_check_is_red_if_either_half_fails(
     assert _check(root, env, check_rc=check_rc).returncode != 0
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("template", TEMPLATES)
 def test_check_is_green_when_both_halves_pass(tmp_path: Path, template: str) -> None:
     root, env = _project(tmp_path, template, verify_red=False)
@@ -90,6 +93,7 @@ def test_c_failing_unit_test_is_named(tmp_path: Path) -> None:
     assert "test_ok.c" not in res.stdout
 
 
+@pytest.mark.e2e
 def test_python_verify_runs_every_tool_even_after_a_failure(tmp_path: Path) -> None:
     root, env = _project(tmp_path, "templates", verify_red=True)
     out = _check(root, env, check_rc=0).stdout

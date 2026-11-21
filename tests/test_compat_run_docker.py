@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from conftest import TOOLKIT
 
-pytestmark = pytest.mark.docker
+pytestmark = [pytest.mark.docker, pytest.mark.e2e]  # e2e: real containers (#68)
 
 RUNNER = TOOLKIT / "compat" / "_compat.py"
 IMAGE = "harness-compat:local"

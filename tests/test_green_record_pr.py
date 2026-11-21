@@ -12,7 +12,10 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import LEAF_ID, Project
+
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
 
 GREEN = "check:\n\t@echo ok\n"
 RED = "check:\n\t@echo boom; exit 1\n"

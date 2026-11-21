@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 from conftest import LEAF_ID, Plan, Project, write_payload
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 # ── review history (append-only log of every gate round) ─────────────────────
 
 

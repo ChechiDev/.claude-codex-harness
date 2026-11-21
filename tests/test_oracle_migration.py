@@ -8,6 +8,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import Plan
 
 ORACLE = "tests/acceptance/test_1.1.1.py"
@@ -68,6 +69,7 @@ def test_issue_seal_freezes_the_migration_snapshot(plan: Plan) -> None:
     assert "progress/issue_migrations_ISS-14.json" in manifest
 
 
+@pytest.mark.e2e
 def test_changing_migrates_after_the_issue_gate_breaks_the_issue_seal(plan: Plan) -> None:
     _issue_with_migration(plan)
     spec = plan.root / SPEC
@@ -99,6 +101,7 @@ def test_migrates_ready_refuses_an_ownerless_oracle(plan: Plan) -> None:
     assert f"{rel} is not sealed by any acceptance manifest" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_migrates_ready_refuses_an_absent_oracle(plan: Plan) -> None:
     _issue_with_migration(plan)
     (plan.root / ORACLE).unlink()
@@ -123,6 +126,7 @@ def test_migrates_ready_without_migrates_is_a_no_op(plan: Plan) -> None:
 # ── seal at PLAN_APPROVED ────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_plan_gate_seal_reseals_the_migrated_oracle(plan: Plan) -> None:
     _issue_with_migration(plan)
     old = _sha(plan.root / ORACLE)
@@ -174,6 +178,7 @@ def test_seal_refuses_migrates_that_differ_from_the_snapshot(plan: Plan) -> None
     assert "differs from the list approved at the issue gate" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_interrupted_seal_is_completed_by_a_retry(plan: Plan) -> None:
     _issue_with_migration(plan)
     _codex_plan_gate(plan)
@@ -201,6 +206,7 @@ def test_retry_refuses_an_oracle_edited_after_approval(plan: Plan) -> None:
     assert f"{ORACLE} no longer matches the migration record" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_retry_refuses_an_incomplete_record(plan: Plan) -> None:
     _issue_with_migration(plan)
     _codex_plan_gate(plan)

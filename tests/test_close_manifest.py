@@ -13,6 +13,8 @@ import subprocess
 import pytest
 from conftest import DECLARED, LEAF_ID, Project, bind_code_approval
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 SUBJECT = f"feat(domain): add user entity [{LEAF_ID}]"
 UNIT = "tests/unit/test_user.py"
 

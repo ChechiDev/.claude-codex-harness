@@ -14,8 +14,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 from i0_cycle import fake_tools, gate, git, hook, spec
 from i0_projects import Installed, install_project
+
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
 
 FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
 N = "14"

@@ -164,6 +164,7 @@ touches links). Human-only; see [usage](docs/usage.md).
 - [Architecture](docs/architecture.md): distribution model, planning model, rules and enforcement layers, on-disk state.
 - [Usage](docs/usage.md): the full cycle step by step, verification, manual mode, troubleshooting.
 - [Configuration](docs/configuration.md): `install.sh` options, `HARNESS_*` variables, Codex model per role, hooks.
+- [Testing](docs/testing.md): the toolkit suite's two tiers (fast / e2e) and when to run each.
 
 ## Developing the toolkit
 
@@ -171,7 +172,10 @@ The hooks have their own test suite, run on throwaway projects:
 
 ```bash
 uv sync
-uv run pytest
+uv run pytest -n auto    # fast tier (default: excludes e2e)
+make test-e2e            # e2e tier only: real install.sh / make check in temp projects
 uv run ruff check lib/_guard.py lib/_harness.py tests
 uv run mypy              # strict, over lib/_guard.py, lib/_harness.py and tests/
 ```
+
+Tiers, the e2e guard and the session rule: [docs/testing.md](docs/testing.md).

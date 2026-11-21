@@ -75,6 +75,7 @@ def _review_file(project: Project) -> str:
 # ── the gate ────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_below_the_cap_the_review_still_runs(code_ready: Project, tmp_path: Path) -> None:
     _rejected(code_ready, 2)
     res = _code_gate(code_ready, _fake_codex(tmp_path))
@@ -93,6 +94,7 @@ def test_at_the_cap_the_review_is_not_launched(code_ready: Project, tmp_path: Pa
     assert _review_file(code_ready) == before
 
 
+@pytest.mark.e2e
 def test_the_cap_comes_from_harness_toml(code_ready: Project, tmp_path: Path) -> None:
     code_ready.write("harness.toml", "[review]\nmax_rounds = 5\n")
     _rejected(code_ready, 4)
@@ -103,6 +105,7 @@ def test_the_cap_comes_from_harness_toml(code_ready: Project, tmp_path: Path) ->
     assert not (tmp_path / "codex-ran").exists()
 
 
+@pytest.mark.e2e
 def test_zero_disables_the_cap(code_ready: Project, tmp_path: Path) -> None:
     code_ready.write("harness.toml", "[review]\nmax_rounds = 0\n")
     _rejected(code_ready, 12)
@@ -120,16 +123,19 @@ def test_no_environment_variable_lifts_the_cap(
     assert not (tmp_path / "codex-ran").exists()
 
 
+@pytest.mark.e2e
 def test_counters_are_per_gate(code_ready: Project, tmp_path: Path) -> None:
     _history(code_ready, LEAF_ID, *[("plan", "CHANGES_REQUESTED")] * 3, ("plan", "PLAN_APPROVED"))
     assert _code_gate(code_ready, _fake_codex(tmp_path)).returncode == 0
 
 
+@pytest.mark.e2e
 def test_counters_are_per_id(code_ready: Project, tmp_path: Path) -> None:
     _rejected(code_ready, 3, name="1.1.2")
     assert _code_gate(code_ready, _fake_codex(tmp_path)).returncode == 0
 
 
+@pytest.mark.e2e
 def test_an_approval_resets_the_count(code_ready: Project, tmp_path: Path) -> None:
     _history(
         code_ready,
@@ -149,6 +155,7 @@ def test_phase_gate_is_capped_too(code_ready: Project, tmp_path: Path) -> None:
     assert not (tmp_path / "codex-ran").exists()
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "toml",
     [

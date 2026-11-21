@@ -158,6 +158,7 @@ def test_agents_md_points_to_the_shared_workflow(template: str) -> None:
 # ── install.sh --migrate (existing projects, once) ───────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("template", TEMPLATES)
 def test_migrate_moves_an_untouched_project_to_harness_mk(tmp_path: Path, template: str) -> None:
     root = _project(tmp_path, _old_template(template))
@@ -172,6 +173,7 @@ def test_migrate_moves_an_untouched_project_to_harness_mk(tmp_path: Path, templa
     assert "harness/WORKFLOW.md" in (root / "AGENTS.md").read_text()
 
 
+@pytest.mark.e2e
 def test_migrate_is_idempotent(tmp_path: Path) -> None:
     root = _project(tmp_path, _old_template("templates"))
     assert _migrate(root).returncode == 0
@@ -182,6 +184,7 @@ def test_migrate_is_idempotent(tmp_path: Path) -> None:
     assert "already migrated" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_migrate_stops_on_a_customised_harness_target(tmp_path: Path) -> None:
     custom = _old_template("templates").replace(
         "\t./harness/check.sh || rc=1; \\", "\t./harness/check.sh || rc=1; ./extra.sh; \\"
@@ -194,6 +197,7 @@ def test_migrate_stops_on_a_customised_harness_target(tmp_path: Path) -> None:
     assert not (root / "CLAUDE.md").read_text().startswith("@harness")
 
 
+@pytest.mark.e2e
 def test_migrate_keeps_project_targets_and_variables(tmp_path: Path) -> None:
     extra = "\n# project target\ndocker:\n\tdocker compose up\n"
     root = _project(tmp_path, _old_template("templates") + extra)
@@ -210,6 +214,7 @@ def test_new_projects_ship_the_issues_lane_on(template: str) -> None:
     assert "Issues lane" in readme.read_text()
 
 
+@pytest.mark.e2e
 def test_migrate_turns_the_issues_lane_on(tmp_path: Path) -> None:
     root = _project(tmp_path, _old_template("templates"))
     assert _migrate(root).returncode == 0
@@ -227,6 +232,7 @@ OLD_GUARD = (
 )
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("template", TEMPLATES)
 def test_project_targets_work_without_the_harness_link(tmp_path: Path, template: str) -> None:
     root = _project(tmp_path, (TOOLKIT / template / "Makefile").read_text(), link=False)
@@ -239,6 +245,7 @@ def test_project_targets_work_without_the_harness_link(tmp_path: Path, template:
     assert "harness/ is missing on this machine: run install.sh" in res.stderr
 
 
+@pytest.mark.e2e
 def test_migrate_replaces_the_first_guard_block(tmp_path: Path) -> None:
     first = _old_template("templates")
     for target in ("plan", "status", "check"):  # drop the copied targets, as --migrate did
@@ -253,6 +260,7 @@ def test_migrate_replaces_the_first_guard_block(tmp_path: Path) -> None:
     assert (root / "Makefile").read_text() == text
 
 
+@pytest.mark.e2e
 def test_the_fallback_still_fails_when_a_file_has_a_target_name(tmp_path: Path) -> None:
     root = _project(tmp_path, (TOOLKIT / "templates/Makefile").read_text(), link=False)
     (root / "harness").symlink_to("/nonexistent/lib")

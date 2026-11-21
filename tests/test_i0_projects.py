@@ -9,6 +9,8 @@ import pytest
 from conftest import TOOLKIT
 from i0_projects import KINDS, LINKS, Installed, install_project
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 
 def _claude_top(home: Path) -> dict[str, str]:
     root = home / ".claude"

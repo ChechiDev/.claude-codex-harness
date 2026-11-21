@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
 from conftest import TOOLKIT, Plan
 
 SPEC = "docs/plan/phase-01-p01/1.1.2-s.md"
@@ -117,6 +118,7 @@ def _set_status(plan: Plan, rel: str, old: str, new: str) -> None:
     assert plan.run_py("sync_plan.py").returncode == 0
 
 
+@pytest.mark.e2e
 def test_turning_a_subtask_into_baseline_after_approval_fails(plan: Plan) -> None:
     # Otherwise a pending subtask could skip its plan, code and doc gates.
     _sealed(plan)
