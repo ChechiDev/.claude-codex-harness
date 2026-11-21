@@ -6,7 +6,7 @@
 #   verify   lint + type + test, the "all green" gate (required)
 #   env-check  toolchain presence, used by harness/check.sh (required)
 # A target is defined in exactly one of the two files: never redefine these here.
-.PHONY: plan status check issue issue-start issue-new
+.PHONY: plan status status-export check issue issue-start issue-new
 
 # Regenerate the derived feature_list.json from docs/plan/ (source of truth).
 plan:
@@ -15,6 +15,12 @@ plan:
 # The whole plan at a glance: done / in progress / pending, gates, next step.
 status:
 	@python3 harness/plan_status.py
+
+# Read-only static status view (issue #47): gates, attempts, timings, evidence
+# links, optional token cost. Writes only to stdout or --out; never a gate.
+# e.g. make status-export STATUS_ARGS="--out status.html --transcripts DIR"
+status-export:
+	@python3 -B harness/_status_export.py $(STATUS_ARGS)
 
 # Single entry point for agent and hooks: toolchain + harness invariants.
 # Decisions (gates, close, PR) run it only through harness/run_check.sh (issue
