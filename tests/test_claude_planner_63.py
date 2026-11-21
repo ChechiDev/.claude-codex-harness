@@ -178,6 +178,7 @@ def test_guard_other_agents_unchanged(project: Project) -> None:
 # ── Guard: claude-planner's Bash runs only `make plan` / `make check` ───────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "command", ["make plan", "make check", "  make plan  ", "make plan && make check"]
 )
@@ -186,6 +187,7 @@ def test_bash_guard_allows_planner_make_targets(project: Project, command: str) 
     assert res.returncode == 0, res.stderr
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "command",
     ["echo x > notes.md", "make plan; rm -rf src", "make verify", "git commit -m x",

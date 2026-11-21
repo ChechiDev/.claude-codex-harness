@@ -12,6 +12,8 @@ from i0_legacy import BASELINE_SPEC, ORACLE, SPEC, build_legacy, copy_legacy
 from i0_projects import Installed
 from test_m0b_inventory import INVENTORY, Repo, _fake_codex, _sealed
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 ACC_SEAL = f"progress/acceptance_{SID}.sha256"
 PHASE_SEAL = "progress/plan_phase_01.sha256"
 STRAY = f"tests/acceptance/test_{SID}.2.py"

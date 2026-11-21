@@ -44,6 +44,7 @@ UNCERTAIN_WRAPPER_FORMS = [
 ]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("sub", STATE_CHANGING)
 @pytest.mark.parametrize("form", SCRIPT_FORMS + MODULE_FORMS + UNCERTAIN_WRAPPER_FORMS)
 def test_state_changing_subcommands_are_blocked(project: Project, form: str, sub: str) -> None:
@@ -76,6 +77,7 @@ VERDICT_TARGETS = [
 ]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("rel", VERDICT_TARGETS)
 @pytest.mark.parametrize(
     "template",
@@ -106,6 +108,7 @@ def test_interpreter_reads_of_verdicts_stay_allowed(project: Project, rel: str) 
 # ── Codex block 3 r1: dotted module names and perl write modes ──────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -137,6 +140,7 @@ PERL_WRITES = [
 ]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("rel", [*VERDICT_TARGETS, "progress/legacy_inventory.json"])
 @pytest.mark.parametrize("template", PERL_WRITES)
 def test_perl_write_modes_are_blocked(project: Project, rel: str, template: str) -> None:

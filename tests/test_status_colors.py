@@ -72,6 +72,7 @@ def test_no_color_disables_colors_on_a_terminal(source: int) -> None:
     assert "[OK]" in out
 
 
+@pytest.mark.e2e
 def test_check_sh_output_captured_by_hooks_has_no_escape_codes(project: Project) -> None:
     res = project.run("check.sh")
     assert "\033[" not in res.stdout + res.stderr

@@ -61,6 +61,7 @@ def test_context_rows_blocked_bash(project: Project, tmp_path: Path, cmd: str) -
 # ── Acceptance 2: other spellings, aliases, per-skill shape ─────────────────
 
 
+@pytest.mark.e2e
 def test_other_spellings_blocked(project: Project, tmp_path: Path) -> None:
     installed(project, tmp_path)
     for spelling in (
@@ -104,6 +105,7 @@ def test_link_ops_cover_all_verbs(project: Project, tmp_path: Path, cmd: str) ->
     _blocked_as_harness(_bash(project, cmd), cmd)
 
 
+@pytest.mark.e2e
 def test_per_skill_shape(project: Project, tmp_path: Path) -> None:
     installed(project, tmp_path)
     (project.root / ".claude/skills").unlink()
@@ -118,6 +120,7 @@ def test_per_skill_shape(project: Project, tmp_path: Path) -> None:
 # ── Acceptance 3: machine-level links in $CLAUDE_HOME ───────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("name", ["skills", "CLAUDE.md"])
 def test_global_links_blocked(project: Project, tmp_path: Path, name: str) -> None:
     installed(project, tmp_path)
@@ -148,6 +151,7 @@ def _run_hook(
     )
 
 
+@pytest.mark.e2e
 def test_toolkit_worktree_detected(project: Project, tmp_path: Path) -> None:
     """The guard running from a toolkit git worktree protects that worktree's files."""
     main = tmp_path / "tk-main"
@@ -220,6 +224,7 @@ def test_destructive_on_claude_dir_blocked(project: Project, tmp_path: Path, cmd
 # ── Review r1: directory destinations and interpreter false positives ───────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -269,6 +274,7 @@ def test_interpreter_write_absolute_harness_path_blocked(project: Project, tmp_p
 # ── Review r2: rsync, directory-contents copies, `..` spellings ─────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -287,6 +293,7 @@ def test_review_r2_routes_blocked(project: Project, tmp_path: Path, cmd: str) ->
     _blocked_as_harness(_bash(project, cmd), cmd)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [

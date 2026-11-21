@@ -64,11 +64,13 @@ CONTEXT_ROWS = [
 ]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("row", CONTEXT_ROWS)
 def test_context_rows_protected(proj: Project, row: str) -> None:
     _blocked_protected(proj, row.format(t=P))
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("row", CONTEXT_ROWS)
 def test_context_rows_harness(proj: Project, row: str) -> None:
     _blocked_harness(proj, row.format(t=H))
@@ -102,6 +104,7 @@ def test_accidental_blocks_stay(proj: Project) -> None:
 # ── Acceptance 2: variants ──────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -180,6 +183,7 @@ def test_quoted_nested_target(proj: Project) -> None:
 # ── Acceptance 4: interpreters ──────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "code",
     [
@@ -221,6 +225,7 @@ def test_python_project_script(proj: Project) -> None:
     _blocked_harness(proj, "python3 scripts/w.py")
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "code",
     [
@@ -410,6 +415,7 @@ def test_unresolved_mentions_every_protected_name(proj: Project, name: str) -> N
 # ── Review round 2 ──────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -429,6 +435,7 @@ def test_quoted_heredoc_substitution_is_text(proj: Project) -> None:
     _allowed(proj, f"cat <<'EOF'\n$(touch {P})\nEOF")
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -449,6 +456,7 @@ def test_substitution_inside_expansion(proj: Project, cmd: str) -> None:
 # ── Review round 6: constructs the lexer does not follow fail closed ────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [

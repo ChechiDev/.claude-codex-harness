@@ -23,6 +23,8 @@ import pytest
 from conftest import TOOLKIT, Plan, Project, bash_payload, write_payload
 from i3a_helpers import BLOCKED, git
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 IID = "ISS-14"
 LEAF = "ISS-14.1"
 LEAF2 = "ISS-14.2"

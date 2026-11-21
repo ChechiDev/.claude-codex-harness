@@ -78,6 +78,7 @@ def test_adding_an_issue_spec_after_approval_fails(plan: Plan) -> None:
     assert f"{ISSUE_DIR}/ISS-14.3-s.md added after issue ISS-14 was approved" in res.stdout
 
 
+@pytest.mark.e2e
 def test_issue_plan_gate_reseals_its_spec(plan: Plan) -> None:
     _approved_issue(plan)
     _edit(plan, f"{ISSUE_DIR}/ISS-14.1-s.md", "status: pending", "status: in_progress")

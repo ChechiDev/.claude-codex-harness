@@ -16,6 +16,8 @@ from i0_cycle import SID
 from i0_legacy import ORACLE, build_legacy, copy_legacy
 from i0_projects import Installed
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 ACC_SEAL = f"progress/acceptance_{SID}.sha256"
 ROADMAP_SEAL = "progress/plan_roadmap.sha256"
 PHASE_SEAL = "progress/plan_phase_01.sha256"

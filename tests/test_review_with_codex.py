@@ -31,6 +31,7 @@ def _manual_run(
     )
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("phase", ["plan", "code"])
 def test_review_phases_use_workspace_write_without_git_or_network(
     project: Project, phase: str
@@ -43,6 +44,7 @@ def test_review_phases_use_workspace_write_without_git_or_network(
     assert "network_access=true" not in out
 
 
+@pytest.mark.e2e
 def test_doc_phase_cannot_write_git(project: Project) -> None:
     # The harness commits the close outside the sandbox, so Codex never needs .git.
     project.set_verdict("code", "APPROVED", with_gate_record=True)
@@ -51,11 +53,13 @@ def test_doc_phase_cannot_write_git(project: Project) -> None:
     assert f"{project.root}/.git" not in out
 
 
+@pytest.mark.e2e
 def test_network_is_opt_in(project: Project) -> None:
     out = _manual(project, "code", HARNESS_CODEX_NETWORK="1", HARNESS_CHECK_CMD="true")
     assert "sandbox_workspace_write.network_access=true" in out
 
 
+@pytest.mark.e2e
 def test_full_access_is_an_explicit_override(project: Project) -> None:
     out = _manual(project, "plan", HARNESS_CODEX_SANDBOX="danger-full-access")
     assert "--sandbox danger-full-access" in out
@@ -76,6 +80,7 @@ def _fake_codex(tmp: Path, verdict: str) -> Path:
     return bin_dir
 
 
+@pytest.mark.e2e
 def test_approved_plan_gate_seals_the_acceptance_tests(project: Project, tmp_path: Path) -> None:
     bin_dir = _fake_codex(tmp_path, "PLAN_APPROVED")
     res = project.run(
@@ -92,6 +97,7 @@ def test_approved_plan_gate_seals_the_acceptance_tests(project: Project, tmp_pat
     assert manifest.read_text().split()[0] == digest
 
 
+@pytest.mark.e2e
 def test_rejected_plan_gate_does_not_seal(project: Project, tmp_path: Path) -> None:
     bin_dir = _fake_codex(tmp_path, "CHANGES_REQUESTED")
     project.run(
@@ -133,6 +139,7 @@ def _codex_writing(tmp: Path, rel: str, verdict: str) -> dict[str, str]:
     return {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
 
 
+@pytest.mark.e2e
 def test_roadmap_gate_takes_no_id_and_names_the_plan_files(project: Project) -> None:
     out = _manual(project, "roadmap", "")
     assert "Phase: roadmap" in out
@@ -141,6 +148,7 @@ def test_roadmap_gate_takes_no_id_and_names_the_plan_files(project: Project) -> 
     assert "seal roadmap" in out
 
 
+@pytest.mark.e2e
 def test_phase_gate_names_the_phase_and_its_verdict_file(project: Project) -> None:
     out = _manual(project, "phase", "01")
     assert "Phase: phase" in out
@@ -162,11 +170,13 @@ def test_plan_gate_refuses_before_the_phase_is_approved(project: Project) -> Non
     assert "PHASE_APPROVED" in res.stdout + res.stderr
 
 
+@pytest.mark.e2e
 def test_plan_gate_prompt_points_at_the_subtask_spec(project: Project) -> None:
     out = _manual(project, "plan")
     assert f"docs/plan/phase-01-users/{LEAF_ID}-user-entity.md" in out
 
 
+@pytest.mark.e2e
 def test_approved_roadmap_gate_seals_the_roadmap(project: Project, tmp_path: Path) -> None:
     project.write("docs/plan/PLAN.md", "# Plan\n")
     env = _codex_writing(tmp_path, "progress/roadmap_review.md", "ROADMAP_APPROVED")
@@ -175,6 +185,7 @@ def test_approved_roadmap_gate_seals_the_roadmap(project: Project, tmp_path: Pat
     assert (project.root / "progress/plan_roadmap.sha256").is_file()
 
 
+@pytest.mark.e2e
 def test_approved_phase_gate_seals_the_phase(project: Project, tmp_path: Path) -> None:
     project.write("docs/plan/phase-01-users.md", "# Phase 01 — users\n- goal: g\n")
     env = _codex_writing(tmp_path, "progress/phase_review_01.md", "PHASE_APPROVED")
@@ -183,6 +194,7 @@ def test_approved_phase_gate_seals_the_phase(project: Project, tmp_path: Path) -
     assert (project.root / "progress/plan_phase_01.sha256").is_file()
 
 
+@pytest.mark.e2e
 def test_rejected_phase_gate_does_not_seal(project: Project, tmp_path: Path) -> None:
     project.write("docs/plan/phase-01-users.md", "# Phase 01 — users\n- goal: g\n")
     env = _codex_writing(tmp_path, "progress/phase_review_01.md", "CHANGES_REQUESTED")
@@ -207,6 +219,7 @@ def test_usage_lists_every_gate(project: Project) -> None:
 # ── the test suite runs outside the sandbox (it blocks local sockets) ────────
 
 
+@pytest.mark.e2e
 def test_check_runs_before_codex_and_its_result_is_in_the_prompt(project: Project) -> None:
     out = _manual(project, "plan", HARNESS_CHECK_CMD="echo SUITE-OUTPUT; exit 3")
     assert "Do NOT run `make check`" in out
@@ -215,6 +228,7 @@ def test_check_runs_before_codex_and_its_result_is_in_the_prompt(project: Projec
     assert "SUITE-OUTPUT" in Path(log).read_text()
 
 
+@pytest.mark.e2e
 def test_red_code_check_stops_before_the_reviewer(project: Project) -> None:
     # Issue #39: in code mode a red check never reaches the reviewer.
     res = _manual_run(project, "code", LEAF_ID, HARNESS_CHECK_CMD="echo SUITE-OUTPUT; exit 3")
@@ -225,6 +239,7 @@ def test_red_code_check_stops_before_the_reviewer(project: Project) -> None:
     assert not (project.root / "progress/review_history").exists()
 
 
+@pytest.mark.e2e
 def test_default_check_is_make_check(project: Project) -> None:
     out = _manual(project, "roadmap", "")
     assert "The harness ran `make check`" in out
@@ -257,6 +272,7 @@ SUBJECT = f"feat(domain): add user entity [{LEAF_ID}]"
 REF = "docs/reference/1.1.1-user-entity.md"  # the fake documenter's reference doc
 
 
+@pytest.mark.e2e
 def test_close_commits_codex_message_after_a_green_check(project: Project, tmp_path: Path) -> None:
     env = _codex_closing(project, tmp_path, SUBJECT + "\n\nWhy it matters.")
     res = project.run("review_with_codex.sh", None, "doc", LEAF_ID, env=env)
@@ -268,6 +284,7 @@ def test_close_commits_codex_message_after_a_green_check(project: Project, tmp_p
     assert "closed ->" in res.stdout
 
 
+@pytest.mark.e2e
 def test_close_does_not_commit_with_a_red_check(project: Project, tmp_path: Path) -> None:
     head = _git_out(project, "rev-parse", "HEAD")
     env = {**_codex_closing(project, tmp_path, SUBJECT), "HARNESS_CHECK_CMD": "echo RED; exit 1"}
@@ -277,6 +294,7 @@ def test_close_does_not_commit_with_a_red_check(project: Project, tmp_path: Path
     assert _git_out(project, "rev-parse", "HEAD") == head
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "message",
     [
@@ -297,6 +315,7 @@ def test_close_refuses_a_bad_or_missing_message(
     assert _git_out(project, "rev-parse", "HEAD") == head
 
 
+@pytest.mark.e2e
 def test_manual_close_prints_the_commit_step(project: Project) -> None:
     project.set_verdict("code", "APPROVED", with_gate_record=True)
     out = _manual(project, "doc")

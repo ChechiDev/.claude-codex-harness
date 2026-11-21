@@ -39,6 +39,7 @@ def _applied(tmp_path: Path) -> tuple[Path, str]:
 # ── P1: rollback is all-or-nothing ───────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_rollback_with_a_missing_backup_part_changes_nothing(tmp_path: Path) -> None:
     root, mig = _applied(tmp_path)
     (root / ".harness/migrations" / mig / "files" / "AGENTS.md").unlink()
@@ -50,6 +51,7 @@ def test_rollback_with_a_missing_backup_part_changes_nothing(tmp_path: Path) -> 
         assert _files(root) == applied, args
 
 
+@pytest.mark.e2e
 def test_a_failure_mid_rollback_restores_the_applied_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -74,6 +76,7 @@ def test_a_failure_mid_rollback_restores_the_applied_state(
     assert manifest["status"] == "applied"  # still undoable later
 
 
+@pytest.mark.e2e
 def test_a_link_change_during_rollback_restores_the_applied_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -100,6 +103,7 @@ def test_a_link_change_during_rollback_restores_the_applied_state(
 # ── P1: the backup path never crosses a link ─────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("linked", [".harness", ".harness/migrations"])
 def test_a_linked_backup_dir_is_refused_and_nothing_is_written(tmp_path: Path, linked: str) -> None:
     root = _project(tmp_path)
@@ -118,6 +122,7 @@ def test_a_linked_backup_dir_is_refused_and_nothing_is_written(tmp_path: Path, l
 # ── P1: apply changes nothing when info/exclude cannot be written ────────────
 
 
+@pytest.mark.e2e
 def test_an_unwritable_exclude_stops_apply_before_any_file(tmp_path: Path) -> None:
     root = _existing_repo(tmp_path)
     exclude = root / ".git/info/exclude"
@@ -136,6 +141,7 @@ def test_an_unwritable_exclude_stops_apply_before_any_file(tmp_path: Path) -> No
 # ── P2: an incomplete record is refused ──────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_a_record_missing_a_manifest_entry_is_refused(tmp_path: Path) -> None:
     root, _ = _applied(tmp_path)
     record_path = root / ".harness/templates.json"
@@ -190,6 +196,7 @@ def test_a_failed_final_manifest_write_undoes_the_apply(
         assert manifest["status"] != "applied"
 
 
+@pytest.mark.e2e
 def test_a_failed_final_manifest_write_undoes_the_rollback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -206,6 +213,7 @@ def test_a_failed_final_manifest_write_undoes_the_rollback(
     assert manifest["status"] == "applied"  # still undoable later
 
 
+@pytest.mark.e2e
 def test_a_linked_migration_dir_is_refused_by_rollback(tmp_path: Path) -> None:
     root, mig = _applied(tmp_path)
     outside = tmp_path / "outside"

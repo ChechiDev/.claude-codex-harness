@@ -416,6 +416,7 @@ def _toy_repo(fake: dict[str, Path]) -> tuple[Path, Path]:
     return repo, toolkit
 
 
+@pytest.mark.e2e
 def test_a_failed_cleanup_turns_the_run_into_an_error(fake: dict[str, Path]) -> None:
     """If removing what the run created (here: its deps volume) fails, no success."""
     repo, toolkit = _toy_repo(fake)
@@ -463,6 +464,7 @@ def _run_args(repo: Path, toolkit: Path, fake: dict[str, Path], run_id: str) -> 
     ]  # fmt: skip
 
 
+@pytest.mark.e2e
 def test_a_reused_run_id_is_refused_and_touches_nothing(fake: dict[str, Path]) -> None:
     """A second run with the same id must not clean up the first one's resources."""
     repo, toolkit = _toy_repo(fake)
@@ -480,6 +482,7 @@ def test_a_reused_run_id_is_refused_and_touches_nothing(fake: dict[str, Path]) -
     assert not any(c[2:3] == ["rm"] for c in _state(fake)["calls"])
 
 
+@pytest.mark.e2e
 def test_a_run_id_with_live_docker_resources_is_refused(fake: dict[str, Path]) -> None:
     repo, toolkit = _toy_repo(fake)
     _preflight(fake)
@@ -494,6 +497,7 @@ def test_a_run_id_with_live_docker_resources_is_refused(fake: dict[str, Path]) -
     assert not (fake["tmp"] / "scratch" / "cdup2").exists()
 
 
+@pytest.mark.e2e
 def test_an_inspect_failure_during_cleanup_is_an_error(fake: dict[str, Path]) -> None:
     """Only "No such ..." means absent; any other inspect failure must not pass."""
     repo, toolkit = _toy_repo(fake)
@@ -521,6 +525,7 @@ def test_purge_keeps_the_record_when_inspect_fails_for_another_reason(
     assert "sha256:ours" in _state(fake)["images"]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("where", ["project", "toolkit", "home", "claude"])
 def test_scratch_must_not_overlap_originals_toolkits_or_home(
     fake: dict[str, Path], where: str
@@ -552,6 +557,7 @@ def test_a_hung_deps_phase_times_out_and_removes_its_volume(fake: dict[str, Path
     assert "harness-compat-deps-runt" not in _state(fake)["volumes"]
 
 
+@pytest.mark.e2e
 def test_a_failed_copy_removal_is_reported(fake: dict[str, Path]) -> None:
     repo, toolkit = _toy_repo(fake)
     _preflight(fake)

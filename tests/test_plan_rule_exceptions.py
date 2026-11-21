@@ -253,6 +253,7 @@ def _ok(res: subprocess.CompletedProcess[str], what: str) -> None:
     assert res.returncode == 0, f"{what}\n{res.stdout}\n{res.stderr}"
 
 
+@pytest.mark.e2e
 def test_test_only_subtask_with_empty_files_completes_its_cycle(tmp_path: Path) -> None:
     project = install_project(tmp_path, "python")
     env = fake_tools(project, tmp_path, ORACLE_PATH, ORACLE, SPEC)

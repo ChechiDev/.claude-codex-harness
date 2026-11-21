@@ -130,6 +130,7 @@ def test_documenter_role_covers_the_issue_pr() -> None:
         assert needle in role, needle
 
 
+@pytest.mark.e2e
 def test_pr_command_opens_the_issue_pr_and_cleans_the_claim(plan: Plan, tmp_path: Path) -> None:
     _issue_branch(plan)
     remote = tmp_path / "remote.git"

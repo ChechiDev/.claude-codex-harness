@@ -84,17 +84,20 @@ def _append(repo: Repo, rel: str, text: str = "\nEdited after the gate.\n") -> N
 # ── table C ──────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_the_legacy_fixture_carries_a_receipt_per_verdict(repo: Repo) -> None:
     for verdict in VERDICTS:
         assert (repo.root / receipt(verdict)).is_file(), verdict
 
 
+@pytest.mark.e2e
 def test_verdicts_with_matching_receipts_report_nothing(repo: Repo) -> None:
     res = _integrity(repo)
     assert res.returncode == 0, res.stdout + res.stderr
     assert _receipt_warns(res) == [], res.stdout
 
 
+@pytest.mark.e2e
 def test_a_changed_verdict_warns_naming_the_file(repo: Repo) -> None:
     _append(repo, CODE_VERDICT)
     res = _integrity(repo)
@@ -104,11 +107,13 @@ def test_a_changed_verdict_warns_naming_the_file(repo: Repo) -> None:
     assert "re-run" in hits[0]
 
 
+@pytest.mark.e2e
 def test_a_malformed_receipt_warns_like_a_mismatch(repo: Repo) -> None:
     (repo.root / receipt(CODE_VERDICT)).write_text("garbage\n")
     assert len(_warns(_integrity(repo), CODE_VERDICT, "receipt")) == 1
 
 
+@pytest.mark.e2e
 def test_verdicts_without_receipt_give_one_summary_line(repo: Repo) -> None:
     _drop_receipts(repo, CODE_VERDICT, PHASE_VERDICT)
     res = _integrity(repo)
@@ -120,6 +125,7 @@ def test_verdicts_without_receipt_give_one_summary_line(repo: Repo) -> None:
     assert "re-run" in hits[0]
 
 
+@pytest.mark.e2e
 def test_the_summary_names_only_the_first_ids(repo: Repo) -> None:
     for n in range(2, 8):
         repo.write(f"progress/review_9.9.{n}.md", "# Review\n\n**Verdict:** APPROVED\n")
@@ -130,6 +136,7 @@ def test_the_summary_names_only_the_first_ids(repo: Repo) -> None:
     assert "9.9.2" in hits[0] and "9.9.7" not in hits[0]
 
 
+@pytest.mark.e2e
 def test_a_receipt_without_its_verdict_warns(repo: Repo) -> None:
     stray = receipt("progress/review_9.9.9.md")
     repo.write(stray, f"{'0' * 64}  progress/review_9.9.9.md  code\n")
@@ -142,12 +149,14 @@ def _sha(repo: Repo, rel: str) -> str:
     return hashlib.sha256((repo.root / rel).read_bytes()).hexdigest()
 
 
+@pytest.mark.e2e
 def test_a_receipt_naming_another_gate_warns(repo: Repo) -> None:
     line = f"{_sha(repo, CODE_VERDICT)}  {CODE_VERDICT}  plan\n"
     repo.write(receipt(CODE_VERDICT), line)
     assert len(_warns(_integrity(repo), CODE_VERDICT, "receipt")) == 1
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("extra", ["lead", "trail"])
 def test_a_receipt_with_extra_whitespace_warns(repo: Repo, extra: str) -> None:
     line = f"{_sha(repo, CODE_VERDICT)}  {CODE_VERDICT}  code"
@@ -155,6 +164,7 @@ def test_a_receipt_with_extra_whitespace_warns(repo: Repo, extra: str) -> None:
     assert len(_warns(_integrity(repo), CODE_VERDICT, "receipt")) == 1
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("kind", ["directory", "broken-symlink"])
 def test_an_unreadable_receipt_warns_and_keeps_the_exit_code(repo: Repo, kind: str) -> None:
     path = repo.root / receipt(CODE_VERDICT)
@@ -168,6 +178,7 @@ def test_an_unreadable_receipt_warns_and_keeps_the_exit_code(repo: Repo, kind: s
     assert len(_warns(res, CODE_VERDICT, "receipt")) == 1, res.stdout
 
 
+@pytest.mark.e2e
 def test_a_receipt_gap_alone_asks_for_the_legacy_inventory(repo: Repo) -> None:
     repo.write("tests/acceptance/test_1.2.1.py", "def test_ac1() -> None: ...\n")
     sealed = _run(repo, "bash", "harness/review_with_codex.sh", "seal", "1.2.1")
@@ -179,6 +190,7 @@ def test_a_receipt_gap_alone_asks_for_the_legacy_inventory(repo: Repo) -> None:
     assert len(_warns(res, MISSING)) == 1, res.stdout
 
 
+@pytest.mark.e2e
 def test_review_history_and_drafts_are_not_verdicts(repo: Repo) -> None:
     assert list((repo.root / "progress/review_history").glob("*.md"))
     repo.write("progress/issue_draft.md", "---\ntitle: t\n---\nbody\n")
@@ -189,6 +201,7 @@ def test_review_history_and_drafts_are_not_verdicts(repo: Repo) -> None:
 CASES = ["mismatch", "missing", "stray"]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("case", CASES)
 def test_make_check_exit_code_is_unchanged_by_receipt_warns(repo: Repo, case: str) -> None:
     if case == "mismatch":
@@ -211,6 +224,7 @@ def _legacy_without_receipts(repo: Repo) -> None:
     _sealed(repo)
 
 
+@pytest.mark.e2e
 def test_unchanged_legacy_verdicts_are_exempt_and_counted(repo: Repo) -> None:
     _legacy_without_receipts(repo)
     res = _integrity(repo)
@@ -219,6 +233,7 @@ def test_unchanged_legacy_verdicts_are_exempt_and_counted(repo: Repo) -> None:
     assert any(EXEMPT in ln for ln in res.stdout.splitlines()), res.stdout
 
 
+@pytest.mark.e2e
 def test_a_changed_legacy_verdict_is_reported(repo: Repo) -> None:
     _legacy_without_receipts(repo)
     _append(repo, CODE_VERDICT)
@@ -229,6 +244,7 @@ def test_a_changed_legacy_verdict_is_reported(repo: Repo) -> None:
     assert "01" not in hits[0] and "roadmap" not in hits[0]
 
 
+@pytest.mark.e2e
 def test_a_tampered_inventory_exempts_no_verdict(repo: Repo) -> None:
     _legacy_without_receipts(repo)
     path = repo.root / INVENTORY
@@ -274,6 +290,7 @@ def _verdict_cli(project: Project, *args: str) -> subprocess.CompletedProcess[st
     )
 
 
+@pytest.mark.e2e
 def test_manual_mode_prints_the_receipt_step_before_record(project: Project) -> None:
     res = project.run(
         "review_with_codex.sh",

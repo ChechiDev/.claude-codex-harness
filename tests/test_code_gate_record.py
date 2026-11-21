@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 from conftest import DECLARED, LEAF_ID, Project
 
+pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
+
 SUBJECT = f"feat(domain): add user entity [{LEAF_ID}]"
 
 

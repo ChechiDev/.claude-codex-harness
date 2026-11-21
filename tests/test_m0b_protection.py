@@ -54,6 +54,7 @@ def test_claude_cannot_change_the_inventory_through_bash(project: Project, cmd: 
 # ── Bash: the human-only subcommands ─────────────────────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -98,6 +99,7 @@ def test_verify_and_reads_stay_allowed(project: Project, cmd: str) -> None:
 # ── Codex code review r2: the `python -m` module form ────────────────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -138,6 +140,7 @@ WRAPPER_PREFIXES = [
 ]
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -152,6 +155,7 @@ def test_uv_run_module_and_env_split_string_are_blocked(project: Project, cmd: s
     assert res.returncode == BLOCKED, (cmd, res.stderr)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("verb", ["create --at HEAD", "review", "seal"])
 @pytest.mark.parametrize("prefix", WRAPPER_PREFIXES)
 def test_wrapper_flag_values_do_not_hide_the_module_form(
@@ -162,6 +166,7 @@ def test_wrapper_flag_values_do_not_hide_the_module_form(
     assert res.returncode == BLOCKED, (cmd, res.stderr)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("prefix", WRAPPER_PREFIXES[:9])
 def test_wrapper_flag_values_do_not_hide_guard_seal(project: Project, prefix: str) -> None:
     cmd = f"{prefix} python -m _guard seal 1.1.1"
@@ -207,6 +212,7 @@ def test_attached_module_flag_is_blocked(project: Project, flags: str, verb: str
     assert res.returncode == BLOCKED, (cmd, res.stderr)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -256,6 +262,7 @@ def _check_output(project: Project) -> str:
     return (res.stdout + res.stderr).replace(str(TOOLKIT), "<toolkit>").lower()
 
 
+@pytest.mark.e2e
 def test_make_check_mentions_a_missing_inventory_only_with_a_seal_gap(project: Project) -> None:
     assert _check_output(project).count("legacy inventory not created") == 1
     assert project.run("review_with_codex.sh", None, "seal", "roadmap").returncode == 0

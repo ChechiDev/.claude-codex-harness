@@ -10,6 +10,7 @@ from conftest import LEAF_ID, Project, bash_payload
 BLOCKED = 2
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -91,6 +92,7 @@ def test_clean_pr_is_allowed(project: Project) -> None:
 ACC = f"tests/acceptance/test_{LEAF_ID}.py"
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "cmd",
     [

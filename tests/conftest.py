@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,88 @@ import pytest
 TOOLKIT = Path(__file__).resolve().parents[1]
 LEAF_ID = "1.1.1"
 DECLARED = "src/pkg/domain/user.py"
+
+
+# ── suite tiers (#68): e2e guard ──────────────────────────────────────────────
+
+DRY_RUN = {"-n", "--dry-run", "--just-print", "--recon"}
+# A cluster of make's argument-less short flags that includes n (-pn, -sn): a dry run.
+# Flags that take an argument (-C, -f, -j...) are left out, so "-C/tmp/x-name" is no dry run.
+DRY_CLUSTER = re.compile(r"-[BbeiknLpqRrSstw]*n[BbeiknLpqRrSstw]*")
+SHELL_OPS = {"&&", "||", ";", "|", "&"}
+
+
+class UnmarkedE2EError(AssertionError):
+    """A test not marked e2e ran a real install.sh or a real `make check`."""
+
+
+def _argvs(cmd: object) -> list[list[str]]:
+    """The argvs a Popen command runs: a list as is, a shell string split on its operators."""
+    if isinstance(cmd, str | bytes):
+        text = os.fsdecode(cmd)
+        try:
+            words = shlex.split(text.replace(";", " ; "), posix=True)
+        except ValueError:
+            return []
+        argvs: list[list[str]] = [[]]
+        for word in words:
+            if word in SHELL_OPS:
+                argvs.append([])
+            else:
+                argvs[-1].append(word)
+        return [a for a in argvs if a]
+    if isinstance(cmd, os.PathLike):
+        return [[os.fsdecode(cmd)]]
+    if isinstance(cmd, Sequence):
+        return [[os.fsdecode(a) if isinstance(a, bytes | os.PathLike) else str(a) for a in cmd]]
+    return []
+
+
+def _make_check(args: list[str]) -> bool:
+    if not (args and Path(args[0]).name == "make" and "check" in args[1:]):
+        return False
+    flags = [a for a in args[1:] if a.startswith("-")]
+    return not any(f in DRY_RUN or DRY_CLUSTER.fullmatch(f) for f in flags)
+
+
+def e2e_reason(cmd: object) -> str | None:
+    """Why this command is e2e work (a real install or a real make check), or None."""
+    for args in _argvs(cmd):
+        if any(Path(a).name == "install.sh" for a in args):
+            return "install.sh"
+        if _make_check(args):
+            return "make check"
+    return None
+
+
+_current: dict[str, bool] = {"e2e": True}  # outside a test (collection): allowed
+_real_popen_init = subprocess.Popen.__init__
+
+
+def _guarded_popen_init(self: Any, args: Any, *rest: Any, **kwargs: Any) -> None:
+    reason = e2e_reason(args)
+    if reason and not _current["e2e"]:
+        raise UnmarkedE2EError(
+            f"this test runs a real {reason}: mark it @pytest.mark.e2e (docs/testing.md)"
+        )
+    _real_popen_init(self, args, *rest, **kwargs)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    subprocess.Popen.__init__ = _guarded_popen_init  # type: ignore[method-assign]
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    subprocess.Popen.__init__ = _real_popen_init  # type: ignore[method-assign]
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object]:
+    _current["e2e"] = item.get_closest_marker("e2e") is not None
+    try:
+        return (yield)
+    finally:
+        _current["e2e"] = True
 
 
 def _git(cwd: Path, *args: str) -> None:

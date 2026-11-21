@@ -172,6 +172,7 @@ def _assert_nothing_kept(run: Run, history: str | None) -> None:
 # ── B: a gate fails on anything but a valid verdict of this run ──────────────
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("gate", GATES)
 @pytest.mark.parametrize("mode", ["none", "notoken", "other", "symlink"])
 def test_exit_zero_without_a_valid_verdict_fails(
@@ -185,6 +186,7 @@ def test_exit_zero_without_a_valid_verdict_fails(
     _assert_nothing_kept(run, history)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("gate", GATES)
 def test_reviewer_failure_restores_and_keeps_the_partial(
     project: Project, tmp_path: Path, gate: Gate
@@ -200,6 +202,7 @@ def test_reviewer_failure_restores_and_keeps_the_partial(
     assert str(partials[0]) in res.stderr
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("gate", GATES)
 def test_approval_writes_receipt_then_records_and_seals(
     project: Project, tmp_path: Path, gate: Gate
@@ -216,6 +219,7 @@ def test_approval_writes_receipt_then_records_and_seals(
         assert run.path(gate.seal).is_file()
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize("gate", GATES)
 def test_changes_requested_writes_receipt_and_records_without_seal(
     project: Project, tmp_path: Path, gate: Gate
@@ -229,6 +233,7 @@ def test_changes_requested_writes_receipt_and_records_without_seal(
         assert not run.path(gate.seal).exists()
 
 
+@pytest.mark.e2e
 def test_reviewer_closing_stdin_early_and_exiting_zero_succeeds(
     project: Project, tmp_path: Path
 ) -> None:
@@ -241,6 +246,7 @@ def test_reviewer_closing_stdin_early_and_exiting_zero_succeeds(
 # ── after commit: record / seal failures never undo the verdict ──────────────
 
 
+@pytest.mark.e2e
 def test_record_failure_warns_and_keeps_verdict_and_receipt(
     project: Project, tmp_path: Path
 ) -> None:
@@ -253,6 +259,7 @@ def test_record_failure_warns_and_keeps_verdict_and_receipt(
     assert run.path(CODE.receipt).is_file()
 
 
+@pytest.mark.e2e
 def test_seal_failure_exits_non_zero_and_keeps_verdict_and_receipt(
     project: Project, tmp_path: Path
 ) -> None:
@@ -270,6 +277,7 @@ def test_seal_failure_exits_non_zero_and_keeps_verdict_and_receipt(
 # ── A: signals, a live owner, the previous verdict as context ────────────────
 
 
+@pytest.mark.e2e
 def test_sigterm_during_the_review_restores(project: Project, tmp_path: Path) -> None:
     run = _prepare(project, CODE, tmp_path)
     full = {
@@ -297,6 +305,7 @@ def test_sigterm_during_the_review_restores(project: Project, tmp_path: Path) ->
     _assert_nothing_kept(run, None)
 
 
+@pytest.mark.e2e
 def test_a_second_gate_with_a_live_owner_refuses_without_running(
     project: Project, tmp_path: Path
 ) -> None:
@@ -313,6 +322,7 @@ def test_a_second_gate_with_a_live_owner_refuses_without_running(
     assert run.text(CODE.verdict) == PREV
 
 
+@pytest.mark.e2e
 def test_prompt_names_a_readable_copy_of_the_previous_verdict(
     project: Project, tmp_path: Path
 ) -> None:
@@ -323,6 +333,7 @@ def test_prompt_names_a_readable_copy_of_the_previous_verdict(
     assert Path(f"{run.log}.prev").read_text() == PREV
 
 
+@pytest.mark.e2e
 def test_prompt_without_a_previous_verdict_has_no_copy_line(
     project: Project, tmp_path: Path
 ) -> None:
@@ -403,6 +414,7 @@ def test_cli_in_a_linked_worktree_on_another_filesystem(tmp_path: Path, outcome:
 # ── the doc gate stays outside the verdict protocol (auto mode) ──────────────
 
 
+@pytest.mark.e2e
 def test_auto_doc_gate_is_unaffected(project: Project, tmp_path: Path) -> None:
     run = _prepare(project, CODE, tmp_path)
     project.set_verdict("code", "APPROVED", with_gate_record=True)

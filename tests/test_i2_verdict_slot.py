@@ -495,6 +495,7 @@ def test_the_checker_catches_a_missing_verdict_fsync(env: Env) -> None:
     assert not fs.verdict_durable_before_commit(env.root / VERDICT)
 
 
+@pytest.mark.e2e
 @pytest.mark.parametrize(("run", "prev", "stale"), CASES)
 def test_recovery_after_a_crash_at_every_step(
     env: Env, tmp_path: Path, run: Run, prev: bytes | None, stale: bool

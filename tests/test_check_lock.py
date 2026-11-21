@@ -80,6 +80,7 @@ def _lock(root: Path) -> Path:
     return root / _git(root, "rev-parse", "--git-path", "harness-check.lock")
 
 
+@pytest.mark.e2e
 def test_two_concurrent_checks_are_serialized(proj: Path) -> None:
     a, b = _check(proj), _check(proj)
     assert a.wait(30) == 0, a.communicate()
@@ -88,6 +89,7 @@ def test_two_concurrent_checks_are_serialized(proj: Path) -> None:
     assert len(log) == 4 and _serial(log), log
 
 
+@pytest.mark.e2e
 def test_lock_lives_in_git_dir_and_tree_stays_clean(proj: Path) -> None:
     p = _check(proj)
     assert p.wait(30) == 0, p.communicate()
@@ -108,6 +110,7 @@ def _stop(proj: Path, **env: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.mark.e2e
 def test_stop_hook_does_not_wait_for_a_running_check(proj: Path) -> None:
     """#55: the Stop is advisory; it never runs make check, so it never queues."""
     gate = _check(proj, VERIFY_SLEEP="2")
@@ -128,6 +131,7 @@ def _hold_lock(root: Path) -> subprocess.Popen[bytes]:
     return holder
 
 
+@pytest.mark.e2e
 def test_check_times_out_with_a_clear_error(proj: Path) -> None:
     holder = _hold_lock(proj)
     try:
@@ -155,6 +159,7 @@ def test_stop_hook_never_takes_the_lock_nor_blocks(proj: Path, held: str) -> Non
     assert not (proj / "run.log").exists()
 
 
+@pytest.mark.e2e
 def test_missing_flock_fails_clearly(proj: Path, tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
