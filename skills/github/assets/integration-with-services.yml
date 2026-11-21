@@ -51,4 +51,8 @@
       - run: uv sync --group test
 
       - name: Run integration tests
-        run: uv run pytest tests/integration/ -v
+        run: |
+          rc=0
+          uv run pytest tests/integration/ -v || rc=$?
+          if [ "$rc" -eq 5 ]; then echo "no integration tests yet"; exit 0; fi
+          exit "$rc"

@@ -27,7 +27,10 @@ did()  { DONE+=("$1"); }
 skip() { KEPT+=("$1"); }
 
 # git repo (parity with `uv init` for Python; the Codex close needs a repo).
-if [ ! -d "$DEST/.git" ]; then
+# An enclosing work tree (monorepo subdir) is used as is: never a nested repo.
+if TOP="$(git -C "$DEST" rev-parse --show-toplevel 2>/dev/null)"; then
+  [ "$TOP" = "$(cd "$DEST" && pwd -P)" ] || PARENT_REPO="$TOP"
+else
   git init -b main "$DEST" >/dev/null 2>&1 && did "git init"
 fi
 
@@ -38,5 +41,6 @@ for dir in src "include/$NAME" tests/unit; do
 done
 
 [ ${#DONE[@]} -gt 0 ] && row "$GREEN" "[c]" "${DONE[*]}"
+[ -n "${PARENT_REPO:-}" ] && row "$ORANGE" "[git]" "kept (parent repo $PARENT_REPO)"
 [ ${#KEPT[@]} -gt 0 ] && row "$ORANGE" "[SKIP]" "${KEPT[*]} (exist; --force to rewrite)"
 exit 0

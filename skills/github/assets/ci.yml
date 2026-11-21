@@ -59,7 +59,7 @@ jobs:
           enable-cache: true
           python-version: "3.12"
       - run: uv sync --group lint
-      - run: uv run mypy
+      - run: uv run mypy src
 
 # ── Unit tests — runs only if all lint jobs pass ──────────────────────────────
 
@@ -75,16 +75,18 @@ jobs:
           enable-cache: true
           python-version: "3.12"
       - run: uv sync --group test
+      # Same pytest configuration as `make test` (pyproject addopts); coverage
+      # source comes from [tool.coverage.run]; it is reported, not gated
+      # (make check has no threshold). Exit 5 (no tests yet) is green.
       - name: Run unit tests with coverage
         run: |
-          uv run pytest tests/unit/ \
-            --cov=<project-packages> \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --cov-fail-under=80
+          rc=0
+          uv run pytest tests/unit/ --cov --cov-fail-under=0 --cov-report=xml --cov-report=term-missing || rc=$?
+          if [ "$rc" -eq 5 ]; then echo "no unit tests yet"; exit 0; fi
+          exit "$rc"
       - name: Coverage comment on PR
         uses: MishaKav/pytest-coverage-comment@main
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && hashFiles('coverage.xml') != ''
         with:
           pytest-xml-coverage-path: coverage.xml
           title: Unit Test Coverage
@@ -108,4 +110,8 @@ jobs:
           python-version: "3.12"
       - run: uv sync --group test
       - name: Run integration tests
-        run: uv run pytest tests/integration/ -v
+        run: |
+          rc=0
+          uv run pytest tests/integration/ -v || rc=$?
+          if [ "$rc" -eq 5 ]; then echo "no integration tests yet"; exit 0; fi
+          exit "$rc"
