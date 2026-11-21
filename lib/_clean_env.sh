@@ -1,7 +1,7 @@
 # Sourced by review_with_codex.sh and stop_gate.sh (issues #27, #31).
 # CLEAN_ENV: an `env` prefix that drops every variable able to exclude tests, change
 # what make reads or overrides, or run code in the check's shell: the gate's own
-# labels, all MAKE*/GNUMAKE* variables (MAKEFLAGS, MAKEOVERRIDES, MAKEFILES,
+# labels, the check-lock bypass HARNESS_CHECK_LOCK_HELD (#52), all MAKE*/GNUMAKE* variables (MAKEFLAGS, MAKEOVERRIDES, MAKEFILES,
 # GNUMAKEFLAGS…), MFLAGS, all PYTEST_* variables, TESTS, the Bash startup controls
 # (BASH_ENV, ENV, SHELLOPTS, BASHOPTS, GLOBIGNORE, CDPATH) and every exported Bash
 # function (BASH_FUNC_*). Only the issue gate's third run sets any of the first ones.
@@ -16,7 +16,7 @@ CLEAN_ENV=("$_e")
 while IFS= read -r -d '' _kv; do
   _v="${_kv%%=*}"
   case "$_v" in
-    HARNESS_ASSUME_APPROVED|HARNESS_EXPECT_RED|MFLAGS|TESTS|MAKE*|GNUMAKE*|PYTEST_*|\
+    HARNESS_ASSUME_APPROVED|HARNESS_EXPECT_RED|HARNESS_CHECK_LOCK_HELD|MFLAGS|TESTS|MAKE*|GNUMAKE*|PYTEST_*|\
     BASH_ENV|ENV|SHELLOPTS|BASHOPTS|GLOBIGNORE|CDPATH|BASH_FUNC_*)
       CLEAN_ENV+=(-u "$_v") ;;
   esac
