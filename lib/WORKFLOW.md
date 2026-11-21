@@ -123,3 +123,22 @@ gates. Design: the toolkit's `docs/design/issues-lane.md`.
 - **New issue**: `make issue-new` → draft `progress/issue_draft.md` →
   `./harness/review_with_codex.sh issue-draft` → `DRAFT_APPROVED` → the user's OK
   → `harness/issue.sh publish`.
+
+## Changing lint/type/build config
+
+Once the I5 baseline (`progress/contract_baseline.json`) is sealed, the config that
+decides how lint, type checking and build run is sealed with it (issue #66). That covers
+ruff/mypy config in `pyproject.toml`, `ruff.toml`, `.ruff.toml`, `mypy.ini`, `.mypy.ini`
+and `setup.cfg`, config-path flags, every makefile, the recipes and prerequisites of
+`lint`/`type`/`build`/`verify`, and the variables feeding them (`CC`, `CFLAGS`, `WARN`,
+`CSTD`, `EXTRA_CFLAGS`…). `harness/run_check.sh` warns on any drift, even under
+`HARNESS_CHECK_CMD`. To change it:
+
+1. Make the change, then run `python3 harness/_contract.py contract-propose`. For a
+   relaxation, add `--reason "<why>"`.
+2. Run `./harness/review_with_codex.sh contract`. Codex passes a tightening as is; a
+   relaxation passes only with a justified reason.
+3. The human approves with `python3 harness/_contract.py contract-approve <hash>`. That
+   reseals only that exact diff; a change made after the proposal is refused.
+
+Rollout is WARN only (plan 0.5). The design is in `docs/design/verification-contract.md`.

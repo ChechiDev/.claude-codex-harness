@@ -256,6 +256,19 @@ if [ -n "$_ev" ]; then
   fi
 fi
 unset _ev
+# Verification contract (issue #66, I5, WARN): the lint/type/build config graph vs the
+# sealed I5 baseline. Always runs, whatever HARNESS_CHECK_CMD says; the check's own
+# environment, so an inherited CC or EXTRA_CFLAGS is seen as make would see it.
+_ct="$("${ENVCMD[@]}" python3 -E -s "$HARNESS_DIR/_contract.py" check 2>&1)"
+if [ -n "$_ct" ]; then
+  if [ -n "$LOG" ]; then
+    printf '%s\n' "$_ct" >>"$LOG"
+    printf '%s\n' "$_ct" | grep '\[WARN\]' >&2
+  else
+    printf '%s\n' "$_ct" >&2
+  fi
+fi
+unset _ct
 if [ "$RECORD" = 1 ] && [ -n "$GREEN_RECORD" ]; then
   after="$(fingerprint)" || after=""
   if [ "$rc" -eq 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ] && [ -z "$ASSUME" ] &&
