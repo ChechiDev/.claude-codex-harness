@@ -60,6 +60,25 @@ it (`copytree`) and never mutates the shared one.
 - Do not rerun the full suite for changes that do not invalidate it; apply all
   review fixes first, then one final full run.
 
+## CI (GitHub Actions)
+
+`.github/workflows/ci.yml` runs the same tiers on GitHub (#74):
+
+| Event | Job | Commands |
+|-------|-----|----------|
+| `pull_request`, `push` to `main` | `fast` | `uv sync --locked`, `uv run pytest -n auto -rs`, `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` |
+| `schedule` (nightly, 03:17 UTC), `workflow_dispatch` | `e2e` | `uv sync --locked`, `make test-e2e` (with `PYTEST_ADDOPTS=-rs`) |
+
+- Actions are pinned to a commit SHA (tag in a comment); `permissions: contents: read`;
+  no secrets; checkout without persisted credentials.
+- A concurrency group per PR/ref cancels superseded runs.
+- Tests that need tools the runner lacks (the Docker compat image, norminette,
+  valgrind inside it) `pytest.skip` with a reason; `-rs` prints every skip reason in
+  the job log, so a skip is visible, never a silent green.
+- Run the e2e tier by hand from the Actions tab (*Run workflow*).
+- `tests/test_ci_workflow.py` is the contract test for the workflow. Branch
+  protection (making `fast` required) is configured on GitHub, not here.
+
 ## Timings
 
 Measured on 2026-11-21, 8 cores, `-n auto`:
