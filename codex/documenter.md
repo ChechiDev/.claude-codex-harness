@@ -117,6 +117,7 @@ these `##` headings (the harness matches them by name; leave none out):
 ## Follow-ups
 ## Branch notes
 ## Where to start reviewing
+## For the human
 ```
 
 What goes in each:
@@ -149,6 +150,11 @@ What goes in each:
   example a plan change carried by one of its commits). Leave the section
   empty if there is nothing to say: the harness already writes head, base and
   the task dependencies.
+- **For the human**: what the person merging must decide or check by hand
+  (a new dependency, a migration to run, a CI or permission change, a risky
+  default), in a few bullets. The harness already lists base drift and the
+  flagged paths above your text; add only your assessment. "Nothing to note."
+  if there is nothing.
 - **Where to start reviewing**: two to four files in the order that makes the
   change easiest to follow, with half a line on why each.
 

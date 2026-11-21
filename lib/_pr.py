@@ -18,6 +18,8 @@ Commands:
   pr-due <N.M.K>          print the task id if the task is complete and auto_pr is on
   title <N.M|ISS-n>       print the PR title
   body <N.M|ISS-n> <base> print the PR body against base branch <base>
+  guard <N.M|ISS-n> <base> fail unless HEAD is the branch of <id>, not the base, and
+                          carries no base commit missing from origin/<base> (issue #80)
 
 An issue ISS-n (docs/plan/issues/) gets the same PR as a task, titled with its
 type, linking the GitHub issue, and ending with `Closes #n`.
@@ -48,6 +50,7 @@ NARRATIVE = {
     "follow-ups": "follow_ups",
     "branch notes": "branch_notes",
     "where to start reviewing": "review_order",
+    "for the human": "for_the_human",
 }
 EMPTY = "Nothing recorded for this task."
 # Not listed under Files: harness bookkeeping, harness files and the project's own
@@ -298,6 +301,134 @@ def branch_section(tid: str, base: str, notes: str) -> str:
     return "\n\n".join(lines)
 
 
+# ── branch guard (issue #80) ─────────────────────────────────────────────────
+
+PROTECTED = frozenset({"main", "master"})
+
+
+def guard(tid: str, base: str) -> int:
+    """Refuse to push anything but the branch <tid> lives on, based on origin/<base>."""
+    head = _git("rev-parse", "--abbrev-ref", "HEAD")
+    try:
+        cfg = _config.load(Path.cwd())
+        expected = _harness.task_branch(tid, cfg)
+    except (_config.ConfigError, ValueError) as exc:
+        say("FAIL", f"cannot resolve the branch of {tid}: {exc}", sys.stderr)
+        return 1
+    if not head or head == "HEAD":
+        say("FAIL", f"HEAD is detached: check out `{expected}` first", sys.stderr)
+        return 1
+    if head == base or head in PROTECTED:
+        say(
+            "FAIL",
+            f"on the base branch `{head}`: never pushed; {tid} lives on `{expected}`",
+            sys.stderr,
+        )
+        return 1
+    if head != expected:
+        message = f"on `{head}`, but {tid} lives on `{expected}`"
+        if not cfg.git_configured and not _harness.RE_ISSUE_ID.match(tid):
+            # Without [git] task branch names are not enforced (projects keep the
+            # branches they already use): only the base is refused.
+            say("WARN", f"{message} (not enforced without a [git] section)", sys.stderr)
+        else:
+            say("FAIL", f"{message}: switch to it (nothing was pushed)", sys.stderr)
+            return 1
+    remote = f"origin/{base}"
+    if _git("rev-parse", "-q", "--verify", f"refs/remotes/{remote}") and _git(
+        "rev-parse", "-q", "--verify", f"refs/heads/{base}"
+    ):
+        # Local base commits not on origin would ride along in the PR.
+        # Their newest shared commit with HEAD tells: if origin lacks it, HEAD carries
+        # local base commits (even when the local base moved on since).
+        shared = _git("merge-base", base, "HEAD")
+        local_only = _git("rev-list", "--count", f"{remote}..{shared}") if shared else ""
+        if shared and not _ancestor(shared, remote):
+            say(
+                "FAIL",
+                f"`{base}` has {local_only} commit(s) missing from `{remote}` and "
+                f"`{head}` contains them: the PR would carry them. Push or drop them "
+                "first (nothing was pushed)",
+                sys.stderr,
+            )
+            return 1
+    return 0
+
+
+def _ancestor(a: str, b: str) -> bool:
+    res = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", a, b], capture_output=True, check=False
+    )
+    return res.returncode == 0
+
+
+# ── for the human (issue #43) ────────────────────────────────────────────────
+
+ATTENTION = (
+    (
+        "Dependencies",
+        re.compile(
+            r"(^|/)(pyproject\.toml|uv\.lock|poetry\.lock|"
+            r"requirements[^/]*\.txt|package(-lock)?\.json)$"
+        ),
+    ),
+    ("Migrations", re.compile(r"(^|/)(migrations|alembic)/")),
+    (
+        "CI / infrastructure",
+        re.compile(
+            r"^\.github/|(^|/)Dockerfile[^/]*$|"
+            r"(^|/)(docker-)?compose[^/]*\.ya?ml$"
+        ),
+    ),
+    ("Auth / permissions", re.compile(r"(auth|permission|security|acl|rbac)", re.I)),
+)
+
+
+def drift(base: str) -> str:
+    """Behind count and merge-tree conflicts against origin/<base>; touches nothing."""
+    remote = f"origin/{base}"
+    if not _git("rev-parse", "-q", "--verify", f"refs/remotes/{remote}"):
+        return f"`{remote}` not found: base drift not computed."
+    behind = _git("rev-list", "--count", f"HEAD..{remote}") or "?"
+    res = subprocess.run(
+        ["git", "merge-tree", "--write-tree", "--name-only", "HEAD", remote],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    line = f"Base drift: {behind} commits behind `{remote}`"
+    if res.returncode == 0:
+        return f"{line}, no conflicts (`git merge-tree`)."
+    if res.returncode == 1:
+        part = res.stdout.split("\n\n", 1)[0].splitlines()[1:]
+        files = ", ".join(f"`{f}`" for f in part if f) or "unknown files"
+        return f"{line}, merge conflicts in {files}. Information only: nothing was rebased."
+    return f"{line}; conflicts unknown (`git merge-tree` failed)."
+
+
+def attention_section(base: str, merge_base: str, note: str) -> str:
+    lines = [drift(base)]
+    changed = []
+    if merge_base:
+        changed = [  # both sides of a rename or copy
+            path
+            for line in _git("diff", "--name-status", merge_base, "HEAD").splitlines()
+            for path in line.split("\t")[1:]
+        ]
+    flagged = []
+    for label, pattern in ATTENTION:
+        hits = [p for p in changed if pattern.search(p)]
+        if hits:
+            flagged.append(f"- {label}: " + ", ".join(f"`{p}`" for p in hits))
+    if flagged:
+        lines.append("Paths to look at (path heuristic):\n\n" + "\n".join(flagged))
+    else:
+        lines.append("No dependency, migration, CI or auth paths changed.")
+    if note:
+        lines.append(note)
+    return "\n\n".join(lines)
+
+
 def _template() -> str:
     cfg = _config.load(Path.cwd())
     path = Path(cfg.pr_template) if cfg.pr_template else DEFAULT_TEMPLATE
@@ -327,6 +458,7 @@ def body(tid: str, base: str) -> int:
         "files": files_table(merge_base),
         "documentation": documentation_section(tid),
         "branch": branch_section(tid, base, story.get("branch_notes", "")),
+        "attention": attention_section(base, merge_base, story.get("for_the_human", "")),
     }
     text = template
     for key, value in values.items():
@@ -342,8 +474,9 @@ def main(argv: list[str]) -> int:
     cmd, *args = argv
     if cmd == "record" and len(args) == 3:
         return record(*args)
-    if cmd == "body" and len(args) == 2:
-        return body(*args)
+    pairs = {"body": body, "guard": guard}
+    if cmd in pairs and len(args) == 2:
+        return pairs[cmd](*args)
     if cmd == "round-cap" and len(args) == 2:
         return round_cap(*args)
     single = {"last-of-task": last_of_task, "pr-due": pr_due, "title": title}
