@@ -830,7 +830,16 @@ def _review_of(text: str) -> tuple[str, str]:
 
 
 def contract_review(_: list[str]) -> int:
+    # The I5 verification contract (issue #66) shares this entry point
+    # (review_with_codex.sh contract).
+    import _contract
+
+    config = (ROOT / _contract.PROPOSAL).is_file()
+    if config:
+        _contract.contract_review([])
     prop = _load(PROPOSAL)
+    if prop is None and config:
+        return 0
     if prop is None:
         warn(f"contract: no {PROPOSAL} — fix: python3 harness/_oracle.py contract-propose")
         return 0
