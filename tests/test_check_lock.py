@@ -10,17 +10,24 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import signal
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 from conftest import TOOLKIT
 
 MAKEFILE = """\
 verify:
-\t@echo "start $$$$" >> run.log; sleep $${VERIFY_SLEEP:-1}; echo "end $$$$" >> run.log
+\t@echo "start $$$$" >> run.log; \\
+\tif [ -n "$${VERIFY_RELEASE:-}" ]; then \\
+\t  n=0; while [ ! -e "$$VERIFY_RELEASE" ] && [ $$n -lt 1200 ]; do sleep 0.05; n=$$((n+1)); done; \\
+\telse sleep 1; fi; \\
+\techo "end $$$$" >> run.log
 
 include harness/harness.mk
 """
@@ -113,22 +120,46 @@ def _stop(proj: Path, **env: str) -> subprocess.CompletedProcess[str]:
 @pytest.mark.e2e
 def test_stop_hook_does_not_wait_for_a_running_check(proj: Path) -> None:
     """#55: the Stop is advisory; it never runs make check, so it never queues."""
-    gate = _check(proj, VERIFY_SLEEP="2")
-    deadline = time.time() + 10
-    while not (proj / "run.log").exists() and time.time() < deadline:
-        time.sleep(0.05)
-    stop = _stop(proj)
-    assert gate.poll() is None, "the Stop returned before the gate's check ended"
+    release = proj.parent / "release"
+    gate = _check(proj, VERIFY_RELEASE=str(release))
+    try:
+        _wait_for(lambda: (proj / "run.log").exists(), gate)
+        # The gate's verify is now blocked until `release` exists: a Stop that
+        # waited for the check would hang here and hit _stop's timeout.
+        stop = _stop(proj)
+        assert gate.poll() is None, "the Stop returned before the gate's check ended"
+    finally:
+        release.touch()
     assert gate.wait(30) == 0, gate.communicate()
     assert stop.returncode == 0, stop.stdout + stop.stderr
     log = (proj / "run.log").read_text().splitlines()
     assert len(log) == 2 and _serial(log), log
 
 
+def _wait_for(cond: Callable[[], bool], proc: subprocess.Popen[Any]) -> None:
+    """Poll until cond() holds; fail fast if proc died first."""
+    deadline = time.monotonic() + 60
+    while not cond():
+        assert proc.poll() is None, f"process exited early: {proc.returncode}"
+        assert time.monotonic() < deadline, "timed out waiting for the event"
+        time.sleep(0.02)
+
+
 def _hold_lock(root: Path) -> subprocess.Popen[bytes]:
-    holder = subprocess.Popen(["flock", str(_lock(root)), "sleep", "5"])
-    time.sleep(0.3)
+    """Hold the check lock until killed; return only once it is really held."""
+    ready = root.parent / "lock-held"
+    holder = subprocess.Popen(
+        ["flock", str(_lock(root)), "sh", "-c", 'touch "$1"; exec sleep 120', "sh", str(ready)],
+        start_new_session=True,
+    )
+    _wait_for(ready.exists, holder)
     return holder
+
+
+def _release(holder: subprocess.Popen[bytes]) -> None:
+    """Kill flock and its sleep child (which inherits the lock fd) together."""
+    os.killpg(holder.pid, signal.SIGKILL)
+    holder.wait()
 
 
 @pytest.mark.e2e
@@ -138,7 +169,7 @@ def test_check_times_out_with_a_clear_error(proj: Path) -> None:
         p = _check(proj, HARNESS_CHECK_LOCK_TIMEOUT="1")
         _, err = p.communicate(timeout=30)
     finally:
-        holder.kill()
+        _release(holder)
     assert p.returncode != 0
     assert "timed out" in err and "harness-check.lock" in err, err
     assert not (proj / "run.log").exists()
@@ -153,7 +184,7 @@ def test_stop_hook_never_takes_the_lock_nor_blocks(proj: Path, held: str) -> Non
     try:
         stop = _stop(proj, HARNESS_CHECK_LOCK_TIMEOUT="1", **extra)
     finally:
-        holder.kill()
+        _release(holder)
     assert stop.returncode == 0, stop.stdout + stop.stderr
     assert "timed out" not in stop.stdout + stop.stderr
     assert not (proj / "run.log").exists()
