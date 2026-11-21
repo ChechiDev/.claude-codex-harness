@@ -102,6 +102,12 @@ gates. Design: the toolkit's `docs/design/issues-lane.md`.
 - **When it starts**: `next` once the task in progress is merged into `main`;
   `now` interrupts a task, only between subtasks, from that task's branch;
   `backlog` only when the user asks.
+- **Intake** (before the claim; nothing created yet): `harness/issue.sh intake <n>`
+  reports duplicates, missing information and scope (`READY` / `CHECK` /
+  `NEEDS-INFO`); rescoping is approved by the user. A question only the author
+  can answer goes, with the user's OK, in `progress/issue_question-ISS-<n>.md` →
+  `harness/issue.sh ask <n>` (comment + `needs-info`, out of the queue) → once
+  answered, `harness/issue.sh unblock <n> [PRIORITY]`. A parked issue never starts.
 - **Start** (claims it: assigned, `status:in-progress`): `make issue-start N=<n>`
   → branch `<type>/ISS-<n>-<slug>` from `origin/main` + header in
   `docs/plan/issues/ISS-<n>-<slug>.md`.

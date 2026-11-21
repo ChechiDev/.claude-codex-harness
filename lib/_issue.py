@@ -8,6 +8,9 @@ Only this script sets or changes those labels. `make check` never calls it.
 Usage: python3 _issue.py <command> [args]
 Commands:
   queue <n> [now|next|backlog]  validate issue #n and (re)queue it (default next)
+  intake <n>     diagnose a queued issue before start: duplicates, missing info, scope
+  ask <n>        post progress/issue_question-ISS-<n>.md on the issue, park it (needs-info)
+  unblock <n> [now|next|backlog]  the author answered: drop needs-info and re-queue it
   start <n>      claim issue #n and create its branch + header (rules below)
   release <n>    give a claimed issue back before any work (claim token required)
   cleanup <n>    drop our claim (tags + claim file) once the issue PR is open
@@ -48,6 +51,7 @@ GH = os.environ.get("HARNESS_GH", "gh")
 TYPE_LABELS = {"bug": "fix", "refactor": "refactor", "enhancement": "feat", "documentation": "docs"}
 PRIORITIES = ("now", "next", "backlog")
 IN_PROGRESS = "status:in-progress"
+NEEDS_INFO = "needs-info"
 ISSUES_DIR = Path("docs/plan/issues")
 FEATURES = "feature_list.json"
 BASE = "origin/main"
@@ -146,6 +150,8 @@ def queue(n: int, priority: str = "next") -> int:
     if issue["state"] != "OPEN":
         raise IssueError(f"issue #{n} is {issue['state'].lower()}")
     issue_type(issue["labels"])
+    if NEEDS_INFO in issue["labels"]:
+        raise IssueError(f"issue #{n} is parked ({NEEDS_INFO}): run `issue.sh unblock {n}`")
     if IN_PROGRESS in issue["labels"] or issue["assignees"]:
         holder = ", ".join(issue["assignees"]) or "claimed"
         raise IssueError(f"issue #{n} is already in progress ({holder})")
@@ -389,6 +395,8 @@ def _check_startable(issue: Item, me: str) -> str:
     n = issue["number"]
     if issue["state"] != "OPEN":
         raise IssueError(f"issue #{n} is {issue['state'].lower()}")
+    if NEEDS_INFO in issue["labels"]:
+        raise IssueError(f"issue #{n} is parked ({NEEDS_INFO}): wait for the author, then unblock")
     if not _priorities(issue["labels"]):
         raise IssueError(f"issue #{n} is not queued: run make issue N={n} first")
     priority = _priority(issue["labels"])
@@ -448,7 +456,8 @@ def _confirm_startable(n: int, claim: Item, issue: Item) -> None:
     someone else, reprioritised): re-check it as it is now before touching GitHub."""
     me = claim["token"].split(" ", 1)[0]
     others = [a for a in issue["assignees"] if a != me]
-    if issue["state"] != "OPEN" or others or IN_PROGRESS in issue["labels"]:
+    parked = NEEDS_INFO in issue["labels"]
+    if issue["state"] != "OPEN" or others or IN_PROGRESS in issue["labels"] or parked:
         _abandon(n, claim, f"issue #{n} was closed or taken meanwhile")
     priority = _priority(issue["labels"])
     if priority is None:
@@ -662,6 +671,211 @@ def resume(n: int | None = None) -> int:
     return 0
 
 
+# ── intake: diagnose, park (needs-info), unblock ─────────────────────────────
+
+STOPWORDS = frozenset(
+    [
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "when",
+        "not",
+        "are",
+        "was",
+        "this",
+        "that",
+        "its",
+    ]
+)
+MIN_BODY = 40  # characters: below this the issue cannot be planned without asking
+WIDE_ITEMS = 10  # list items in the body: more suggests several issues in one
+WIDE_BODY = 6000  # characters
+LIST_LIMIT = 1000
+TITLE_MAX = 80
+RE_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\S", re.MULTILINE)
+RE_REPRO = re.compile(r"reproduc|steps|expected|actual", re.IGNORECASE)
+
+
+def _question_file(n: int) -> Path:
+    return Path(f"progress/issue_question-ISS-{n}.md")
+
+
+def _words(title: str) -> set[str]:
+    words = re.findall(r"[a-z0-9_]+", title.lower())
+    return {w for w in words if len(w) > 2 and w not in STOPWORDS}
+
+
+def _duplicates(issue: Item) -> list[str]:
+    """Other open issues whose title shares most of its significant words with this one."""
+    mine = _words(issue["title"])
+    listed = json.loads(
+        gh("issue", "list", "--state", "open", "--limit", str(LIST_LIMIT), "--json", "number,title")
+        or "[]"
+    )
+    found = []
+    if len(listed) >= LIST_LIMIT:
+        found.append(f"duplicates: only the newest {LIST_LIMIT} open issues were compared")
+    for other in listed:
+        if other.get("number") == issue["number"]:
+            continue
+        title = _one_line(other.get("title", ""))
+        shared = mine & _words(title)
+        if len(shared) >= 2 and len(shared) >= 0.6 * min(len(mine), len(_words(title))):
+            shown = title if len(title) <= TITLE_MAX else title[: TITLE_MAX - 1] + "…"
+            found.append(f"possible duplicate: #{int(other['number'])} (untrusted title) {shown!r}")
+    return found
+
+
+def diagnose(issue: Item, duplicates: list[str]) -> list[str]:
+    """Mechanical findings only; judging them (and asking the author) is the leader's job.
+    The body is untrusted data: it is measured, never quoted or executed."""
+    body = str(issue.get("body") or "").strip()
+    found = list(duplicates)
+    if len(body) < MIN_BODY:
+        found.append(f"missing information: the body has {len(body)} characters")
+    kinds = [TYPE_LABELS[lb] for lb in issue["labels"] if lb in TYPE_LABELS]
+    if kinds == ["fix"] and body and not RE_REPRO.search(body):
+        found.append("missing information: a bug without steps to reproduce / expected result")
+    items = len(RE_ITEM.findall(body))
+    if items > WIDE_ITEMS or len(body) > WIDE_BODY:
+        found.append(f"scope: {items} list items, {len(body)} characters: consider splitting")
+    return found
+
+
+def intake(n: int) -> int:
+    """Read-only diagnosis between `queue` and `start`: no label, comment, branch or file."""
+    issue = _view(n)
+    if issue["state"] != "OPEN":
+        raise IssueError(f"issue #{n} is {issue['state'].lower()}")
+    try:
+        issue_type(issue["labels"])
+        findings = []
+    except IssueError as exc:
+        findings = [f"labels: {exc}"]
+    if NEEDS_INFO not in issue["labels"] and _priority(issue["labels"]) is None:
+        findings.append(f"queue: not queued with one priority (make issue N={n} first)")
+    if IN_PROGRESS in issue["labels"] or issue["assignees"]:
+        findings.append(
+            f"claim: already in progress ({', '.join(issue['assignees']) or 'claimed'})"
+        )
+    findings += diagnose(issue, _duplicates(issue))
+    for line in findings:
+        say("WARN", line)
+    if NEEDS_INFO in issue["labels"]:
+        say("WARN", f"intake #{n}: NEEDS-INFO (parked until the author answers; then unblock)")
+    elif findings:
+        say("WARN", f"intake #{n}: CHECK ({len(findings)} finding(s): ask the user what to do)")
+    else:
+        say("OK", f"intake #{n}: READY (make issue-start N={n})")
+    return 0
+
+
+def _attempt(qfile: Path, text: str) -> str:
+    """The marker of this question's attempt, persisted next to it before posting: a
+    retry reuses it, a new question (even with the same wording) gets a new one, and
+    nobody can predict it."""
+    side = qfile.with_name(qfile.name + ".attempt")
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    try:
+        saved: Item = json.loads(side.read_text("utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    if saved.get("sha") != digest:
+        saved = {"sha": digest, "token": f"harness-intake-{uuid.uuid4()}"}
+        side.write_text(json.dumps(saved), "utf-8")
+    return f"<!-- {saved['token']} -->"
+
+
+def _posted(n: int, marker: str, me: str) -> bool:
+    """Our comment with this attempt's marker is already on the issue (only our own
+    comments count: someone else's copy of the marker never suppresses the question)."""
+    data = json.loads(gh("issue", "view", str(n), "--json", "comments") or "{}")
+    return any(
+        marker in str(c.get("body", "")) and (c.get("author") or {}).get("login") == me
+        for c in data.get("comments", [])
+    )
+
+
+def _park(n: int, me: str) -> None:
+    """needs-info on, every priority:* off, as the issue is now (a concurrent queue may
+    have added one); a claim that landed meanwhile is reported, never undone."""
+    for _ in range(2):
+        now = _view(n)
+        stale = [lb for lb in now["labels"] if lb.startswith("priority:")]
+        if NEEDS_INFO in now["labels"] and not stale:
+            break
+        edits = [] if NEEDS_INFO in now["labels"] else ["--add-label", NEEDS_INFO]
+        for old in stale:
+            edits += ["--remove-label", old]
+        gh("issue", "edit", str(n), *edits)
+    now = _view(n)
+    if (
+        IN_PROGRESS in now["labels"]
+        or [a for a in now["assignees"] if a != me]
+        or (_remote_token(n) is not None)
+    ):
+        raise IssueError(
+            f"issue #{n} was claimed while it was being parked: the question is posted; "
+            "agree with the claimant whether to release it"
+        )
+
+
+def ask(n: int) -> int:
+    """Post the question the user approved and park the issue. The comment carries a
+    hidden per-attempt marker: a retry after a lost answer never posts it twice."""
+    qfile = _question_file(n)
+    if not qfile.is_file() or not qfile.read_text("utf-8").strip():
+        raise IssueError(f"write the question approved by the user to {qfile} first")
+    text = qfile.read_text("utf-8")
+    if RE_ATTRIBUTION.search(text):
+        raise IssueError(f"{qfile} contains agent attribution")
+    issue = _view(n)
+    if issue["state"] != "OPEN":
+        raise IssueError(f"issue #{n} is {issue['state'].lower()}")
+    if IN_PROGRESS in issue["labels"] or issue["assignees"]:
+        raise IssueError(f"issue #{n} is already in progress: ask inside its work instead")
+    if _remote_token(n) is not None:
+        raise IssueError(f"issue #{n} is claimed (claim/ISS-{n}): release it first")
+    me = _me()
+    marker = _attempt(qfile, text)
+    if not _posted(n, marker, me):
+        body_file = qfile.with_name(qfile.name + ".body")
+        sep = "" if text.endswith("\n") else "\n"
+        body_file.write_text(f"{text}{sep}\n{marker}\n", "utf-8")
+        try:
+            gh("issue", "comment", str(n), "--body-file", str(body_file))
+        finally:
+            body_file.unlink(missing_ok=True)
+    _ensure_labels(NEEDS_INFO)
+    _park(n, me)
+    qfile.unlink()
+    qfile.with_name(qfile.name + ".attempt").unlink(missing_ok=True)
+    say("OK", f"issue #{n}: question posted, parked with {NEEDS_INFO} (out of the queue)")
+    return 0
+
+
+def unblock(n: int, priority: str = "next") -> int:
+    if priority not in PRIORITIES:
+        raise IssueError(f"PRIORITY must be one of {', '.join(PRIORITIES)}, not '{priority}'")
+    issue = _view(n)
+    if NEEDS_INFO not in issue["labels"]:
+        raise IssueError(f"issue #{n} is not parked ({NEEDS_INFO}): nothing to unblock")
+    if issue["state"] != "OPEN":
+        raise IssueError(f"issue #{n} is {issue['state'].lower()}")
+    issue_type(issue["labels"])
+    _ensure_labels(f"priority:{priority}")
+    edits = ["--remove-label", NEEDS_INFO, "--add-label", f"priority:{priority}"]
+    for old in issue["labels"]:
+        if old.startswith("priority:") and old != f"priority:{priority}":
+            edits += ["--remove-label", old]
+    gh("issue", "edit", str(n), *edits)
+    say("OK", f"issue #{n} unblocked and queued with priority {priority} (intake it again)")
+    return 0
+
+
 # ── new issues: draft and publish ────────────────────────────────────────────
 
 
@@ -806,8 +1020,12 @@ def _number(raw: str) -> int:
 def _dispatch(cmd: str, args: list[str]) -> int:
     if cmd == "queue" and args:
         return queue(_number(args[0]), args[1] if len(args) > 1 and args[1] else "next")
-    if cmd in ("start", "release", "cleanup") and len(args) == 1:
-        fn = {"start": start, "release": release, "cleanup": cleanup}[cmd]
+    if cmd == "unblock" and args and len(args) <= 2:
+        return unblock(_number(args[0]), args[1] if len(args) > 1 and args[1] else "next")
+    if cmd in ("start", "release", "cleanup", "intake", "ask") and len(args) == 1:
+        fn = {"start": start, "release": release, "cleanup": cleanup, "intake": intake, "ask": ask}[
+            cmd
+        ]
         return fn(_number(args[0]))
     if cmd == "resume" and len(args) <= 1:
         return resume(_number(args[0]) if args and args[0] else None)

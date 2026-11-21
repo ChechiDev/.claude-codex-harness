@@ -223,6 +223,9 @@ gates (design: [design/issues-lane.md](design/issues-lane.md)).
 ```bash
 make issue N=14                      # queue it (PRIORITY=now|next|backlog, default next)
 make status                          # the queue (from GitHub) and Next:
+harness/issue.sh intake 14           # duplicates, missing info, scope (read only)
+harness/issue.sh ask 14              # with the user's OK: post the question, park (needs-info)
+harness/issue.sh unblock 14          # the author answered: back to the queue
 make issue-start N=14                # claim it: assigned, status:in-progress,
                                      # branch <type>/ISS-14-<slug>, header in docs/plan/issues/
 # the leader breaks it down with you: ISS-14.1, ISS-14.2… (one spec at a time)
