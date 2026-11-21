@@ -159,6 +159,76 @@ Only the human sets the cap: there is no environment variable for it, so an agen
 cannot lift it. To resume after deciding what to do, raise `max_rounds` (or set it
 to `0`) in `harness.toml`. A value that is not an integer `>= 0` fails closed.
 
+## Review effort and checklists by risk (`harness.toml` `[review.risk]`, `[review.surfaces]`)
+
+A subtask spec may rate itself, among its `- key: value` lines:
+
+```markdown
+# 2.1.3 Login rate limit
+- status: pending
+- risk: high                 # low | medium | high (optional)
+- surfaces: security, data   # optional; or: none
+```
+
+The rating sets the Codex reasoning effort and adds review checklists to that
+subtask's `plan` and `code` gates (issue #44). The built-in table, which
+`harness.toml` overrides per field and extends with new surfaces:
+
+```toml
+[review.risk.high]
+codex_effort = "xhigh"          # low | medium | high | xhigh
+checklists = ["high-risk"]      # codex/checklist-<name>.md
+
+[review.surfaces.security]
+codex_effort = "xhigh"
+checklists = ["security"]
+paths = ["src/*/auth/**"]       # optional: these files add the surface by themselves
+
+[review.surfaces.data]
+checklists = ["data"]
+
+[review.surfaces.migrations]
+codex_effort = "xhigh"
+checklists = ["migrations"]
+```
+
+`risk.low` and `risk.medium` add nothing by default. A level applies with every
+level below it (`high` also gets what `medium` and `low` give), so a higher risk never
+reviews lighter than a lower one. A new surface
+(`[review.surfaces.payments]`) can reuse any built-in checklist; checklists are
+toolkit files (`codex/checklist-high-risk.md`, `-security`, `-data`, `-migrations`),
+so an agent cannot rewrite one inside a project.
+
+The policy is conservative, so a low rating never buys a lighter review:
+
+- **Never below the role.** The effort is the highest of `reviewer.md`'s
+  `codex_effort` and every rule that applies; `risk: low`, or a rule with a lower
+  effort, keeps the role's.
+- **Files raise it.** A `files:` entry matching `[sessions] high_risk_paths` makes
+  the risk `high`, and one matching a surface's `paths` adds that surface, whatever
+  the spec declares. `make check` warns when an open subtask's spec understates what
+  its files imply.
+- **Sealed with the plan.** The phase, task or issue gate reviews the ratings (an
+  understated one is `CHANGES_REQUESTED`) and seals them with the specs: the seal
+  gets a `rating:<spec>` line for each rated spec (unrated specs get none, so older
+  seals stay valid). The sealed rating is a floor for the subtask's gates. Raising
+  it in the plan gate is fine and its re-seal keeps the raise; lowering it fails
+  `make check` until the phase/task/issue gate approves it again or the human
+  re-seals (`review_with_codex.sh seal …`).
+- **Fails closed.** An invalid `risk:`, a malformed or unknown surface, a missing
+  checklist file or an invalid table makes `make check` fail and the gate stop
+  before Codex runs. Done and baseline subtasks are exempt from that check (their
+  specs may predate the fields); a seal written before issue #44 has no `rating:`
+  lines and stays valid while its specs are unchanged. Such a seal approved no
+  rating, so it gives no floor: the first plan-gate re-seal records the spec's rating
+  from then on.
+
+With a rating, the gate prompt gets a `Review policy` paragraph (effort, why, and
+the checklist paths); the reviewer adds a `## Checklists` section to its verdict
+(one line per item: met, gap, n/a; any gap is `CHANGES_REQUESTED`). A subtask
+without a rating, and no matching `paths`, is reviewed exactly as before. The
+reviewer is always Codex.
+
 ## Codex and PR controls (`harness.toml` `[codex]`, `[pr]`)
 
 ```toml
@@ -259,7 +329,8 @@ codex_effort: high
 criteria, the section of its planning mode and its hard rules with a stronger model.
 
 `codex_effort` accepts `low`, `medium`, `high` or `xhigh`; any other value is
-not passed. The files are symlinked into every project, so a change here
+not passed. A subtask's rating may raise the reviewer's effort for its `plan` and
+`code` gates, never lower it (see "Review effort and checklists by risk"). The files are symlinked into every project, so a change here
 applies to all of them.
 
 ## Hooks and permissions

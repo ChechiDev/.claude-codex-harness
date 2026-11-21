@@ -22,3 +22,12 @@ directory as this file). Read `reviewer.md` and act strictly by:
 Ignore the other modes of `reviewer.md` (`issue`, `issue-draft`, `plan`, `code`):
 they run under the reviewer role, not this one. Your function is the same as the
 reviewer's: approve or reject, never edit the plan or production code.
+
+## Risk and surfaces (issue #44)
+
+In `phase` and `task` modes the specs you approve are sealed with their `- risk:` and
+`- surfaces:` rating, which picks the effort and the extra checklists of each
+subtask's later gates. Apply the "Risk and surfaces (issue #44)" rules of
+`reviewer.md`: an **understated** rating (missing or too low for what the spec
+changes) is CHANGES_REQUESTED, naming the rating it needs, and a lowered rating is
+never a fix.

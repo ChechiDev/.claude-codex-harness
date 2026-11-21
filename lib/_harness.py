@@ -839,7 +839,10 @@ def validate() -> int:
         if leaf["status"] not in VALID
     ]
     problems += plan_problems() + config_problems()
-    for warning in files_limit_warnings(units):
+    import _review_risk  # lazy: _review_risk imports this module
+
+    problems += _review_risk.problems(units, Path.cwd())
+    for warning in files_limit_warnings(units) + _review_risk.warnings(units, Path.cwd()):
         say("WARN", warning)
     if not problems:
         say("OK", f"feature_list.json valid ({len(units)} work units)")
