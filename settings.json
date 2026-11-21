@@ -9,7 +9,8 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/harness/guard_write.sh\"",
             "description": "Blocks writes to tests/acceptance/ (Codex oracle), Codex verdicts, and src/ outside the approved plan scope.",
-            "onFailure": "block"
+            "onFailure": "block",
+            "timeout": 15
           }
         ]
       },
@@ -20,19 +21,21 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/harness/guard_bash.sh\"",
             "description": "Blocks Claude commits, agent attribution, and shell writes to protected paths.",
-            "onFailure": "block"
+            "onFailure": "block",
+            "timeout": 15
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/harness/post_write.sh\"",
-            "description": "Fast feedback: lint + tests after each write (does not block)."
+            "description": "Fast feedback: lint + tests after each write (does not block).",
+            "timeout": 120
           }
         ]
       }
@@ -43,7 +46,8 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/harness/stop_gate.sh\"",
-            "description": "Before closing: make check (verify + invariants + gate consistency)."
+            "description": "Before closing: make check (verify + invariants + gate consistency).",
+            "timeout": 15
           }
         ]
       }

@@ -790,6 +790,41 @@ def commit_prefix(sid: str) -> int:
     return _git_command(lambda cfg: _render(cfg.commit_prefix, tid, cfg))
 
 
+FILES_LIMIT = 3
+TEST_ONLY = "Test-only verification (no production behaviour change)"
+
+
+def _test_only(leaf: Item) -> bool:
+    """The spec declares the versioned test-only exception (#23): empty `files:` is fine."""
+    spec = str(leaf.get("spec") or "")
+    try:
+        return bool(spec) and TEST_ONLY in Path(spec).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+
+
+def _legacy_unchanged(item_id: str) -> bool:
+    import _legacy  # lazy: _legacy imports this module
+
+    return _legacy.is_legacy_unchanged(Path.cwd(), item_id)
+
+
+def files_limit_warnings(units: list[Item]) -> list[str]:
+    """I16 (#81, WARN): a subtask declares 1-3 `files:`. Done/baseline and unchanged
+    legacy leaves (plan 0.6) are exempt; an empty list is fine for a test-only spec."""
+    out = []
+    for leaf in units:
+        count = len(leaf.get("files") or [])
+        if 1 <= count <= FILES_LIMIT or leaf["status"] in ("done", "baseline"):
+            continue
+        if count == 0 and _test_only(leaf):
+            continue
+        if _legacy_unchanged(str(leaf["id"])):
+            continue
+        out.append(f"{leaf['id']} declares {count} files in files: (expected 1-{FILES_LIMIT})")
+    return out
+
+
 def validate() -> int:
     units = leaves()
     problems = []
@@ -804,6 +839,8 @@ def validate() -> int:
         if leaf["status"] not in VALID
     ]
     problems += plan_problems() + config_problems()
+    for warning in files_limit_warnings(units):
+        say("WARN", warning)
     if not problems:
         say("OK", f"feature_list.json valid ({len(units)} work units)")
     return _report(problems)

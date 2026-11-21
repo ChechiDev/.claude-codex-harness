@@ -287,7 +287,7 @@ is rejected: the type must be unambiguous.
   behaviour: it blocks the first stop with a red check and only reports a
   repeated red result (loop protection); the leader confirms that only the
   expected oracles are red.
-- Network only in explicit commands: `make issue`, `make issue-start`, `issue.sh release`, `issue.sh resume`, `issue.sh publish`, the PR step
+- Network only in explicit commands: `make issue`, `issue.sh intake|ask|unblock`, `make issue-start`, `issue.sh release`, `issue.sh resume`, `issue.sh publish`, the PR step
   and `make status` (queue block; offline → "issue queue unavailable", the rest
   of the status still prints).
 
@@ -299,6 +299,10 @@ new issue: [leader] progress/issue_draft.md (lib/issue_template.md)
   → harness/issue.sh publish             (gh issue create, type + priority labels)
 existing issue: opened on GitHub by the user or a teammate
   → make issue N=14 [PRIORITY=now|next|backlog]   gh: validate, set priority label (queued)
+  → issue.sh intake 14      duplicates / missing info / scope (read only) → user decides
+      [only the author can answer] user OK → issue.sh ask 14 (comment, needs-info:
+      parked, out of the queue; no branch, leaf, oracle or seal) → answer →
+      issue.sh unblock 14 [PRIORITY] → intake again
   → make issue-start N=14   allowed? (3.3; `now`: run from the task branch it interrupts)
                             → claim tag, assign @me, status:in-progress,
                             branch <type>/ISS-14-<slug> from origin/main + header
@@ -317,6 +321,9 @@ existing issue: opened on GitHub by the user or a teammate
 | Command | Does |
 |---------|------|
 | `make issue N=14 [PRIORITY=…]` | Queue: `gh issue view 14 --json` → open? exactly one known type label? not claimed? → sets `priority:<p>` (default `next`), replacing any other `priority:*`. Re-running it changes the priority. Never creates a branch. |
+| `harness/issue.sh intake 14` | Read-only diagnosis (issue #45): possible duplicates (the newest 1000 open issues whose title shares most significant words; titles shown truncated and marked untrusted), missing information (short body; a bug without steps to reproduce), wide scope (many list items or a long body). `READY` only when queued and unclaimed; otherwise `CHECK` or `NEEDS-INFO`; changes nothing. The body is measured, never quoted or executed. |
+| `harness/issue.sh ask 14` | After the user's OK: posts `progress/issue_question-ISS-14.md` as a comment (hidden per-attempt marker persisted in `….attempt`; only our own comments count, so a retry never posts it twice and a copied marker never suppresses it; agent attribution refused), adds `needs-info` and removes every `priority:*` as the issue is then (re-read, so a concurrent queue is undone). Refuses a claimed issue; a claim that lands meanwhile is reported, not undone. `make issue` and `make issue-start` refuse a parked issue. |
+| `harness/issue.sh unblock 14 [PRIORITY]` | The author answered (the user says so): removes `needs-info` and re-queues with `priority:<p>` (default `next`). |
 | `make issue-start N=14` | Start: `git fetch origin`; checks 3.3 (queued, unclaimed, task open / `backlog` rules; `now` only from the open task branch it interrupts (3.3); no other `in_progress` leaf on any local branch); **claims atomically** (below); creates the branch from `origin/main` and the header (with `interrupts:` for `now` over an open task). |
 | `harness/issue.sh release 14` | Gives a claimed issue back before any commit (claim token required). The only change allowed is the header exactly as `issue-start` wrote it (compared with the hash recorded in the claim); an edited header, any spec or any other change, staged or not, makes it refuse, report what would be lost and leave everything in place. Otherwise it follows the release order of the atomic claim below (header and branch, labels and assignee, remote tag last). |
 | `make issue-new` | Leader drafts `progress/issue_draft.md` from `harness/issue_template.md`. |

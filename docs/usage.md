@@ -13,6 +13,32 @@ from the leader's brief; you never switch models by hand.
 cd /path/to/project && claude
 ```
 
+## 0. Create a new Python project (py-init, then the harness)
+
+For a brand-new project, ask Claude to "init project <name>" (the `py-init`
+skill). One guided flow, always in this order:
+
+1. **py-init** scaffolds the Python project (uv, `src/` layout, tests, canonical
+   `pyproject.toml`, Graphify, Archify). It writes no `CLAUDE.md`, `AGENTS.md`,
+   `Makefile` or anything under `.claude/`: those belong to the harness.
+2. It **offers `install.sh <project-dir>`** (with your OK, without `--python`, so
+   py-init's `pyproject.toml` stays). On a repo without history this makes the
+   single initial commit `chore: install harness` (scaffold + harness), switches
+   to `chore/project-setup` and requires `make check` green.
+3. On `chore/project-setup` it adds the CI workflows (`ci.yml` runs the same
+   ruff / mypy / pytest commands as `make check`; empty suites are green) and
+   opens the draft PR.
+
+If the harness is already installed, py-init detects it
+(`skills/py-init/scripts/detect_harness.sh`) and only scaffolds Python: no role
+files, commits or branches. On a repo that already had history py-init never
+commits; you commit through the usual authorised flow.
+
+Archify is installed only under the project's `.agents/skills/archify/`
+(`skills/py-init/scripts/install_archify.sh`), never through the shared
+`.claude/skills` link. Claude does not load it automatically: ask
+"Read `.agents/skills/archify/SKILL.md` and follow it".
+
 ## 1. Plan the roadmap
 
 Tell the leader what to build. It reads the repo first if there is code, then
@@ -223,6 +249,9 @@ gates (design: [design/issues-lane.md](design/issues-lane.md)).
 ```bash
 make issue N=14                      # queue it (PRIORITY=now|next|backlog, default next)
 make status                          # the queue (from GitHub) and Next:
+harness/issue.sh intake 14           # duplicates, missing info, scope (read only)
+harness/issue.sh ask 14              # with the user's OK: post the question, park (needs-info)
+harness/issue.sh unblock 14          # the author answered: back to the queue
 make issue-start N=14                # claim it: assigned, status:in-progress,
                                      # branch <type>/ISS-14-<slug>, header in docs/plan/issues/
 # the leader breaks it down with you: ISS-14.1, ISS-14.2… (one spec at a time)
@@ -402,6 +431,26 @@ instead of running Codex. After an approved roadmap, phase or plan gate,
 ./harness/review_with_codex.sh seal 1.1.1
 ```
 
+## Hooks
+
+`settings.json` wires four hooks, each with an explicit `timeout` (seconds) so a
+hung hook cannot stall a session for Claude Code's 600 s default:
+
+| Event | Matcher | Script | Timeout | On failure / timeout |
+|---|---|---|---|---|
+| PreToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `guard_write.sh` | 15 | blocks (`onFailure: "block"`) |
+| PreToolUse | `Bash` | `guard_bash.sh` | 15 | blocks (`onFailure: "block"`) |
+| PostToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `post_write.sh` | 120 | never blocks (feedback only) |
+| Stop | — | `stop_gate.sh` | 15 | never blocks (advisory) |
+
+`post_write.sh` runs `make lint`. If the project `Makefile` declares a
+`LINT_FILES` variable (for example `LINT_FILES ?= .` used by the `lint`
+recipe), it runs `make lint LINT_FILES=<written file>` instead; without it, or
+when the payload has no plain path inside the project, the full lint runs.
+An optional `LINT_EXTS` (for example `LINT_EXTS := .py .pyi`) limits the
+scoping to files with those extensions, so a docs edit is not passed to the
+linter; other files get the full lint.
+
 ## Stop hook
 
 Claude Code runs the Stop hook at the end of **every** assistant turn, not only
@@ -417,7 +466,7 @@ when the session closes, so `stop_gate.sh` is advisory and cheap:
 The real full `make check` runs at the gates, at close and before a PR. Gates
 and close write the green record only after a clean, green check of an
 unchanged tree; the PR path blocks unless that record matches the exact current
-state. After each Edit/Write, `post_write.sh` runs only `make lint` (feedback,
+state. After each Edit/Write/MultiEdit/NotebookEdit, `post_write.sh` runs only `make lint` (feedback,
 never blocks).
 
 ## Recovery when a hook blocks Claude
