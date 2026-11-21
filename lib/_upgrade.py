@@ -92,6 +92,21 @@ POINTER = (
     "\n> Shared workflow, the same in every project (leader role, gates, issues lane):\n"
     "> `harness/WORKFLOW.md`.\n"
 )
+# Scoped lint (#92): the exact pre-#92 template recipe is upgraded; a customised
+# lint is the project's and is left alone (lint_note() tells how to scope it).
+LEGACY_LINT = "lint:\n\tuv run ruff check .\n\tuv run ruff format --check .\n"
+LINT = (
+    "# Scoped lint (#76): the post-write hook runs `make lint LINT_FILES=<written file>`\n"
+    "# for files with a LINT_EXTS extension; plain `make lint` checks the whole project.\n"
+    "LINT_FILES ?= .\n"
+    "LINT_EXTS := .py .pyi\n"
+    "\n"
+    "lint:\n"
+    "\tuv run ruff check -- $(LINT_FILES)\n"
+    "\tuv run ruff format --check -- $(LINT_FILES)\n"
+)
+RE_LINT_FILES = re.compile(r"^[ \t]*LINT_FILES[ \t]*[?:+]?=", re.MULTILINE)
+RE_LINT_VARS = re.compile(r"^[ \t]*(?:override[ \t]+)?LINT_(?:FILES|EXTS)\b", re.MULTILINE)
 RE_RULE = re.compile(r"^([A-Za-z0-9_.-]+)\s*:(?!=)")
 
 
@@ -155,8 +170,43 @@ def _harness_recipes() -> dict[str, list[str]]:
     return {name: _recipe(lines, bs[-1]) for name, bs in _blocks(lines).items()}
 
 
-def migrated_makefile(text: str) -> str | None:
-    """The migrated Makefile text, or None when it is already migrated. Raises."""
+def _upgraded_lint(text: str) -> str:
+    """`text` with the pre-#92 lint recipe replaced by LINT, only when it is the
+    single lint rule, exactly as shipped, and no lint variable is declared."""
+    lines = text.splitlines(True)
+    rules = _blocks([line.rstrip("\n") for line in lines]).get("lint", [])
+    if len(rules) != 1 or RE_LINT_VARS.search(text):
+        return text
+    _, start, end = rules[0]
+    if "".join(lines[start:end]) != LEGACY_LINT:
+        return text
+    return "".join(lines[:start]) + LINT + "".join(lines[end:])
+
+
+def lint_note(text: str) -> str | None:
+    """Why a Python-set Makefile keeps the full post-write lint, or None."""
+    lines = text.splitlines()
+    rules = _blocks(lines).get("lint", [])
+    if not rules:
+        return None
+    scoped = RE_LINT_FILES.search(text) and any(
+        "$(LINT_FILES)" in line for line in _recipe(lines, rules[-1])
+    )
+    if scoped:
+        return None
+    return (
+        "Makefile: lint recipe customised, left as is; the post-write hook lints the "
+        "whole project (declare LINT_FILES ?= . and use $(LINT_FILES) in lint to scope it)"
+    )
+
+
+def migrated_makefile(text: str, python_lint: bool = False) -> str | None:
+    """The migrated Makefile text, or None when it is already migrated. Raises.
+
+    python_lint: the project uses the Python template set (scoped lint, #92)."""
+    original = text
+    if python_lint:
+        text = _upgraded_lint(text)
     if LEGACY_GUARD in text:
         text = text.replace(LEGACY_GUARD, GUARD)
         if text.splitlines() and not any(
@@ -177,7 +227,7 @@ def migrated_makefile(text: str) -> str | None:
             + " (move the custom part into a project target, then re-run)"
         )
     if INCLUDE in lines and not blocks:
-        return None
+        return None if text == original else text
     drop: set[int] = set()
     for first, _, end in (b for bs in blocks.values() for b in bs):
         stop = end + 1 if end < len(lines) and not lines[end].strip() else end
@@ -385,9 +435,13 @@ def _plan(root: Path) -> dict[str, str]:
     if problems:
         raise MigrationError("\n".join(problems) + "\nnothing was changed; resolve by hand")
     planned: dict[str, str] = {}
-    new = migrated_makefile((root / "Makefile").read_text("utf-8"))
+    python = tset == "templates"
+    new = migrated_makefile((root / "Makefile").read_text("utf-8"), python_lint=python)
     if new is not None:
         planned["Makefile"] = new
+    note = lint_note(new or (root / "Makefile").read_text("utf-8")) if python else None
+    if note:
+        say("WARN", note)
     for tpl in templates:
         state, path = states[tpl.path], root / tpl.path
         if tpl.mode == "whole" and (state.kind == "absent" or state.version != tpl.current):

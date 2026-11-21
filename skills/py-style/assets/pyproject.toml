@@ -82,7 +82,6 @@ ignore = []
 "tests/**/*.py" = ["S101", "PLR0915", "PLR0912", "C901"]  # allow assert + longer tests
 
 # ── Clean-code caps (SOLID / no monster functions) ──────────────────────────
-# Enforced by `make verify` (lint gate), so Codex sees red before approving.
 [tool.ruff.lint.mccabe]
 max-complexity = 8      # a more branchy function → refactor it
 

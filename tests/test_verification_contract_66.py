@@ -184,9 +184,9 @@ def test_removing_lint_from_verify_warns(project: Project) -> None:
 def test_redefining_the_lint_recipe_warns(project: Project) -> None:
     _python_project(project)
     _baseline(project)
-    project.write(
-        "Makefile", PY_MAKEFILE.replace("uv run ruff check .", "uv run ruff check . || true")
-    )
+    recipe = "uv run ruff check -- $(LINT_FILES)"
+    assert recipe in PY_MAKEFILE  # the edit below must change the template recipe
+    project.write("Makefile", PY_MAKEFILE.replace(recipe, recipe + " || true"))
     warns = _contract_warns(_launch(project))
     assert any("lint" in w for w in warns), warns
 
