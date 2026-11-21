@@ -36,13 +36,20 @@ lint:
 type: $(OBJ)
 	@$(STATUS) ok "compiles clean ($(WARN))"
 
-# Quiet on success; a test that fails to build or run is reported by name.
+# Quiet on success; a test that fails to build or run is reported by name. Each test
+# is rebuilt from its source in this run; under harness/run_check.sh it also logs
+# "<source> <sha256> <exit>" to HARNESS_ORACLE_CLOG, the execution evidence of the
+# sealed oracles (issue #65). An empty TESTS with sealed oracles is reported there.
 test: $(OBJ)
 	@if [ -z "$(TESTS)" ]; then $(STATUS) ok "no tests yet"; else \
 	  for t in $(TESTS); do \
 	    bin=$${t%.c}.bin; \
 	    $(CC) $(CFLAGS) $$t $(OBJ) -o $$bin || { $(STATUS) fail "$$t (build)"; exit 1; }; \
-	    ./$$bin || { $(STATUS) fail "$$t"; exit 1; }; \
+	    ./$$bin; rc=$$?; \
+	    [ -z "$$HARNESS_ORACLE_CLOG" ] || { printf '%s\t%s\t%s\n' "$$t" \
+	      "$$(sha256sum "$$t" 2>/dev/null | cut -d' ' -f1)" "$$rc" \
+	      >>"$$HARNESS_ORACLE_CLOG"; } 2>/dev/null || true; \
+	    [ $$rc -eq 0 ] || { $(STATUS) fail "$$t"; exit 1; }; \
 	  done; \
 	  $(STATUS) ok "tests passed"; \
 	fi

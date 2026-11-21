@@ -75,7 +75,10 @@ RE_CODEX_OWNED = re.compile(
     r"|phase_close)_[^/]+\.md"
     # Legacy record of a phase broken down whole (issue #62), sealed in its phase seal.
     r"|progress/task_flow_legacy_[^/]+\.json"
-    r"|progress/(roadmap_review|issue_draft_review|legacy_inventory_review)\.md"
+    r"|progress/(roadmap_review|issue_draft_review|legacy_inventory_review"
+    r"|oracle_contract_review)\.md"
+    # Sealed I4 baseline (issue #65): written only by the human-run _oracle.py.
+    r"|progress/oracle_baseline\.json"
     # Sealed legacy inventory (M0b): written only by the human-run legacy_inventory.sh.
     r"|progress/legacy_inventory\.json"
     r"|progress/review_history/[^/]+\.md|progress/pr_[^/]+\.md"
@@ -382,6 +385,29 @@ def guard_write(payload: object) -> None:
         raise Blocked(MSG_CONFIG)
     if kind == "src":
         _check_src_scope(rel)
+    _warn_selection_input(rel)
+
+
+def _warn_selection_input(rel: str) -> None:
+    """WARN (issue #65, plan 0.5): an edit to a test selection input while the I4
+    baseline is sealed. Allowed, with a note to Claude and the user; blocking is I4-fail."""
+    import _oracle
+
+    base = _oracle.baseline()[0]
+    if base is None or not _oracle.selection_input(rel, base.get("selection")):
+        return
+    msg = (
+        f"[WARN] '{rel}' is a test selection input (it decides which tests the check runs): "
+        f"a change outside the contract flow is reported by every check — {_oracle.FIX_CONTRACT}"
+    )
+    print(
+        json.dumps(
+            {
+                "systemMessage": msg,
+                "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg},
+            }
+        )
+    )
 
 
 def _check_agent_scope(payload: object, raw: str, rel: str | None) -> None:
@@ -507,7 +533,7 @@ UV_RUN_FLAGS = frozenset(
     }
 )  # fmt: skip
 OPAQUE_FLAGS = frozenset({"-S", "--split-string"})  # env: the value is the command line
-SEALER_NAMES = r"(_legacy|_guard|_verdict|legacy_inventory|review_with_codex)\b"
+SEALER_NAMES = r"(_legacy|_guard|_verdict|_oracle|legacy_inventory|review_with_codex)\b"
 RE_SEALER_NAME = re.compile(r"(^|[\s/'\"=])" + SEALER_NAMES)
 RE_SEALER_ANYWHERE = re.compile(SEALER_NAMES)
 
@@ -629,6 +655,8 @@ PROTECTED_TEMPLATES = (
     "progress/issue_draft_review.md",
     "progress/legacy_inventory_review.md",
     "progress/legacy_inventory.json",
+    "progress/oracle_contract_review.md",
+    "progress/oracle_baseline.json",
     "progress/review_history/*.md",
     "progress/pr_*.md",
     "progress/issue_migrations_*.json",
@@ -646,6 +674,17 @@ SEALERS: dict[str, frozenset[str]] = {
     "legacy_inventory.sh": frozenset({"create", "review", "seal"}),
     "_legacy.py": frozenset({"create", "review", "seal"}),
     "_verdict.py": frozenset({"begin", "commit", "abort", "receipt"}),
+    # I4b (issue #65): the baseline, its contract reseal and the plan gate's red record.
+    "_oracle.py": frozenset(
+        {
+            "baseline-create",
+            "baseline-seal",
+            "contract-review",
+            "contract-approve",
+            "red-record",
+            "red-drop",
+        }
+    ),
 }
 
 

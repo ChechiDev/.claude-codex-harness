@@ -60,7 +60,7 @@ usage() {
   echo "usage: review_with_codex.sh roadmap | phase <NN> | task <N.M> | task-close <N.M>" \
        "| phase-close <NN> | issue <ISS-n> | issue-draft" \
        "| <plan|code|doc> <N.M.K|ISS-n.k> | close <N.M.K> | pr <N.M> | pr <ISS-n>" \
-       "| seal <N.M.K|roadmap|phase NN|task N.M|issue ISS-n|draft>" >&2
+       "| seal <N.M.K|roadmap|phase NN|task N.M|issue ISS-n|draft> | contract" >&2
   exit 2
 }
 PHASE="${1:-}"; shift || true
@@ -167,15 +167,41 @@ run_check_tolerating() {
       rm -rf "$dry"; return 99
     fi
     rm -rf "$dry"
+    # Evidence is best effort: without a temp file the run is not instrumented.
+    local ev rc cenv=()
+    ev="$(mktemp "${TMPDIR:-/tmp}/harness-clog.XXXXXX" 2>/dev/null)" || ev=""
+    [ -z "$ev" ] || cenv=(HARNESS_ORACLE_CLOG="$ev")
     "${CLEAN_ENV[@]}" HARNESS_ASSUME_APPROVED="$target" HARNESS_EXPECT_RED="$label" \
-      make check "TESTS=${keep[*]}" >"$log" 2>&1 </dev/null
+      "${cenv[@]}" make check "TESTS=${keep[*]}" >"$log" 2>&1 </dev/null
+    rc=$?
+    if [ -n "$ev" ]; then third_run_evidence "$log" "$label" --clog "$ev"; rm -f -- "$ev"
+    else third_run_evidence "$log" "$label"; fi
+    return $rc
   elif [ "$origin" = "undefined" ] && [ -f pyproject.toml ]; then
     while IFS= read -r f; do [ -n "$f" ] && args+=("--ignore=$f"); done <<<"$files"
+    # Evidence is best effort: without a temp dir (or its quoting) the run keeps only
+    # its --ignore options, and the evidence step reports "cannot establish".
+    local ev rc q="" opts="${args[*]}"
+    ev="$(mktemp -d "${TMPDIR:-/tmp}/harness-junit.XXXXXX" 2>/dev/null)" || ev=""
+    [ -z "$ev" ] || q="$(python3 -E -s -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' \
+      "$ev/junit.xml")" || q=""
+    [ -z "$q" ] || opts="$opts --junitxml=$q -o junit_family=xunit1"
     "${CLEAN_ENV[@]}" HARNESS_ASSUME_APPROVED="$target" HARNESS_EXPECT_RED="$label" \
-      PYTEST_ADDOPTS="${args[*]}" make check >"$log" 2>&1 </dev/null
+      PYTEST_ADDOPTS="$opts" make check >"$log" 2>&1 </dev/null
+    rc=$?
+    if [ -n "$q" ]; then third_run_evidence "$log" "$label" --junit "$ev/junit.xml"
+    else third_run_evidence "$log" "$label"; fi
+    [ -z "$ev" ] || rm -rf -- "$ev"
+    return $rc
   else
     return 99
   fi
+}
+# Oracle evidence of the third run (issue #65, WARN): only the validated expected-red
+# set T may be missing; it is appended to the log and never changes the run's result.
+third_run_evidence() {
+  local log="$1" label="$2"; shift 2
+  python3 "$HARNESS_DIR/_oracle.py" evidence "$@" --expect-red "$label" >>"$log" 2>&1 || true
 }
 new_log() { mktemp "${TMPDIR:-/tmp}/harness-check-$1.XXXXXX"; }
 
@@ -341,6 +367,9 @@ case "$PHASE" in
   seal)    exec python3 "$HARNESS_DIR/_guard.py" seal "$@" ;;
   close)   [ -n "${1:-}" ] || usage; close_commit "$1" || exit 1; open_pr_if_due "$1"; exit 0 ;;
   pr)      [ -n "${1:-}" ] || usage; open_pr "$1"; exit $? ;;
+  # Selection contract (issue #65, I4b): Codex reviews progress/oracle_contract.json,
+  # bound to its diff hash; the human then runs _oracle.py contract-approve <hash>.
+  contract) exec python3 "$HARNESS_DIR/_oracle.py" contract-review ;;
   roadmap) ID="roadmap"; ROLE="$CODEX_DIR/codex-planner.md" ;;
   phase)   ID="${1:-}"; ROLE="$CODEX_DIR/codex-planner.md" ;;
   task|task-close|phase-close) ID="${1:-}"; ROLE="$CODEX_DIR/codex-planner.md" ;;
@@ -351,6 +380,9 @@ case "$PHASE" in
   *) usage ;;
 esac
 [ -n "$ID" ] || usage
+# A plan gate run never reuses an older red record (issue #65): it is dropped before
+# anything that can exit, and only an approval that sealed the oracle writes a new one.
+[ "$PHASE" != "plan" ] || python3 "$HARNESS_DIR/_oracle.py" red-drop "$ID" || true
 CODEX_PHASE="$PHASE"
 [ -f "$ROLE" ] || { echo "role prompt not found: $ROLE" >&2; exit 1; }
 
@@ -433,6 +465,9 @@ else
   CHECK_RC=$?
 fi
 [ "$PHASE" != "code" ] || code_gate_record "$ID" "$CHECK_RC" "$CHECK_LOG"
+# Red evidence (issue #65, I4b, WARN): the code gate needs the plan gate's record of the
+# oracle collected and failing, with the oracle and selection inputs unchanged since.
+[ "$PHASE" != "code" ] || python3 "$HARNESS_DIR/_oracle.py" red-check "$ID" || true
 
 # Re-gate (issue #27): a red check of an approved roadmap/phase/issue may come only
 # from failures this same approval clears (its seal, its plan-rule lines). Run the
@@ -663,5 +698,10 @@ python3 "$PR_PY" record "$PHASE" "$ID" "$VERDICT_FILE" ||
 # whichever tool changed it.
 if [ -n "$SEAL_ON" ] && [ "$TOKEN" = "$SEAL_ON" ]; then
   python3 "$HARNESS_DIR/_guard.py" seal "${SEAL_ARGS[@]}" || exit 1
+  # After Codex wrote the oracle: run it alone and record it collected and failing,
+  # with the check result and the oracle/selection fingerprints (WARN only).
+  if [ "$PHASE" = "plan" ]; then
+    python3 "$HARNESS_DIR/_oracle.py" red-record "$ID" "$CHECK_RC" || true
+  fi
 fi
 exit 0
