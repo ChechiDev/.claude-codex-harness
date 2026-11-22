@@ -70,7 +70,8 @@ launch it through `harness/session_launch.sh <id> --worktree <path>` (add
 `--exec` or `--hook <prog>` to start it); never compose the `claude` command
 yourself. The launcher takes the model and effort from `harness.toml [sessions]`
 (sonnet / medium, or opus / high when the unit's `files:` match
-`high_risk_paths`) and quotes the prompt. It does not create the worktree.
+`high_risk_paths` or one of its specs is rated `risk: high`, declared or sealed)
+and quotes the prompt. It does not create the worktree.
 
 ## Delegating to claude-planner
 
@@ -83,6 +84,11 @@ exception: you set `status: in_progress` when a subtask starts). Its rules
   kickoff specs, issue `ISS-<n>` specs, or a gate fix);
 - the user's answers and decisions that apply (verbatim, no summary drift);
 - for a gate fix, the verdict file (`progress/<…>_review_<id>.md`).
+- the risk the user stated for the work, if any: each spec rates it with the
+  optional `- risk: low|medium|high` and `- surfaces: <names>|none` lines
+  (`harness/sync_plan.py` spec format). They raise the effort and checklists of
+  its Codex gates, and `risk: high` launches its session as `high_risk_paths`
+  does. Never ask for a lower rating to get a lighter review or model.
 
 It replies `done -> …` or `questions -> …`. Ask the user those questions **one
 at a time**, then call it again with the answers. Never fill a gap yourself.
