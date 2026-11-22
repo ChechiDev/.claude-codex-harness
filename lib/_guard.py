@@ -14,7 +14,8 @@ Commands:
   seal phase <NN>   record progress/plan_phase_<NN>.sha256 (needs PHASE_APPROVED)
   seal issue <ISS-n>  record progress/plan_issue_<ISS-n>.sha256 (needs ISSUE_APPROVED)
   seal draft        record progress/issue_draft.sha256 (needs DRAFT_APPROVED)
-  fingerprint  print a hash of the git working-tree state (Stop-hook cache key)
+  fingerprint  print a hash of the git working-tree state, the files that drive the
+               check (ignored or not) and the toolkit: the green-record key
   setup-pending  exit 1 if the setup branch (harness.toml [git] setup_branch) has
                  changes main does not contain yet (squash merges count as merged)
   migrates-ready <id>  exit 1 unless every oracle in <id>'s `migrates:` exists, is
@@ -39,6 +40,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from functools import cache, partial
@@ -144,8 +146,8 @@ MSG_SHELL_OPAQUE = (
     "touching protected paths). Use the Edit/Write tools so the plan scope is enforced."
 )
 MSG_SEAL = (
-    "BLOCKED: sealing (acceptance tests, the approved roadmap, a phase or the legacy inventory) "
-    "is done by the Codex "
+    "BLOCKED: sealing (acceptance tests, the approved roadmap, a phase, the legacy inventory "
+    "or the attempt ledger) is done by the Codex "
     "gate itself (or by the human in manual mode), never by Claude."
 )
 MSG_ATTRIBUTION = (
@@ -156,6 +158,21 @@ MSG_COMMIT = (
     "BLOCKED: Claude does not commit in the harness. The single per-subtask commit is made by "
     "the close (./harness/review_with_codex.sh doc <N.M.K>). If you really need a manual "
     "commit outside the flow, the human must start Claude Code with HARNESS_ALLOW_COMMIT=1."
+)
+# Issue #61 item 5: a manual commit (HARNESS_ALLOW_COMMIT=1) needs a green record of the
+# tree being committed, the same check as the PR barrier of #55. WARN for now; it moves
+# to BLOCK in the WARN->FAIL calendar. HARNESS_ALLOW_COMMIT=force is the human valve.
+GREEN_RECORD = "harness-check.ok"  # git-path of the record run_check.sh --record writes
+FORCE_LOG = "harness-commit-force.log"  # git-path of the force audit log
+MSG_WARN_COMMIT_RECORD = (
+    "[WARN] HARNESS_ALLOW_COMMIT=1 commit (#61): {problem}. Get one first with "
+    "`bash harness/run_check.sh --record` (a green check of an unchanged tree), then commit "
+    "that same state. Allowed for now (WARN); it becomes a BLOCK in the WARN->FAIL calendar. "
+    "The human valve HARNESS_ALLOW_COMMIT=force skips this check and logs its use."
+)
+MSG_WARN_COMMIT_FORCE = (
+    "[WARN] HARNESS_ALLOW_COMMIT=force: this commit skips the green record check (#61); "
+    "its use is logged in {log}."
 )
 
 # I8: operations accepted today that create, move or publish commits outside the
@@ -912,6 +929,9 @@ SEALERS: dict[str, frozenset[str]] = {
     "_contract.py": frozenset(
         {"baseline-create", "baseline-seal", "contract-review", "contract-approve"}
     ),
+    # Attempt ledger (issue #46): an attempt is begun/ended only by the harness step, so
+    # Claude cannot reset the budget. `budget` and the read-only next action stay open.
+    "_resume.py": frozenset({"begin", "end"}),
 }
 
 
@@ -2038,10 +2058,83 @@ def guard_bash(payload: object) -> None:
     found = BashAnalyzer(command).run()
     if (found.commits or found.publishes) and RE_ATTRIBUTION.search(command):
         raise Blocked(MSG_ATTRIBUTION)
-    if found.commits and os.environ.get("HARNESS_ALLOW_COMMIT") != "1":
+    notes = list(found.warnings.values())
+    if found.commits:
+        note = _commit_valve()
+        notes = [note, *notes] if note else notes
+    if notes:
+        _emit_warning("\n".join(notes))
+
+
+def _commit_valve() -> str | None:
+    """A commit passes only with HARNESS_ALLOW_COMMIT set to 1 or force in the hook's
+    environment. Returns the WARN it carries: with 1, a missing or stale green record
+    (issue #61 item 5); with force, that the check was skipped (and the use is logged)."""
+    allow = os.environ.get("HARNESS_ALLOW_COMMIT")
+    if allow == "force":
+        return MSG_WARN_COMMIT_FORCE.format(log=_log_forced_commit())
+    if allow != "1":
         raise Blocked(MSG_COMMIT)
-    if found.warnings:
-        _emit_warning("\n".join(found.warnings.values()))
+    problem = green_record_problem()
+    return MSG_WARN_COMMIT_RECORD.format(problem=problem) if problem else None
+
+
+def _git_path(name: str) -> Path | None:
+    rel = _git_out("rev-parse", "--git-path", name)
+    return ROOT / rel.strip() if rel and rel.strip() else None
+
+
+def _index_flags_clear() -> bool:
+    """No tracked file marked assume-unchanged or skip-worktree: those flags hide edits
+    from status and the fingerprint (issue #55). An unreadable index counts as flagged."""
+    flags = _git_out("ls-files", "-v")
+    return flags is not None and not re.search(r"^([a-z]|S)", flags, re.MULTILINE)
+
+
+def green_record_problem() -> str | None:
+    """Why the green record does not vouch for the current tree, or None when it does:
+    the PR barrier of #55 (record == fingerprint, index flags clear)."""
+    record = _git_path(GREEN_RECORD)
+    shown = f".git/{GREEN_RECORD}"
+    fp = working_tree_fingerprint()
+    if fp is None or record is None:
+        return (
+            f"the tree's fingerprint cannot be computed, so no green record ({shown}) "
+            "vouches for it"
+        )
+    if not _index_flags_clear():
+        return (
+            "tracked files are marked assume-unchanged or skip-worktree, so no green record "
+            f"({shown}) can vouch for this tree"
+        )
+    try:
+        recorded = record.read_bytes().decode("utf-8", "replace").strip()
+    except OSError:
+        return f"there is no green record ({shown}) for this tree"
+    if recorded != fp:
+        return f"the green record ({shown}) does not match the tree being committed"
+    return None
+
+
+def _log_forced_commit() -> str:
+    """Append one line (UTC time, HEAD, fingerprint; never the command) to the force log.
+    Returns where it went, or why it could not be written: the valve is the human's, so a
+    failed log never blocks the commit, it shows in the WARN instead."""
+    path = _git_path(FORCE_LOG)
+    if path is None:
+        return "nowhere (not a git repository)"
+    head = _git_out("rev-parse", "-q", "--verify", "HEAD")
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    line = (
+        f"{stamp}\tHEAD={(head or '').strip() or 'none'}"
+        f"\tfingerprint={working_tree_fingerprint() or 'unknown'}\n"
+    )
+    try:
+        with path.open("a", encoding="utf-8") as log:
+            log.write(line)
+    except OSError as exc:
+        return f".git/{FORCE_LOG} — NOT logged ({exc.strerror or exc})"
+    return f".git/{FORCE_LOG}"
 
 
 def _precheck(command: str) -> None:
@@ -2586,6 +2679,29 @@ def seal_command(args: list[str]) -> int:
 # The toolkit code `make check` runs, reached through the project's links. Git tracks a
 # link as its target path only, so their contents go into the fingerprint explicitly.
 TOOLKIT_LINKS = ("harness", ".claude/settings.json")
+# Files that drive the check (issue #61 item 4), hashed by content whether git tracks,
+# ignores or never sees them: an ignored harness.toml or Makefile changes what the
+# check runs without moving the status or the diff. A fixed list (user decision); a
+# directory (docs/plan) is hashed whole.
+CHECK_INPUTS = (
+    "Makefile",
+    "GNUmakefile",
+    "makefile",
+    "harness.toml",
+    "feature_list.json",
+    "docs/plan",
+    "pyproject.toml",
+    "setup.cfg",
+    "tox.ini",
+    "pytest.ini",
+    "conftest.py",
+)
+
+
+def _fs_bytes(text: str) -> bytes:
+    """A path-bearing string as bytes: names git and the OS allow may hold bytes that
+    are not UTF-8 (decoded with surrogateescape), and must hash, not raise."""
+    return text.encode("utf-8", "surrogateescape")
 
 
 def _hash_tree(digest: Any, name: str, path: Path, seen: frozenset[str]) -> None:
@@ -2597,40 +2713,52 @@ def _hash_tree(digest: Any, name: str, path: Path, seen: frozenset[str]) -> None
     if path.is_symlink() and not path.exists():
         raise OSError(f"dangling link: {path}")
     if path.is_file():
-        digest.update(f"f\0{name}\0{_sha256(path)}\0".encode())
+        digest.update(_fs_bytes(f"f\0{name}\0{_sha256(path)}\0"))
     elif path.is_dir():
         if real in seen:
-            digest.update(f"loop\0{name}\0{os.readlink(path)}\0".encode())
+            digest.update(_fs_bytes(f"loop\0{name}\0{os.readlink(path)}\0"))
             return
-        digest.update(f"d\0{name}\0".encode())
+        digest.update(_fs_bytes(f"d\0{name}\0"))
         for entry in sorted(os.listdir(path)):
             _hash_tree(digest, f"{name}/{entry}", path / entry, seen | {real})
     else:
         raise OSError(f"not a file or directory: {path}")
 
 
-def _toolkit_part(digest: Any) -> bool:
-    """Hash the toolkit behind TOOLKIT_LINKS, bytecode included (Python may run a .pyc
-    instead of its source). False when any part cannot be read: no fingerprint then,
-    so the Stop runs the full check. Never a stale green."""
-    for link in TOOLKIT_LINKS:
-        path = ROOT / link
-        if not path.exists() and not path.is_symlink():
-            digest.update(f"absent\0{link}\0".encode())
-            continue
+def _paths_part(digest: Any, section: str, names: tuple[str, ...]) -> bool:
+    """Hash each of `names` (a file or a whole directory, links followed; bytecode
+    included, as Python may run a .pyc instead of its source), or mark it absent.
+    False when any part cannot be read: no fingerprint then, never a stale green."""
+    digest.update(f"{section}\0".encode())
+    for name in names:
+        path = ROOT / name
         try:
-            _hash_tree(digest, link, path, frozenset())
+            if _absent(path):
+                digest.update(_fs_bytes(f"absent\0{name}\0"))
+                continue
+            _hash_tree(digest, name, path, frozenset())
         except OSError:
             return False
     return True
 
 
-def fingerprint() -> int:
-    """Hash HEAD + status + diff + untracked contents + the toolkit behind the links;
-    exit 1 outside a git repo or when the toolkit part cannot be computed."""
+def _absent(path: Path) -> bool:
+    """True only when nothing is there (no entry, or a parent that is a file). An entry
+    that cannot be looked at (an untraversable parent) raises: it is unreadable, not
+    absent."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    return False
+
+
+def working_tree_fingerprint() -> str | None:
+    """Hash HEAD + status + diff + untracked contents + the check inputs + the toolkit
+    behind the links; None outside a git repo or when a part cannot be read."""
     status = _git_out("status", "--porcelain=v1", "-z", "-uall")
     if status is None:
-        return 1
+        return None
     digest = hashlib.sha256()
     head = _git_out("rev-parse", "-q", "--verify", "HEAD") or "no-head"
     diff = (
@@ -2641,13 +2769,26 @@ def fingerprint() -> int:
     for part in (head, status, diff or ""):
         digest.update(part.encode("utf-8", "surrogateescape"))
     untracked = (_git_out("ls-files", "-o", "--exclude-standard", "-z") or "").split("\0")
-    for rel in filter(None, untracked):
-        path = ROOT / rel
-        if path.is_file():
-            digest.update(rel.encode() + _sha256(path).encode())
-    if not _toolkit_part(digest):
+    try:
+        for rel in filter(None, untracked):
+            path = ROOT / rel
+            if path.is_file():
+                digest.update(_fs_bytes(rel) + _sha256(path).encode())
+    except OSError:  # an unreadable untracked file: no fingerprint, never a stale green
+        return None
+    if not _paths_part(digest, "check-inputs", CHECK_INPUTS):
+        return None
+    if not _paths_part(digest, "toolkit", TOOLKIT_LINKS):
+        return None
+    return digest.hexdigest()
+
+
+def fingerprint() -> int:
+    """Print the working-tree fingerprint; exit 1 when it cannot be computed."""
+    fp = working_tree_fingerprint()
+    if fp is None:
         return 1
-    print(digest.hexdigest())
+    print(fp)
     return 0
 
 
