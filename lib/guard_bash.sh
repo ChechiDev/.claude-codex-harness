@@ -6,6 +6,9 @@
 #      options, wrappers, `bash -c`, eval, git aliases), not by substring.
 #      Escape valve: HARNESS_ALLOW_COMMIT=1 in the environment Claude Code was
 #      started with (an inline `HARNESS_ALLOW_COMMIT=1 git commit` does not count).
+#      Other commit-producing ops (commit-tree, update-ref, revert, cherry-pick, pull,
+#      merge, rebase) and publication (git push, gh pr create/merge) are allowed with
+#      a WARN (I8, plan 0.5); make check reports commits the close did not make.
 #   3. No shell writes to protected paths (src/, tests/acceptance/, Codex verdicts):
 #      redirections, tee, sed -i, cp/mv/rm, find -delete, git checkout/clean, …
 #      This is best-effort; `make check` (_guard.py integrity) is the backstop.
