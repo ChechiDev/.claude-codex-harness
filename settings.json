@@ -54,11 +54,35 @@
     ]
   },
   "permissions": {
+    "$comment": "allow: the harness targets and the Python toolchain run without a prompt; anything else (make -f, uv run <program>, …) asks. deny: what the Bash guard always blocks for Claude, with no escape valve (I8).",
     "allow": [
-      "Bash(make:*)",
-      "Bash(uv run:*)",
+      "Bash(make check)",
+      "Bash(make verify)",
+      "Bash(make lint)",
+      "Bash(make lint:*)",
+      "Bash(make type)",
+      "Bash(make test)",
+      "Bash(make plan)",
+      "Bash(make status)",
+      "Bash(make status-export)",
+      "Bash(make issue:*)",
+      "Bash(make issue-start:*)",
+      "Bash(make issue-new:*)",
+      "Bash(make env-check)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run mypy:*)",
       "Bash(./harness/review_with_codex.sh:*)",
       "Bash(./harness/check.sh)"
+    ],
+    "deny": [
+      "Bash(git am:*)",
+      "Bash(git apply:*)",
+      "Bash(patch:*)",
+      "Bash(./harness/review_with_codex.sh seal:*)",
+      "Bash(./harness/legacy_inventory.sh create:*)",
+      "Bash(./harness/legacy_inventory.sh review:*)",
+      "Bash(./harness/legacy_inventory.sh seal:*)"
     ]
   }
 }

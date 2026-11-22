@@ -173,7 +173,8 @@ Enforced by the hooks in `settings.json` and by `make check`:
    to the Codex-owned verdicts and seals in `progress/`.
 4. **Claude never commits.** The Bash guard parses the command (git global
    options, wrappers such as `env`/`command`, `bash -c`, `eval`, git aliases);
-   it does not match substrings. See `HARNESS_ALLOW_COMMIT` in
+   it does not match substrings (coverage and limits: "Commits and publication"
+   below). See `HARNESS_ALLOW_COMMIT` in
    [configuration](configuration.md) for the escape valve.
 5. **No `done` without proof.** `progress/review_<N.M.K>.md` = `APPROVED`, a
    complete `docs/reference/<N.M.K>-<slug>.md` (`doc_gate`) and `make check` green.
@@ -187,6 +188,49 @@ Enforced by the hooks in `settings.json` and by `make check`:
 |-------|------|--------|
 | **Per call** (`PreToolUse`) | `guard_write.sh` covers `Edit/Write/MultiEdit/NotebookEdit`; `guard_bash.sh` blocks shell writes to protected paths (redirections, `tee`, `sed -i`, `cp/mv/rm`, `find -delete`, `git checkout/restore/clean/apply`, `patch`, interpreters writing files) | The Bash guard is a best-effort parser: an arbitrary program can always write a file in a way no parser sees. |
 | **Outcome** (`make check` → `_guard.py integrity`, also run by the Stop hook) | Every `src/` change vs `HEAD` must be in the declared `files:` of the in_progress subtask, or of the subtask being closed (done in the tree, not yet in `HEAD`, code `APPROVED`); sealed acceptance tests must be byte-identical; sealed plan files must be unchanged | Needs git history (skipped with a warning before the first commit). |
+
+### Commits and publication: what the guard covers and where it stops
+
+The harness makes the single commit of a subtask (the close) and pushes the
+branch / opens the PR (`review_with_codex.sh pr`); only the human merges.
+
+| Operation in a Claude Bash call | Decision |
+|---|---|
+| `git commit`, also behind wrappers and their options (`env`, `command -p`, `exec -a`, `nice -n`, `timeout -k … DURATION`, `stdbuf -o0`, `sudo -u`, `time -p`, `setsid`, `ionice`, `flock FILE CMD` / `flock -c`, `script -c`, `uv run`), `bash -lc` / `sh -c` / `eval`, `xargs git …`, `find -exec git …`, a project shell script run by the call (`bash f.sh`, `./f.sh`, `source f.sh`), and git aliases from the repo config, `-c alias.X=…`, `--config-env`, `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT`, or a `git config alias.X …` earlier on the same line | **BLOCK** (escape valve: `HARNESS_ALLOW_COMMIT=1` in the environment Claude Code starts with) |
+| An alias whose value the guard cannot know (dynamic value, `include.path`, a config file written earlier on the line) | **BLOCK**, fail closed |
+| `git commit-tree`, `update-ref`, `revert`, `cherry-pick`, `pull`, `merge`, `rebase` (not with `--abort`/`--quit`/`--no-commit`) | **WARN** (plan 0.5): allowed, the hook tells Claude and the user |
+| `git push` (not `--dry-run`), `gh pr create`, `gh pr merge` | **WARN** (plan 0.5) |
+| `git am`, `git apply`, `patch`, the sealers | **BLOCK** (unchanged); also in the `permissions.deny` list of `settings.json` |
+
+`settings.json` allows without a prompt only the harness `make` targets and
+`uv run pytest|ruff|mypy`; any other `make …` (`make -f other.mk`) or
+`uv run <program>` asks first. The deny list holds only what the guard always
+blocks with no valve, so it never removes a legitimate path.
+
+**Outcome check.** `make check` (`_guard.py integrity`) lists the commits on the
+branch past its base (`origin/HEAD`, else `main`) that the close did not make —
+a close commit has a subject ending in `[<leaf>]` and is the commit that marks
+that leaf `done` in `feature_list.json` — and reports each one as a WARN; a
+merge that only brings the base in is not reported. It never changes the exit
+code yet (plan 0.5).
+
+**Residual limits** (documented, not covered): any program the guard does not
+parse can run git (`python -c "subprocess.run(['git','commit'])"`, a script in
+another language, a `make` recipe, a git hook or `core.hooksPath`); a shell
+script outside the project; wrappers not listed above; `gh api` calls; a forged
+close (a `[<leaf>]` subject on the commit that marks the leaf done) is
+indistinguishable from the real one; commits on the base branch itself are
+seen only when `origin/<base>` exists. Interpreters and shell-in-shell variants
+beyond the listed wrappers belong to I3c.
+
+**Fail-closed side** (a block where git would not commit): a project script is
+read whole, so a `git commit` in a branch that never runs (`if false; then …`,
+an uncalled function) blocks it, as it already does on the command line; a
+non-builtin git subcommand blocks when the config git would read is unknown
+(a `cd`/`env -C`/`sudo -D` to an unresolved or wrapped directory, a dynamic
+`-c` value, `include.path`, a `source`d file, a git config file written earlier
+on the line); a same-line `git config --global alias.X …` counts even if a
+local alias of the same name would win.
 
 The outcome layer is what makes the rules hold regardless of *how* a file was
 written. The close window exists because the documenter marks the subtask

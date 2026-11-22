@@ -41,7 +41,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
@@ -156,6 +156,47 @@ MSG_COMMIT = (
     "BLOCKED: Claude does not commit in the harness. The single per-subtask commit is made by "
     "the close (./harness/review_with_codex.sh doc <N.M.K>). If you really need a manual "
     "commit outside the flow, the human must start Claude Code with HARNESS_ALLOW_COMMIT=1."
+)
+
+# I8: operations accepted today that create, move or publish commits outside the
+# harness step. WARN first (plan v5 0.5): allowed, with one note per operation.
+MSG_WARN_COMMIT = (
+    "[WARN] '{op}' creates or moves commits outside the harness close (I8): the single "
+    "per-subtask commit is the close's (./harness/review_with_codex.sh doc <N.M.K>). "
+    "Allowed for now (WARN, plan 0.5); make check reports every commit on the branch "
+    "that the close did not make."
+)
+MSG_WARN_PUBLISH = (
+    "[WARN] '{op}' publishes outside the harness step (I8): the harness pushes the branch "
+    "and opens the PR itself (./harness/review_with_codex.sh pr <id>), and only the human "
+    "merges. Allowed for now (WARN, plan 0.5)."
+)
+# git subcommands that create or move commits, and the options with which they do not.
+COMMIT_OPS: dict[str, frozenset[str]] = {
+    "commit-tree": frozenset(),
+    "update-ref": frozenset(),
+    "revert": frozenset({"--abort", "--quit", "-n", "--no-commit"}),
+    "cherry-pick": frozenset({"--abort", "--quit", "-n", "--no-commit"}),
+    "pull": frozenset(),
+    "merge": frozenset({"--abort", "--quit"}),
+    "rebase": frozenset({"--abort", "--quit", "--edit-todo", "--show-current-patch"}),
+}
+PUSH_DRY_RUN = frozenset({"-n", "--dry-run"})
+# Where git reads its config from: global options and variables (I8 aliases).
+GIT_WHERE = "\0where"  # key in the inline config map: the location options
+GIT_WHERE_OPTS = frozenset({"-C", "--git-dir", "--work-tree"})
+# Wrapper options that run the command in another directory or project.
+WRAPPER_CHDIR = frozenset({"--chdir", "-D", "--directory", "--project"})
+GIT_LOCATION_VARS = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG", "HOME", "XDG_CONFIG_HOME",
+)  # fmt: skip
+# A same-line write to a git config file changes the aliases of the git calls after it.
+RE_GIT_CONFIG_FILE = re.compile(r"(^|/)(\.git/config(\.worktree)?|\.gitconfig|git/config)$")
+RE_GIT_TEXT = re.compile(r"\bgit\b")  # fallback for a script the guard cannot follow
+# git config options that take the next word as their value.
+GIT_CONFIG_VALUE_OPTS = frozenset(
+    {"-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"}
 )
 
 
@@ -426,15 +467,7 @@ def _warn_selection_input(rel: str) -> None:
         )
     if not notes:
         return
-    msg = "\n".join(notes)
-    print(
-        json.dumps(
-            {
-                "systemMessage": msg,
-                "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg},
-            }
-        )
-    )
+    _emit_warning("\n".join(notes))
 
 
 def _check_agent_scope(payload: object, raw: str, rel: str | None) -> None:
@@ -534,7 +567,69 @@ ENV_VARS = frozenset({"HOME", "CLAUDE_PROJECT_DIR", "CLAUDE_HOME"})
 DECLARERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
 
 
-WRAPPERS = {"command", "builtin", "exec", "nohup", "time", "sudo", "nice", "stdbuf"}
+WRAPPERS = {"builtin", "nohup"}  # no options: the next word is the command
+# I8: wrappers whose options are skipped before the command they run. Per wrapper:
+# (options taking the next word as their value, options with no value, operands that
+# precede the command). Any other option counts as unknown (see _skip_flags).
+OPTION_WRAPPERS: dict[str, tuple[frozenset[str], frozenset[str], int]] = {
+    "command": (frozenset(), frozenset({"-p"}), 0),
+    "exec": (frozenset({"-a"}), frozenset({"-c", "-l"}), 0),
+    "time": (
+        frozenset({"-f", "--format", "-o", "--output"}),
+        frozenset({"-p", "--portability", "-a", "--append", "-v", "--verbose", "-q", "--quiet"}),
+        0,
+    ),
+    "nice": (frozenset({"-n", "--adjustment"}), frozenset(), 0),
+    "stdbuf": (
+        frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}), frozenset(), 0
+    ),
+    "sudo": (
+        frozenset(
+            {
+                "-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir",
+                "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type",
+                "-U", "--other-user", "-T", "--command-timeout",
+            }
+        ),
+        frozenset(
+            {
+                "-E", "--preserve-env", "-H", "--set-home", "-n", "--non-interactive",
+                "-S", "--stdin", "-b", "--background", "-i", "--login", "-s", "--shell",
+                "-k", "--reset-timestamp", "-P", "--preserve-groups", "-A", "--askpass",
+            }
+        ),
+        0,
+    ),
+    "timeout": (
+        frozenset({"-k", "--kill-after", "-s", "--signal"}),
+        frozenset({"--foreground", "--preserve-status", "-v", "--verbose"}),
+        1,
+    ),
+    "setsid": (frozenset(), frozenset({"-c", "--ctty", "-f", "--fork", "-w", "--wait"}), 0),
+    "ionice": (
+        frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid",
+                   "-u", "--uid"}),
+        frozenset({"-t", "--ignore"}),
+        0,
+    ),
+    "flock": (
+        frozenset({"-w", "--timeout", "--wait", "-E", "--conflict-exit-code"}),
+        frozenset(
+            {
+                "-s", "--shared", "-x", "-e", "--exclusive", "-u", "--unlock", "-n", "--nb",
+                "--nonblock", "-o", "--close", "-F", "--no-fork", "--verbose",
+            }
+        ),
+        1,
+    ),
+}  # fmt: skip
+# Options after which a wrapper runs nothing (it prints or checks instead).
+NO_RUN_OPTIONS = {"command": frozenset({"-v", "-V"})}
+SCRIPT_VALUE_FLAGS = frozenset(
+    {"-E", "--echo", "-I", "--log-in", "-O", "--log-out", "-B", "--log-io", "-T",
+     "--log-timing", "-m", "--logging-format", "-o", "--output-limit"}
+)  # fmt: skip
+RE_NICE_ADJUST = re.compile(r"^-\d+$")  # `nice -5 cmd`: the historical adjustment form
 RE_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
@@ -560,7 +655,9 @@ UV_RUN_FLAGS = frozenset(
     }
 )  # fmt: skip
 OPAQUE_FLAGS = frozenset({"-S", "--split-string"})  # env: the value is the command line
-SEALER_NAMES = r"(_legacy|_guard|_verdict|_oracle|_contract|legacy_inventory|review_with_codex)\b"
+SEALER_NAMES = (
+    r"(_legacy|_guard|_verdict|_oracle|_contract|_gate_run|legacy_inventory|review_with_codex)\b"
+)
 RE_SEALER_NAME = re.compile(r"(^|[\s/'\"=])" + SEALER_NAMES)
 RE_SEALER_ANYWHERE = re.compile(SEALER_NAMES)
 
@@ -571,6 +668,8 @@ def _skip_flags(
     """Skip the flags of a wrapper from words[i]; True when one of them is unknown."""
     unknown = False
     while i < len(words) and words[i].startswith("-"):
+        if words[i] == "--":
+            return i + 1, unknown
         flag = words[i].split("=", 1)[0]
         unknown |= flag in OPAQUE_FLAGS or words[i].startswith("-S")  # value is a command
         if "=" not in words[i] and flag in value_flags:
@@ -601,11 +700,98 @@ def strip_wrappers_checked(words: list[str]) -> tuple[list[str], bool]:
             unknown |= unsure
             if words[i - 1 : i] in (["-m"], ["--module"]):
                 return ["python", "-m", *words[i:]], unknown
-        elif name == "timeout" and i + 1 < len(words):
-            i += 2
+        elif name in OPTION_WRAPPERS:
+            body = _wrapper_body(name, words[i + 1 :])
+            if body is not None:  # `flock … -c CMD` / `script -c CMD`: a shell string
+                return ["sh", "-c", body], unknown
+            start = i + 1
+            i, unsure = _wrapper_options(name, words, start)
+            unknown |= unsure
+            if NO_RUN_OPTIONS.get(name, frozenset()) & set(words[start:i]):
+                return [], unknown  # `command -v git`: prints, runs nothing
+        elif name == "script":
+            body = _wrapper_body(name, words[i + 1 :])
+            return (["sh", "-c", body] if body is not None else words[i:]), unknown
         else:
             break
     return words[i:], unknown
+
+
+def _wrapper_options(name: str, words: list[str], i: int) -> tuple[int, bool]:
+    """Skip a wrapper's options and leading operands from words[i] (I8)."""
+    value_flags, flags, operands = OPTION_WRAPPERS[name]
+    unknown = False
+    while i < len(words) and name == "nice" and RE_NICE_ADJUST.match(words[i]):
+        i += 1
+    letters = {f[1] for f in value_flags if len(f) == 2}  # short options taking a value
+    while i < len(words) and words[i].startswith("-") and words[i] != "--":
+        word = words[i]
+        flag = word.split("=", 1)[0]
+        if word.startswith("--") or len(word) == 2:
+            unknown |= flag not in value_flags | flags
+            i += 2 if "=" not in word and flag in value_flags else 1
+            continue
+        # a bundle (`-vk 1`, `-o0`, `-Eu dev`): the first value option takes the rest
+        # of the word, or the next word when it ends the bundle
+        at = next((n for n, ch in enumerate(word[1:], 2) if ch in letters), None)
+        unknown |= any(f"-{ch}" not in value_flags | flags for ch in word[1 : at or None])
+        i += 2 if at is not None and at == len(word) else 1
+    i += 1 if i < len(words) and words[i] == "--" else 0
+    if name == "flock" and i == len(words) - 1 and words[i].isdigit():
+        return len(words), unknown  # `flock FD`: locks a descriptor, runs nothing
+    return min(i + operands, len(words)), unknown
+
+
+def _wrapper_body(name: str, args: list[str]) -> str | None:
+    """The command string of `flock [opts] FILE -c CMD` and `script [opts] -c CMD`."""
+    if name not in ("flock", "script"):
+        return None
+    value_flags = OPTION_WRAPPERS["flock"][0] if name == "flock" else SCRIPT_VALUE_FLAGS
+    letters = {f[1] for f in value_flags if len(f) == 2}  # short options taking a value
+    operand, i = False, 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            body, i = _long_option(args, i, value_flags)
+            if body is not None:
+                return body
+            continue
+        if len(arg) > 1 and arg[0] == "-":  # a short-option bundle
+            kind, rest = _short_bundle(arg, letters)
+            if kind == "c":
+                return rest if rest else (args[i + 1] if i + 1 < len(args) else None)
+            i += 2 if kind == "value" and not rest else 1
+            continue
+        if not arg.startswith("-"):
+            if operand or name == "script":
+                break  # flock: the command after FILE; script: its log file
+            operand = True
+        i += 1
+    return None
+
+
+def _long_option(args: list[str], i: int, value_flags: frozenset[str]) -> tuple[str | None, int]:
+    """(the command of `--command CMD` / `--command=CMD`, else None; the next index) for
+    the long option args[i]. `--timeout 5`: the next word is its value, not an operand."""
+    arg = args[i]
+    if arg == "--command":
+        return (args[i + 1] if i + 1 < len(args) else None), i + 2
+    if arg.startswith("--command="):
+        return arg.split("=", 1)[1], i + 1
+    return None, i + (2 if "=" not in arg and arg in value_flags else 1)
+
+
+def _short_bundle(arg: str, value_letters: set[str]) -> tuple[str, str]:
+    """(kind, attached text) of a short-option bundle such as `-qc'cmd'` or `-w5`:
+    kind "c" (the command option), "value" (an option taking a value) or "flags"."""
+    for idx, ch in enumerate(arg[1:], start=2):
+        if ch == "c":
+            return "c", arg[idx:]
+        if ch in value_letters:
+            return "value", arg[idx:]
+    return "flags", ""
 
 
 def strip_wrappers(words: list[str]) -> list[str]:
@@ -621,6 +807,12 @@ class Findings:
     commits: bool = False
     publishes: bool = False  # merge / PR: attribution applies
     mentions_protected: bool = False
+    warnings: dict[str, str] = field(default_factory=dict)  # I8: one per operation
+
+    def merge(self, other: Findings) -> None:
+        self.commits |= other.commits
+        self.publishes |= other.publishes
+        self.warnings.update(other.warnings)
 
 
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
@@ -703,6 +895,8 @@ SEALERS: dict[str, frozenset[str]] = {
     "legacy_inventory.sh": frozenset({"create", "review", "seal"}),
     "_legacy.py": frozenset({"create", "review", "seal"}),
     "_verdict.py": frozenset({"begin", "commit", "abort", "receipt"}),
+    # Code-gate attempt records (issue #39): written only by review_with_codex.sh code.
+    "_gate_run.py": frozenset({"record", "approve", "drop"}),
     # I4b (issue #65): the baseline, its contract reseal and the plan gate's red record.
     "_oracle.py": frozenset(
         {
@@ -1038,6 +1232,12 @@ class BashAnalyzer:
         self._stdin: list[str] = []  # here-doc / here-string bodies of the current command
         self._stdin_expands: list[bool] = []  # per body: Bash expands `$…` in it
         self._stdin_code: str | None = None  # the stdin code _python_code returned
+        # I8: git config set earlier on this line (key -> value; None: unknown value)
+        self._git_config: dict[str, str | None] = {}
+        # I8: a script read for its commits keeps going past a blocked write
+        self.lenient = False
+        self._wrapped_cwd = False  # the current command runs where a wrapper put it
+        self._git_config_files: set[str] = set()  # `git config -f FILE` writes (I8)
 
     @property
     def cwd(self) -> Path:
@@ -1052,10 +1252,18 @@ class BashAnalyzer:
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd="deeply nested shell"))
         commands, unsure = _shell.split_checked(self.raw if command is None else command)
         if unsure or (command is not None and _shell.RE_UNSURE_BODY.search(command)):
-            self._unfollowed()
+            self._lenient_call(self._unfollowed)
         for simple in commands:
-            self._simple(simple, depth)
+            self._lenient_call(partial(self._simple, simple, depth))
         return self.found
+
+    def _lenient_call(self, call: Callable[[], None]) -> None:
+        """Run one analysis step; a lenient analyser skips a step's write block."""
+        try:
+            call()
+        except Blocked:
+            if not self.lenient:
+                raise
 
     def _unfollowed(self) -> None:
         """Fail closed like D1: a construct the lexer may misread, on a call that names
@@ -1066,10 +1274,12 @@ class BashAnalyzer:
         if _mentions_protected(self.raw):
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd=what))
 
-    def _nested(self, body: str, depth: int, everything: bool) -> None:
+    def _nested(self, body: str, depth: int, everything: bool, cwd: Path | None = None) -> None:
         """Analyse `body` in its own frame: its `cd` and assignments do not leak."""
         saved, dynamic, stdin = self.frame, self._dynamic, (self._stdin, self._stdin_expands)
         self.frame = saved.child(everything)
+        if cwd is not None:
+            self.frame.cwd, self.frame.cwd_dynamic = cwd, False
         try:
             self.run(body, depth + 1)
         finally:
@@ -1142,6 +1352,10 @@ class BashAnalyzer:
                 self._check(target, destructive=False)
             if words:
                 stripped, unsure = strip_wrappers_checked(words)
+                self._wrapped_cwd = any(  # I8: a wrapper moved the command elsewhere
+                    w.split("=", 1)[0] in WRAPPER_CHDIR or w.startswith("-C")
+                    for w in words[: len(words) - len(stripped)]
+                )
                 if unsure and RE_SEALER_NAME.search(" ".join(words)):
                     raise Blocked(MSG_SEAL)  # fail-closed: an unknown wrapper flag may hide it
                 if stripped:
@@ -1154,6 +1368,8 @@ class BashAnalyzer:
     # ── targets ──────────────────────────────────────────────────────────────
 
     def _check(self, raw: str, destructive: bool) -> None:
+        if RE_GIT_CONFIG_FILE.search(raw):
+            self._git_config["include.path"] = None  # its aliases are unknown from here on
         relative = not os.path.isabs(os.path.expanduser(raw))
         if raw in self._dynamic or (self.frame.cwd_dynamic and relative):
             self._unresolved(raw)
@@ -1219,6 +1435,7 @@ class BashAnalyzer:
         }.get(name)
         self.found.mentions_protected |= any(self._is_protected(a) for a in args)
         body = _shell_body(args) if name in SHELLS else None
+        self._scripts(name, words, body, depth)
         if handler:
             handler(args, depth)
         elif body is not None:
@@ -1238,6 +1455,16 @@ class BashAnalyzer:
             self.frame.tainted = True
         else:
             self._file_verbs(name, args)
+
+    def _scripts(self, name: str, words: list[str], body: int | None, depth: int) -> None:
+        """I8: the project shell script this command runs, if any."""
+        args = words[1:]
+        if name in SHELLS and body is None and (script := _shell_script(args)) is not None:
+            self._script_file(script, depth)
+        elif name in ("source", ".") and args:
+            self._script_file(args[0], depth, sourced=True)
+        elif "/" in words[0] and name not in SHELLS and not INTERPRETERS.match(name):
+            self._script_file(words[0], depth, direct=True)
 
     def _variables(self, name: str, args: list[str]) -> None:
         """Track declarations and the builtins that set a variable at runtime."""
@@ -1427,12 +1654,41 @@ class BashAnalyzer:
             roots.append(arg)
         for root in roots or ["."]:
             self._check(root, destructive=True)
+        i = 0
+        while i < len(args):
+            if args[i] in ("-exec", "-execdir", "-ok", "-okdir"):
+                j = i + 1
+                while j < len(args) and args[j] not in (";", "+"):
+                    j += 1
+                self._run_verb(strip_wrappers(args[i + 1 : j]), depth)
+                i = j
+            i += 1
+
+    def _run_verb(self, words: list[str], depth: int) -> None:
+        """I8: the command xargs / find -exec runs, for its commits and publications."""
+        if not words:
+            return
+        verb, verb_args = os.path.basename(words[0]), words[1:]
+        if verb == "git":
+            i = self._git_globals(verb_args)[0]
+            if i >= len(verb_args) or "{" in verb_args[i]:
+                self.found.commits = True  # fail closed: the subcommand comes from input
+                return
+            self._git(verb_args, depth)
+        elif verb == "gh":
+            self._gh(verb_args, depth)
+        elif verb in SHELLS and (body := _shell_body(verb_args)) is not None:
+            self._nested(verb_args[body], depth, everything=False)
+        else:
+            self._scripts(verb, words, None, depth)  # a project script it runs
 
     def _xargs(self, args: list[str], depth: int) -> None:
         i, replace = _xargs_options(args)
         words = strip_wrappers(args[i:]) or ["echo"]
         verb, verb_args = os.path.basename(words[0]), words[1:]
         body = _shell_body(verb_args) if verb in SHELLS else None
+        if body is None:
+            self._run_verb(words, depth)  # git / gh / a project script (I8)
         if body is not None:  # C: the shell body runs with operands we cannot know
             text = verb_args[body]
             if replace:
@@ -1447,31 +1703,215 @@ class BashAnalyzer:
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd=f"xargs {verb}"))
 
     def _gh(self, args: list[str], depth: int) -> None:
-        if args[:1] == ["pr"] and args[1:2] in (["create"], ["edit"]):
+        if args[:1] == ["pr"] and args[1:2] in (["create"], ["edit"], ["merge"]):
             self.found.publishes = True
+            if args[1] != "edit":
+                self._warn(f"gh pr {args[1]}", MSG_WARN_PUBLISH)
+
+    def _warn(self, op: str, template: str) -> None:
+        self.found.warnings.setdefault(op, template.format(op=op))
 
     def _git(self, args: list[str], depth: int) -> None:
-        i = 0
-        while i < len(args) and args[i].startswith("-"):
-            i += 2 if args[i] in GIT_VALUE_OPTS else 1
+        i, inline = self._git_globals(args)
         if i >= len(args):
             return
         sub, rest = args[i], args[i + 1 :]
-        alias = _git_alias(sub)
-        if alias and alias.startswith("!"):
-            self.run(alias[1:], depth + 1)
-            return
-        if alias:
-            alias_words = shlex.split(alias)
+        for _ in range(8):  # an alias may name another alias
+            if sub in _git_builtins():
+                break  # git ignores an alias that shadows a git command
+            alias = self._alias(sub, inline)
+            if alias is None:  # fail closed: an alias whose value the guard cannot know
+                self.found.commits = True
+                return
+            if not alias:
+                break
+            if alias.startswith("!"):  # git runs it from the top of the work tree
+                top = self._git_top(inline)
+                if top is None:
+                    self.found.commits = True  # fail closed: where it runs is not knowable
+                    return
+                self._nested(alias[1:], depth, everything=False, cwd=top)
+                return
+            alias_words = _split_alias(alias)
+            if not alias_words:
+                return
             sub, rest = alias_words[0], alias_words[1:] + rest
         self._git_sub(sub, rest)
 
-    def _git_sub(self, sub: str, rest: list[str]) -> None:
+    def _git_top(self, inline: dict[str, str | None]) -> Path | None:
+        """The work tree top git would run a `!` alias from; None if not knowable."""
+        where = inline.get(GIT_WHERE, "")
+        overrides = {n: self.frame.vars[n] for n in GIT_LOCATION_VARS if n in self.frame.vars}
+        if (
+            where is None
+            or None in overrides.values()
+            or self.frame.cwd_dynamic
+            or self._wrapped_cwd
+            or not self.cwd.is_dir()
+        ):
+            return None
+        env = {**os.environ, **{n: v for n, v in overrides.items() if v is not None}}
+        res = subprocess.run(
+            ["git", *(where.split("\0") if where else []), "rev-parse", "--show-toplevel"],
+            cwd=self.cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        return Path(res.stdout.strip()) if res.returncode == 0 and res.stdout.strip() else None
+
+    def _git_globals(self, args: list[str]) -> tuple[int, dict[str, str | None]]:
+        """(index of the subcommand, config given by -c / --config-env) (I8). The
+        options that pick another repository go to `inline` under GIT_WHERE."""
+        inline: dict[str, str | None] = {}
+        where: list[str] = []
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            opt = args[i]
+            if opt in ("-c", "--config-env") and i + 1 < len(args):
+                self._git_option(opt, args[i + 1], inline)
+            elif opt.startswith("-c") and len(opt) > 2:  # `-cname=value`: one word
+                self._git_option("-c", opt[2:], inline)
+            elif opt.startswith("--config-env="):
+                self._git_option("--config-env", opt.split("=", 1)[1], inline)
+            elif opt.split("=", 1)[0] in GIT_WHERE_OPTS:
+                value = args[i + 1 : i + 2] if "=" not in opt else []
+                if any(w in self._dynamic for w in (opt, *value)):
+                    inline[GIT_WHERE] = None
+                where += [opt, *value]
+            i += 2 if opt in GIT_VALUE_OPTS else 1
+        if where and GIT_WHERE not in inline:
+            inline[GIT_WHERE] = "\0".join(where)
+        return i, inline
+
+    def _git_option(self, opt: str, value: str, inline: dict[str, str | None]) -> None:
+        key, has_value, val = value.partition("=")
+        if opt == "--config-env":  # the value is the named environment variable's
+            inline[key.lower()] = self.frame.lookup(val) if has_value else None
+        else:
+            inline[key.lower()] = None if value in self._dynamic else (val if has_value else "")
+
+    def _env_config(self) -> dict[str, str | None] | None:
+        """Config git takes from GIT_CONFIG_PARAMETERS / GIT_CONFIG_COUNT (frame first,
+        then the hook's environment). None: present but not knowable."""
+
+        def get(name: str) -> tuple[bool, str | None]:
+            if name in self.frame.vars:
+                return True, self.frame.vars[name]
+            if self.frame.tainted:
+                return name.startswith("GIT_CONFIG"), None
+            return (name in os.environ), os.environ.get(name)
+
+        out: dict[str, str | None] = {}
+        present, count = get("GIT_CONFIG_COUNT")
+        if present:
+            if count is None or not count.strip().isdigit():
+                return None
+            for n in range(int(count)):
+                (_, key), (_, val) = get(f"GIT_CONFIG_KEY_{n}"), get(f"GIT_CONFIG_VALUE_{n}")
+                if key is None:
+                    return None
+                out[key.lower()] = val
+        present, params = get("GIT_CONFIG_PARAMETERS")  # wins over GIT_CONFIG_COUNT
+        if present:
+            parsed = _config_parameters(params)
+            if parsed is None:
+                return None
+            out.update(parsed)
+        return out
+
+    def _alias(self, sub: str, inline: dict[str, str | None]) -> str | None:
+        """The alias `sub` stands for ("" if none); None when its source is unknowable:
+        a dynamic value, an include, or a config file written earlier on the line."""
+        env = self._env_config()
+        if env is None:
+            return None
+        key = f"alias.{sub}".lower()
+        for source in (inline, env, self._git_config):
+            if any(k.startswith("include") for k in source):
+                return None
+            if key in source:
+                return source[key]
+        where = inline.get(GIT_WHERE, "")
+        overrides = {n: self.frame.vars[n] for n in GIT_LOCATION_VARS if n in self.frame.vars}
+        unknowable = (
+            where is None
+            or None in overrides.values()
+            or self.frame.cwd_dynamic
+            or self._wrapped_cwd
+            or not self.cwd.is_dir()
+            # a config file written on this line may be the one the variables select
+            or bool(self._git_config_files and overrides)
+        )
+        if unknowable:
+            return None  # the config git would read is not knowable
+        env_over = {n: v for n, v in overrides.items() if v is not None}
+        return _git_alias(sub, self.cwd, where.split("\0") if where else [], env_over)
+
+    def _git_config_write(self, rest: list[str]) -> None:
+        """Track `git config [set|--add|…] alias.X VALUE` for the git calls after it."""
+        args = rest[1:] if rest[:1] in (["set"], ["--add"]) else rest
+        operands: list[str] = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg.startswith("-"):
+                if arg in (
+                    "--unset",
+                    "--unset-all",
+                    "--get",
+                    "--get-all",
+                    "--list",
+                    "-l",
+                    "--get-regexp",
+                    "--edit",
+                    "-e",
+                    "--remove-section",
+                    "--rename-section",
+                ):
+                    if arg in ("--edit", "-e"):
+                        self._git_config["include.path"] = None  # opaque edit
+                    return
+                name, _, attached = arg.partition("=")
+                target = attached or (args[i + 1] if i + 1 < len(args) else "")
+                if name == "--blob" or (
+                    name in ("-f", "--file") and not RE_GIT_CONFIG_FILE.search(target)
+                ):
+                    if name != "--blob":  # git reads it if a variable names it later
+                        self._git_config_files.add(str(resolve(target, self.cwd)))
+                    return  # read-only, or a file git does not read for this repo
+                i += 2 if arg in GIT_CONFIG_VALUE_OPTS else 1
+                continue
+            operands.append(arg)
+            i += 1
+        if len(operands) >= 2:
+            key = operands[0].lower()
+            if key.startswith(("alias.", "include")):
+                self._git_config[key] = None if operands[1] in self._dynamic else operands[1]
+
+    def _commit_op(self, sub: str, rest: list[str]) -> bool:
+        """I8: commit / commit-producing / publishing subcommands; True when handled."""
         if sub == "commit":
             self.found.commits = True
-        elif sub == "merge":
-            self.found.publishes = True
-        elif sub in ("apply", "am"):
+        elif sub in COMMIT_OPS:
+            self.found.publishes |= sub == "merge"
+            if not COMMIT_OPS[sub] & set(rest):
+                self._warn(f"git {sub}", MSG_WARN_COMMIT)
+        elif sub == "push":
+            modes = [a for a in rest if a in PUSH_DRY_RUN or a == "--no-dry-run"]
+            if not modes or modes[-1] == "--no-dry-run":  # the last one wins
+                self._warn("git push", MSG_WARN_PUBLISH)
+        elif sub == "config":
+            self._git_config_write(rest)
+        else:
+            return False
+        return True
+
+    def _git_sub(self, sub: str, rest: list[str]) -> None:
+        if self._commit_op(sub, rest):
+            return
+        if sub in ("apply", "am"):
             raise Blocked(MSG_SHELL_OPAQUE.format(cmd=f"git {sub}"))
         elif sub in ("checkout", "restore", "rm", "mv", "clean"):
             paths = [a for a in rest if not a.startswith("-")]
@@ -1480,6 +1920,36 @@ class BashAnalyzer:
             for path in paths:
                 if sub != "checkout" or "--" in rest or (self.cwd / path).exists():
                     self._check(path, destructive=True)
+
+    def _script_file(
+        self, raw: str, depth: int, direct: bool = False, sourced: bool = False
+    ) -> None:
+        """I8: a project shell script run by this call (`bash f.sh`, `./f.sh`,
+        `source f.sh`) is read for its commits and publications. Its file writes are
+        left to the integrity backstop, as before (shell-script writes are I3c)."""
+        if raw in self._dynamic or _harness_script(resolve(raw, self.cwd)):
+            return  # the harness's own scripts make the close commit and the PR
+        text = self._script(raw)
+        if text is None or "\0" in text:
+            return  # not a file in the project, or a binary
+        first = text.split("\n", 1)[0]
+        if direct and first.startswith("#!") and not re.search(r"\b(ba|z|k|da)?sh\b", first):
+            return  # another interpreter: not a shell script
+        child = BashAnalyzer(text)
+        child.frame = self.frame.child(everything=sourced)
+        child._git_config = dict(self._git_config)
+        child._git_config_files = set(self._git_config_files)
+        child.lenient = True
+        try:
+            found = child.run(None, depth + 1)
+        except Exception:  # too deep, or a script the lexer cannot read
+            if RE_GIT_TEXT.search(text):
+                self.found.commits = True  # fail closed: the script could not be followed
+            return
+        self.found.merge(found)
+        # its `git config alias.…` writes persist for the git calls after it
+        self._git_config.update(child._git_config)
+        self._git_config_files |= child._git_config_files
 
 
 def _destination(args: list[str], target_flag: bool = True) -> tuple[str, list[str], bool]:
@@ -1496,13 +1966,59 @@ def _destination(args: list[str], target_flag: bool = True) -> tuple[str, list[s
     return (operands[-1], operands[:-1], False) if operands else ("", [], False)
 
 
-def _git_alias(sub: str) -> str:
+def _harness_script(path: Path) -> bool:
+    """A script of the installed toolkit (harness/ link) in a project that is not the
+    toolkit checkout itself: it is the harness, not project code."""
+    return path.parent == TOOLKIT / "lib" and not ROOT.is_relative_to(TOOLKIT)
+
+
+def _split_alias(alias: str) -> list[str]:
+    """An alias's words; [] when its quoting is broken: git refuses such an alias
+    (split_cmdline fails on an unclosed quote) and runs nothing."""
+    try:
+        return shlex.split(alias)
+    except ValueError:
+        return []
+
+
+def _config_parameters(value: str | None) -> dict[str, str | None] | None:
+    """GIT_CONFIG_PARAMETERS (`'key'='value' …`) as a dict; None if not parseable."""
+    if value is None:
+        return None
+    try:
+        items = shlex.split(value)
+    except ValueError:
+        return None
+    out: dict[str, str | None] = {}
+    for item in items:
+        key, _, val = item.partition("=")
+        out[key.lower()] = val
+    return out
+
+
+@cache
+def _git_builtins() -> frozenset[str]:
+    """git's commands (built in or git-* programs): git runs them before an alias."""
     res = subprocess.run(
-        ["git", "config", "--get", f"alias.{sub}"],
-        cwd=ROOT,
+        ["git", "--list-cmds=main,others"], cwd=ROOT, capture_output=True, text=True, check=False
+    )
+    return frozenset(res.stdout.split()) if res.returncode == 0 else frozenset()
+
+
+def _git_alias(
+    sub: str,
+    cwd: Path = ROOT,
+    where: list[str] | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    """alias.<sub> as git would read it there (cwd, -C/--git-dir, GIT_DIR/HOME…)."""
+    res = subprocess.run(
+        ["git", *(where or []), "config", "--get", f"alias.{sub}"],
+        cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, **(env or {})},
     )
     if res.returncode == 0:
         return res.stdout.strip()
@@ -1518,6 +2034,18 @@ def guard_bash(payload: object) -> None:
     _check_agent_bash(payload, command)
     if not command.strip():
         return
+    _precheck(command)
+    found = BashAnalyzer(command).run()
+    if (found.commits or found.publishes) and RE_ATTRIBUTION.search(command):
+        raise Blocked(MSG_ATTRIBUTION)
+    if found.commits and os.environ.get("HARNESS_ALLOW_COMMIT") != "1":
+        raise Blocked(MSG_COMMIT)
+    if found.warnings:
+        _emit_warning("\n".join(found.warnings.values()))
+
+
+def _precheck(command: str) -> None:
+    """Line-level rules checked before the shell analysis."""
     if "HARNESS_ASSUME_APPROVED" in command:  # best effort (issue #27)
         raise Blocked(MSG_ASSUME)
     if "HARNESS_EXPECT_RED" in command:  # best effort (issue #31)
@@ -1529,11 +2057,18 @@ def guard_bash(payload: object) -> None:
         raise Blocked(MSG_STARTUP)
     if RE_EXPORT_FUNCTION.search(command):  # best effort (issue #31)
         raise Blocked(MSG_EXPORT_FUNCTION)
-    found = BashAnalyzer(command).run()
-    if (found.commits or found.publishes) and RE_ATTRIBUTION.search(command):
-        raise Blocked(MSG_ATTRIBUTION)
-    if found.commits and os.environ.get("HARNESS_ALLOW_COMMIT") != "1":
-        raise Blocked(MSG_COMMIT)
+
+
+def _emit_warning(msg: str) -> None:
+    """A PreToolUse WARN: the call is allowed; Claude and the user both read `msg`."""
+    print(
+        json.dumps(
+            {
+                "systemMessage": msg,
+                "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg},
+            }
+        )
+    )
 
 
 # ── Integrity backstop (check.sh) ────────────────────────────────────────────
@@ -1779,6 +2314,75 @@ def check_harness_state() -> int:
     return 0
 
 
+# I8 outcome check: a close commit's subject ends with its leaf id, and the commit is
+# the one that marks that leaf done in feature_list.json.
+RE_CLOSE_SUBJECT = re.compile(r"\[(\d+\.\d+\.\d+|ISS-\d+\.\d+)\]\s*$")
+
+
+def _base_ref() -> str | None:
+    """The branch the work merges into (origin/HEAD, else main), remote first."""
+    head = _git_out("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD") or ""
+    base = head.strip().removeprefix("origin/") or "main"
+    for ref in (f"origin/{base}", base):
+        if _git_out("rev-parse", "--verify", "-q", f"{ref}^{{commit}}") is not None:
+            return ref
+    return None
+
+
+def _leaf_done(rev: str, leaf: str) -> bool:
+    raw = _git_out("show", f"{rev}:./feature_list.json")
+    try:
+        return any(
+            str(item["id"]) == leaf and item["status"] == "done"
+            for item in _harness.leaves(json.loads(raw or "{}"))
+        )
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def _is_close(sha: str, parent: str | None, subject: str) -> bool:
+    match = RE_CLOSE_SUBJECT.search(subject)
+    if not match:
+        return False
+    leaf = match.group(1)
+    return _leaf_done(sha, leaf) and not (parent and _leaf_done(parent, leaf))
+
+
+def stray_commits() -> list[str]:
+    """Commits on HEAD past the base that the harness close did not make: no
+    `[<leaf>]` subject that marks that leaf done, or a merge of a non-base branch.
+    A merge that only brings the base in is not reported."""
+    base = _base_ref()
+    if base is None:
+        return []
+    listing = _git_out("log", "-z", "--format=%H %P%x1f%s", f"{base}..HEAD") or ""
+    found = []
+    for record in filter(None, listing.split("\0")):
+        head, _, subject = record.partition("\x1f")
+        sha, *parents = head.split()
+        if len(parents) > 1:
+            if all(
+                _git_out("merge-base", "--is-ancestor", p, base) is not None for p in parents[1:]
+            ):
+                continue
+        elif _is_close(sha, parents[0] if parents else None, subject):
+            continue
+        found.append(f"{sha[:10]} {subject!r}")
+    return found
+
+
+def check_commits() -> int:
+    """I8 outcome check vs git: WARN only (plan 0.5), the exit code never changes."""
+    for commit in stray_commits():
+        say(
+            "WARN",
+            f"commit {commit} on this branch was not made by the harness close (I8). "
+            f"If the human made it on purpose, nothing to do; otherwise review it "
+            f"(git show {commit.split()[0]}) and revert it.",
+        )
+    return 0
+
+
 def integrity() -> int:
     exempt = _seal_required.Exemptions(ROOT)
     # Before the required seals: a receipt gap must count for their legacy inventory WARN.
@@ -1791,6 +2395,7 @@ def integrity() -> int:
         | check_required_seals(exempt)
         | check_verdict_receipts(receipts)
         | check_harness_state()
+        | check_commits()
     )
     if exempt.exempt:
         say("OK", f"{len(exempt.exempt)} legacy item(s) exempt (legacy_inventory)")
