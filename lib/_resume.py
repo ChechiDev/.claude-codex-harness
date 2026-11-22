@@ -19,7 +19,9 @@ classified. Only an action the human already authorized carries a command: the
 cycle of the single in_progress leaf (its gates, fixes, close and PR) and the
 review gates, which never approve anything by themselves. Everything else (start a
 subtask, a kickoff, a breakdown, a merge, a seal in manual mode, a cap) waits for
-the human: resume never invents a human OK.
+the human: resume never invents a human OK. With no docs/plan/ the index cannot be
+checked against the specs: resume warns (WARN on stderr, `warnings` in --json) and
+gives the same action (#105).
 
   _resume.py [--json]                       print the next action (read-only)
   _resume.py budget <step> <id>             exit 1 when the budget is exhausted
@@ -485,8 +487,8 @@ RULES: tuple[tuple[re.Pattern[str], Kind], ...] = (
         "review",
     ),
     _rule(
-        rf"retry the close of (?P<id>{_LEAF}) \(progress/close_(?P=id)\.msg is waiting, last "
-        rf"attempt: .*\): (?P<cmd>{_G} close (?P=id))",
+        rf"retry the close of (?P<id>{_LEAF}) \(progress/close_(?P=id)\.msg is waiting"
+        rf"(?:, last attempt: .*)?\): (?P<cmd>{_G} close (?P=id))",
         "close",
     ),
     _rule(rf"close: (?P<cmd>{_G} doc (?P<id>{_LEAF}))(?: {_WHY})?", "close"),
@@ -587,6 +589,21 @@ STALE_INDEX = (
 )
 
 
+NO_PLAN = (
+    "no docs/plan/: resume takes feature_list.json as the source of truth with nothing to "
+    "check it against (no specs); create docs/plan/ (see docs/usage.md) to have it checked"
+)
+
+
+def plan_source_warning() -> str | None:
+    """The warning for a project with no docs/plan/ (plan rule 0.5: WARN for now, FAIL
+    later): its feature_list.json cannot be checked against any spec. The action does
+    not change, so pre-docs/plan projects (and the toolkit fixtures) still resume."""
+    import sync_plan
+
+    return None if sync_plan.PLAN_DIR.is_dir() else NO_PLAN
+
+
 def index_stale() -> bool:
     """True when feature_list.json does not match the specs (or they do not parse):
     a step derived from it could be one the specs already moved past."""
@@ -629,8 +646,11 @@ def _cmd_next(as_json: bool) -> int:
         say("FAIL", "no feature_list.json (run: make plan)", sys.stderr)
         return 1
     action = next_action()
+    warnings = [w for w in (plan_source_warning(),) if w]
+    for warning in warnings:
+        say("WARN", warning, sys.stderr)
     if as_json:
-        print(json.dumps(asdict(action), indent=2))
+        print(json.dumps({**asdict(action), "warnings": warnings}, indent=2))
         return 0
     print(f"Resume: {action.kind} · {action.text}")
     if action.authorized and action.command:

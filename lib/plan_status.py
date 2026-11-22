@@ -371,14 +371,14 @@ def _close_next(sid: str) -> str:
         return budget
     msg = Path(f"progress/close_{sid}.msg")
     reason = _resume.last_failure_reason("close", sid)
-    if reason and msg.is_file():  # the documenter wrote it, then the commit failed
-        return (
-            f"retry the close of {sid} ({msg} is waiting, last attempt: {reason}): "
-            f"{GATE} close {sid}"
-        )
-    if reason:
-        return f"close: {GATE} doc {sid} (last attempt: {reason})"
-    return f"close: {GATE} doc {sid}"
+    # The documenter wrote the message, then the commit failed (or never ran): with a
+    # failed close, or with an approval that still covers the tree (`doc` refuses
+    # then), the step is to commit it.
+    if msg.is_file() and (reason or _approval(sid) == "fresh"):
+        why = f", last attempt: {reason}" if reason else ""
+        return f"retry the close of {sid} ({msg} is waiting{why}): {GATE} close {sid}"
+    why = f" (last attempt: {reason})" if reason else ""
+    return f"close: {GATE} doc {sid}{why}"
 
 
 def _leaf_next(sid: str) -> str:
