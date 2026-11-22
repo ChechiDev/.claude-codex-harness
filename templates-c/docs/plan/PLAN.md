@@ -71,6 +71,8 @@ When `harness.toml` `[git]` uses `{ticket}` (for example
 - status: pending
 - layer: core
 - depends: none
+- risk: low
+- surfaces: none
 - files:
   - include/<name>/address.h           # crea: public API
   - src/core/address.c                 # crea: implementation
@@ -91,6 +93,13 @@ Pure function that splits an address at its single '@'…
   that changes no production file.
   Unit tests (`tests/unit/`) are not declared.
 - `acceptance:` observable criteria, one test each; Codex writes those tests.
+- `risk:` (optional) ∈ `low | medium | high` and `surfaces:` (optional) the
+  `harness.toml` `[review.surfaces.<name>]` names it touches (built in:
+  `security`, `data`, `migrations`), or `none`. They raise the Codex effort and
+  add checklists to its plan and code gates; `risk: high` also launches its
+  parallel session with `[sessions]` `high_risk_model` / `high_risk_effort`.
+  A `files:` entry matching `high_risk_paths` or a surface's `paths` raises the
+  rating whatever the spec says, and lowering a sealed rating fails `make check`.
 
 <!-- plan:index:start -->
 <!-- plan:index:end -->

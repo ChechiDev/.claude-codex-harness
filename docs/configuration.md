@@ -297,15 +297,22 @@ to a gate (`review_with_codex.sh` or `make`). `harness/issue.sh`, `_issue.py` an
 [sessions]
 model = "sonnet"            # a session that executes a task/subtask (default)
 effort = "medium"           # low | medium | high | xhigh | max
-high_risk_model = "opus"    # when the unit's files: match high_risk_paths
+high_risk_model = "opus"    # files: match high_risk_paths, or a spec says risk: high
 high_risk_effort = "high"
 high_risk_paths = []        # globs, e.g. ["migrations/**", "src/*/auth/**"]
 ```
 
 `harness/session_launch.sh <id> [--worktree <path>] [--prompt <text>] [--exec | --hook <prog>]`
 prints `cd <worktree> && claude --model … --effort … --permission-mode auto "<prompt>"`
-for a subtask, a task or an issue (a task or issue uses the files of all its
-subtasks), every word shell-quoted. In a glob `*` and `?` stay within one path
+for a subtask, a task or an issue (a task or issue uses the files and specs of
+all its subtasks), every word shell-quoted. Besides a `high_risk_paths` match, a
+spec rated `- risk: high` picks `high_risk_model` / `high_risk_effort`: declared in
+the spec or sealed by its phase/task/issue gate (the sealed rating is a floor, as
+for the review gates). `low` / `medium` keep `model` / `effort`, and an invalid
+rating or an unknown surface fails closed, as at its gates. The plan, specs and
+seals are read in the current checkout, not in `--worktree`. A subtask whose
+`feature_list.json` record has no `spec` (or no owning `phase` / issue `id`) is
+launched as high risk, with a WARN naming the missing key. In a glob `*` and `?` stay within one path
 segment and `**` crosses them; a glob that matches a directory covers the files
 under it. An unknown key or invalid value fails closed. The launcher never
 creates the worktree.

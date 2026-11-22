@@ -34,6 +34,8 @@ Subtask spec (docs/plan/phase-01-users/1.1.1-email-value-object.md):
   - status: pending                    (pending | in_progress | done | blocked | baseline)
   - layer: domain
   - depends: none                      (or: 1.1.2, 1.2.1)
+  - risk: high                         (optional: low | medium | high)
+  - surfaces: security, data           (optional: [review.surfaces.<name>] names, or none)
   - files:
     - src/app/domain/email.py          # crea: Email VO (comment optional)
   - acceptance:
@@ -41,6 +43,14 @@ Subtask spec (docs/plan/phase-01-users/1.1.1-email-value-object.md):
 
   ## Description
   <free text: not parsed>
+
+`risk:` / `surfaces:` (issue #44) are read by _review_risk.py, not written to
+feature_list.json: they raise the Codex effort of the subtask's plan and code gates
+and add checklists (harness.toml [review.risk.<level>] / [review.surfaces.<name>]);
+`risk: high` also launches its session with [sessions] high_risk_model/high_risk_effort
+(session_launch.sh, issue #106). A `files:` entry matching high_risk_paths or a
+surface's `paths` raises the rating whatever the spec says; the rating the gate seals
+is a floor. Without them the subtask reviews and launches exactly as before.
 
 Issue header (docs/plan/issues/ISS-14-parse-config-flags.md); its specs use the
 subtask format above with ids ISS-14.1, ISS-14.2… and an optional `migrates:` list

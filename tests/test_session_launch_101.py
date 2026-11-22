@@ -36,12 +36,14 @@ def _features(root: Path, title: str = "Add user entity") -> None:
                         "title": title,
                         "status": "pending",
                         "files": ["src/pkg/domain/user.py", "tests/unit/test_user.py"],
+                        "spec": "docs/plan/phase-01-p/1.1.1-s.md",
                     },
                     {
                         "id": "1.1.2",
                         "title": "User migration",
                         "status": "pending",
                         "files": ["./migrations/versions/0001_users.py"],
+                        "spec": "docs/plan/phase-01-p/1.1.2-s.md",
                     },
                 ],
             }
@@ -57,6 +59,7 @@ def _features(root: Path, title: str = "Add user entity") -> None:
                         "title": "Fix the login guard",
                         "status": "pending",
                         "files": ["src/pkg/auth/guard.py"],
+                        "spec": "docs/plan/issues/ISS-7-fix/ISS-7.1-s.md",
                     }
                 ],
             }
