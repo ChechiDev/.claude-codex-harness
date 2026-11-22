@@ -14,7 +14,11 @@ The functions above the CLI are pure: the caller supplies the files. The CLI
 under .git/harness-gate-runs/ (outside the tree, never committed):
 
   record <id> <rc> <log> <tag>  record one code-gate attempt (tag: unique per
-                           gate run); exit 10 = skip the review
+                           gate run); exit 10 = skip the review. Rotation (#61
+                           item 3): only the newest KEEP_ATTEMPTS numbered records
+                           of the subtask are kept (the one just written always);
+                           the approved record is never touched. The attempt budget
+                           and resume (#46) read their own ledger, not these.
   approve <id> <tag>       bind that attempt to the APPROVED code review
   drop <id>                forget the approval (any other verdict)
   fresh <id>               exit 0 only if the approval still covers the tree
@@ -184,6 +188,8 @@ def load_attempt(path: Path) -> GateAttempt:
 
 UNIT_TESTS = "tests/unit"
 SKIP_RC = 10
+KEEP_ATTEMPTS = 5  # numbered attempt records kept per subtask (issue #61 item 3)
+STALE_TMP_SECONDS = 3600  # a temp file older than this is left over from a killed write
 TOOLKIT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -251,10 +257,83 @@ def _attempt_path(sid: str, tag: str) -> Path:
     return _path(f"code.{tag}", sid)
 
 
+def live_run(tag: str) -> bool:
+    """True when <tag> (a gate run's $$) is the pid of a review_with_codex.sh still
+    running. Without /proc, any live pid counts (conservative: nothing is dropped)."""
+    if not tag.isdigit() or int(tag) <= 1:
+        return False
+    if Path("/proc/self").exists():
+        try:
+            return b"review_with_codex.sh" in Path(f"/proc/{tag}/cmdline").read_bytes()
+        except OSError:
+            return False
+    try:
+        os.kill(int(tag), 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _age_key(path: Path) -> tuple[str, int]:
+    """Oldest first: the record's own time, then the file's (same-second records)."""
+    try:
+        created = load_attempt(path).created_at
+    except ValueError:  # GateRunError, or undecodable bytes (UnicodeDecodeError)
+        created = ""  # unreadable: the first to go
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    return (created, mtime)
+
+
+def rotate(runs: Path, sid: str, keep: Path, limit: int = KEEP_ATTEMPTS) -> list[Path]:
+    """Drop the oldest numbered attempt records of <sid> beyond <limit>, never <keep>,
+    a live run's record nor the approved record; also temp files left by killed
+    writes. Returns the removed paths."""
+    numbered = []
+    for p in runs.glob(f"code.*_{sid}.json"):
+        tag = p.name[len("code.") : -len(f"_{sid}.json")]
+        # A live run's own record is kept: it still has to bind its approval.
+        if tag.isdigit() and p != keep and not live_run(tag):
+            numbered.append(p)
+    numbered.sort(key=_age_key)
+    drop = numbered[: max(0, len(numbered) - (limit - 1))]
+    now = datetime.now(UTC).timestamp()
+    for mark in runs.glob("run_*"):  # run markers of gate runs that ended (issue #46)
+        if not live_run(mark.name.removeprefix("run_")):
+            drop.append(mark)
+    for tmp in runs.glob(".*.tmp"):
+        try:
+            if now - tmp.stat().st_mtime > STALE_TMP_SECONDS:
+                drop.append(tmp)
+        except OSError:
+            continue
+    for path in drop:
+        path.unlink(missing_ok=True)
+    return drop
+
+
+def _auto_mode() -> bool:
+    """Manual mode: the human runs the printed Codex command later and binds this
+    record with `approve <id> <tag>`, so no numbered record is ever rotated there."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _config
+
+    try:
+        return _config.load(Path.cwd()).codex_mode == "auto"
+    except _config.ConfigError:
+        return False  # untrusted config: keep everything
+
+
 def _cmd_record(sid: str, rc: str, log: str, tag: str) -> int:
     text = Path(log).read_text(encoding="utf-8", errors="replace")
     attempt = current_attempt(sid, int(rc), tail(text))
-    record_attempt(_attempt_path(sid, tag), attempt)
+    path = _attempt_path(sid, tag)
+    record_attempt(path, attempt)
+    rotate(path.parent, sid, path, KEEP_ATTEMPTS if _auto_mode() else sys.maxsize)
     if should_skip_review(attempt):
         print(attempt.log_tail, file=sys.stderr)
         return SKIP_RC

@@ -241,6 +241,41 @@ The leader shows `make status` and waits. When a task's PR is merged, the next
 task starts from `main`. When a phase is done, the leader breaks down the next
 one (step 2).
 
+## 7b. Resume after an interruption
+
+After a crash, a closed session or a failed step, nothing has to be remembered:
+
+```bash
+make status                  # the whole plan; its Next: line is the next action
+python3 harness/_resume.py   # the same action, classified (add --json for tools)
+```
+
+`_resume.py` reads only the artifacts: the specs (the single `in_progress` leaf),
+the verdicts, the seals, the code-gate records and the attempt ledger. It prints
+`Resume: <kind> · <step>` and then either `Run: <command>` or `Wait for the human`.
+A command appears only for what the human already authorized: the cycle of the
+subtask in progress (plan gate, fix, implement, code gate, close, a retry of its
+close or PR, finishing an unfinished seal) and the review gates. Starting a
+subtask, a kickoff, a breakdown, new subtasks for a close gate's gaps, a merge, a
+seal in manual mode, an old close or PR retry while another subtask is in progress,
+or any cap waits for the human: resume never takes a human OK for granted.
+A phrase `_resume.py` does not recognise also waits (fail safe).
+
+Recoverable states it names (besides the usual gate steps):
+
+| State in the artifacts | Next action |
+|---|---|
+| last code gate stopped on a red check | `fix <id>: the check was red ...`, then the code gate |
+| last gate run crashed or was killed | `<plan\|code> gate again (last attempt: ...)` |
+| `PLAN_APPROVED`, no acceptance seal, gate stopped before sealing | `finish the seal ...` (plan gate again); manual mode: the human seals |
+| `APPROVED`, but the bound approval no longer covers the tree | `the code approval of <id> ...: code gate again` |
+| `progress/close_<id>.msg` waiting and the ledger says the close failed | `retry the close of <id>: ... close <id>` |
+| last PR attempt failed | `retry the PR of <N.M>: ... pr <N.M>` |
+| more than one leaf `in_progress` | `needs human: ...` |
+| a step used its attempt budget | `needs human (N failed attempts) ...` |
+
+The attempt budget is in [configuration](configuration.md#attempt-budget-harnesstoml-review).
+
 ## 8. Issues lane (a GitHub issue at any point)
 
 An issue never becomes a task of a phase: it has its own lane, with the same

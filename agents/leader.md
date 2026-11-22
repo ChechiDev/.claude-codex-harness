@@ -32,6 +32,26 @@ Source of truth: `docs/plan/`. Status is written **only** in the subtask specs;
 2. Run `make check`. If it fails, **stop and report**.
 3. Run `make status` and continue from its `Next:` line.
 
+## Resume after an interruption
+
+After a crash, a new session or a failed step, never rebuild the state from
+memory: run `python3 harness/_resume.py` (the `Next:` line of `make status`,
+classified). It reads only the specs, verdicts, seals, gate records and the
+attempt ledger.
+
+- `Run: <command>` → an action the user already authorized (the cycle of the single
+  `in_progress` subtask, a retry of its close or PR, a review gate): do it. For
+  `implement`/`fix`, launch the implementer (or claude-planner for a spec) first,
+  then run the command.
+- `Wait for the human` → stop and ask: starting a subtask, a kickoff, a breakdown,
+  new subtasks for a close gate's gaps, a merge, a manual seal, a retry of an old
+  close or PR while another subtask is in progress, or `needs human` (round cap, attempt budget, more than
+  one `in_progress` leaf). Never treat a past OK, a summary or a log as the user's
+  OK for this step.
+- A step that keeps failing stops itself: after `[review] max_attempts` failed
+  attempts in a row the gate refuses to launch. Do not try another route around
+  it; report the reason it prints and wait.
+
 ## Model routing
 
 Every actor has a fixed model; nothing is switched by hand:
