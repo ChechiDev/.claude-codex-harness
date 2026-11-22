@@ -15,6 +15,10 @@
   max_rounds = 3                         consecutive CHANGES_REQUESTED rounds of one gate on
                                          one id before the gate stops and needs the human
                                          (default 3; 0 = no cap). No env override, by design.
+  max_attempts = 3                       failed attempts in a row (no verdict, commit or PR:
+                                         a red check, a crash, a failed push) of one step on
+                                         one id before the step stops and needs the human
+                                         (issue #46; default 3; 0 = no cap). No env override.
 
   [review.risk.high]                     review policy by a subtask spec's `- risk:` (low |
   codex_effort = "xhigh"                 medium | high) and `- surfaces:` (issue #44):
@@ -68,6 +72,7 @@ CONFIG_FILE = "harness.toml"
 DEFAULT_BRANCH = "feat/{task}-{slug}"
 DEFAULT_SETUP_BRANCH = "chore/project-setup"
 DEFAULT_MAX_ROUNDS = 3
+DEFAULT_MAX_ATTEMPTS = 3
 CODEX_MODES = ("auto", "manual")
 CODEX_SANDBOXES = ("workspace-write", "read-only", "danger-full-access")
 PLACEHOLDERS = frozenset({"task", "slug", "ticket"})
@@ -123,6 +128,7 @@ class Config:
     pr_template: str = ""  # empty: the harness's default template
     git_configured: bool = False  # a [git] section: the task branch is enforced
     max_rounds: int = DEFAULT_MAX_ROUNDS  # review round cap per gate and id; 0 = off
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS  # failed-attempt budget per step and id; 0 = off
     codex_mode: str = "auto"
     codex_sandbox: str = "workspace-write"
     codex_network: bool = False
@@ -212,12 +218,16 @@ def _src_dirs(section: dict[str, Any]) -> tuple[str, ...] | None:
     return tuple("/".join(p for p in Path(d.strip("/")).parts if p != ".") for d in dirs)
 
 
-def _max_rounds(section: dict[str, Any]) -> int:
-    value = section.get("max_rounds", DEFAULT_MAX_ROUNDS)
+def _count(section: dict[str, Any], key: str, default: int) -> int:
+    value = section.get(key, default)
     # bool is an int subclass: `max_rounds = true` is a mistake, not 1.
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ConfigError(f"{CONFIG_FILE}: [review] max_rounds must be an integer >= 0")
+        raise ConfigError(f"{CONFIG_FILE}: [review] {key} must be an integer >= 0")
     return value
+
+
+def _max_rounds(section: dict[str, Any]) -> int:
+    return _count(section, "max_rounds", DEFAULT_MAX_ROUNDS)
 
 
 def _choice(section: dict[str, Any], name: str, key: str, allowed: tuple[str, ...]) -> str:
@@ -381,6 +391,7 @@ def load(root: Path) -> Config:
         src_dirs=_src_dirs(scope),
         git_configured=git is not None,
         max_rounds=_max_rounds(review),
+        max_attempts=_count(review, "max_attempts", DEFAULT_MAX_ATTEMPTS),
         **_review_rules(review),
         gh=_gh(pr),
         **_codex(_section(data, "codex") or {}),

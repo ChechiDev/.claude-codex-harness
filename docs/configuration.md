@@ -159,6 +159,44 @@ Only the human sets the cap: there is no environment variable for it, so an agen
 cannot lift it. To resume after deciding what to do, raise `max_rounds` (or set it
 to `0`) in `harness.toml`. A value that is not an integer `>= 0` fails closed.
 
+## Attempt budget (`harness.toml` `[review]`)
+
+```toml
+[review]
+max_attempts = 3   # default: 3; 0 = no cap
+```
+
+The round cap counts rejections; the attempt budget counts runs that ended with
+**no outcome** (issue #46). Every attempt of a step on one id is recorded in
+`.git/harness-gate-runs/attempts_<step>_<id>.json` (outside the tree, never
+committed). The steps are every Codex gate (in `auto` mode), the close (`doc` and
+`close <N.M.K>`) and the PR (`pr <N.M|ISS-n>`). An attempt fails when the check is
+red at a code gate, the reviewer or documenter exits non-zero, the verdict is
+invalid, the seal or the close commit fails, the push or `gh pr create` fails, or
+the run stops before any outcome (killed, interrupted). A final verdict, the close
+commit or an open PR ends an attempt well and resets the count. A refusal by a
+precondition (the gate's prerequisite not approved, a stale code approval at `doc`,
+the round cap) is not an attempt: it launches nothing and names its own cause.
+
+After `max_attempts` failed attempts in a row, `review_with_codex.sh` refuses that
+step before it launches anything (no check, no Codex, no commit, no push), and
+`make status` shows `Next: needs human (N failed attempts) ...` with the last
+reason and the ledger path. Each step and id has its own count (a cap above the 20
+entries the ledger keeps still works). The budget check and the start of an
+attempt are one locked step, and a ledger that cannot be read or written stops the
+step (fail closed). The count started with this ledger: code-gate records from
+before it never count.
+
+Only the human sets the budget (no environment variable). To resume after fixing
+the cause, raise `max_attempts` (or set it to `0`) in `harness.toml`, or remove the
+ledger file named in the message. A value that is not an integer `>= 0` fails
+closed. Manual mode records no gate attempt: the human runs Codex there.
+
+The numbered code-gate records next to the ledger (`code.<n>_<id>.json`) are
+rotated: only the newest 5 of each subtask stay, plus the record of a run still in
+progress. The approved record
+(`code.approved_<id>.json`), which the close needs, is never removed.
+
 ## Review effort and checklists by risk (`harness.toml` `[review.risk]`, `[review.surfaces]`)
 
 A subtask spec may rate itself, among its `- key: value` lines:

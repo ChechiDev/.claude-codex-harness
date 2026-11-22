@@ -58,6 +58,14 @@ always the user's call.
 2. Run `make check`. If it fails, stop and report (red plan-gate oracles are expected, except those passing under a confirmed marker).
 3. Run `make status` and continue from its `Next:` line (flow in `.claude/agents/leader.md`).
 
+### Resume after an interruption
+
+`python3 harness/_resume.py` derives the one next action from the artifacts (specs,
+verdicts, seals, gate records, attempt ledger), never from memory. `Run:` = already
+authorized (the single `in_progress` leaf's cycle, a close/PR retry, a review gate);
+`Wait for the human` = stop and ask, it never stands for the user's OK. A step with
+`[review] max_attempts` failed attempts in a row is refused until the human decides.
+
 ### Model routing
 
 Every actor has a fixed model, set in its own file; nothing is switched by hand.

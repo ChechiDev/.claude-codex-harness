@@ -21,8 +21,10 @@ from pathlib import Path
 from typing import Any
 
 import _config
+import _gate_run
 import _harness
 import _pr
+import _resume
 from _status import Kind, paint
 
 Item = dict[str, Any]
@@ -219,7 +221,7 @@ def _issue_gate_next(iid: str) -> str | None:
         return f"fix the breakdown of issue {iid} ({_harness.issue_review(iid)}), then issue gate"
     if verdict != "ISSUE_APPROVED":
         return f"issue gate: {GATE} issue {iid}"
-    return None
+    return _seal_failed("issue", iid, f"issue {iid}")
 
 
 def _issue_next(data: Item, issue: Item) -> str | None:
@@ -227,8 +229,10 @@ def _issue_next(data: Item, issue: Item) -> str | None:
     if not subs:
         return f"break down issue {iid} into subtask specs"
     current = next((s for s in subs if s["status"] == "in_progress"), None)
-    if current:
-        return _leaf_next(current["id"])
+    # Never work under an approved breakdown its gate failed to seal (issue #46).
+    seal = _seal_failed("issue", iid, f"issue {iid}")
+    if seal or current:
+        return seal or _leaf_next(str(current["id"] if current else ""))
     if all(s["status"] == "done" for s in subs):
         return _done_issue_next(issue)
     gate = _issue_gate_next(iid)
@@ -262,28 +266,197 @@ def _lane_next(data: Item, queue: list[Item] | None) -> str | None:
 
 
 def _capped(gate: str, fid: str) -> str | None:
-    """`needs human (N rounds) ...` once a gate hit [review] max_rounds (issue #42)."""
+    """`needs human ...` once a gate hit [review] max_rounds (issue #42) or used its
+    attempt budget (issue #46): the gate itself would refuse to launch."""
     try:
-        return _pr.needs_human(gate, fid) if _pr.capped(gate, fid) else None
+        capped = _pr.needs_human(gate, fid) if _pr.capped(gate, fid) else None
     except _config.ConfigError as exc:
         return f"fix {_config.CONFIG_FILE}: {exc}"
+    return capped or _budget(gate, fid)
+
+
+def _budget(step: str, fid: str) -> str | None:
+    """`needs human (N failed attempts) ...` once a step used its budget (issue #46)."""
+    try:
+        return _resume.needs_human(step, fid)
+    except _config.ConfigError as exc:
+        return f"fix {_config.CONFIG_FILE}: {exc}"
+    except _resume.LedgerError as exc:
+        return f"needs human: {exc}"
+
+
+def _manual() -> bool:
+    try:
+        return _config.load(Path.cwd()).codex_mode == "manual"
+    except _config.ConfigError:
+        return False  # _capped and _budget report it
+
+
+def _approval(sid: str) -> str:
+    """fresh | stale | missing | unknown: does the bound code approval cover the tree?"""
+    runs = _resume.runs_dir()
+    if runs is None:
+        return "unknown"
+    path = runs / f"code.approved_{sid}.json"
+    if not path.is_file():
+        return "missing"
+    try:
+        stale = _gate_run.is_stale(
+            _gate_run.load_attempt(path), _gate_run.current_attempt(sid, 0, "")
+        )
+    except (ValueError, OSError):
+        return "stale"
+    return "stale" if stale else "fresh"
+
+
+def _plan_next(sid: str, plan: str) -> str:
+    if capped := _capped("plan", sid):
+        return capped
+    reason = _resume.last_failure_reason("plan", sid)
+    if plan == "CHANGES_REQUESTED":  # the requested changes come first, a crash or not
+        why = f" (last attempt: {reason})" if reason else ""
+        return f"fix the spec of {sid} (progress/plan_review_{sid}.md), then plan gate{why}"
+    if reason:
+        return f"plan gate again (last attempt: {reason}): {GATE} plan {sid}"
+    return f"plan gate: {GATE} plan {sid}"
+
+
+def _seal_next(sid: str) -> str | None:
+    """A plan gate (auto mode) that approved but did not seal: a seal failure since its
+    last outcome (an older seal file may cover the old tests), or no seal at all after
+    a failed attempt. Run it again so it seals. With no ledger evidence nothing changes
+    (as before #46); manual mode records no attempt, the human seals there."""
+    if error := _resume.ledger_error("plan", sid):  # its seal history cannot be trusted
+        return f"needs human: {error}"
+    reason = _resume.seal_failure("plan", sid)
+    if reason is None and not Path(f"progress/acceptance_{sid}.sha256").is_file():
+        reason = _resume.last_failure_reason("plan", sid)
+    if reason is None:
+        return None
+    if _manual():  # the evidence predates a switch to manual mode: the human seals
+        return f"needs human: seal the approved plan of {sid} (human only): {GATE} seal {sid}"
+    return _budget("plan", sid) or (
+        f"finish the seal of {sid} (PLAN_APPROVED, last attempt: {reason}): "
+        f"plan gate again: {GATE} plan {sid}"
+    )
+
+
+def _code_next(sid: str, code: str) -> str:
+    if capped := _capped("code", sid):
+        return capped
+    reason = _resume.last_failure_reason("code", sid)
+    if reason and reason.startswith("check red"):
+        return (
+            f"fix {sid}: the check was red at its last code gate ({reason}), "
+            f"then code gate: {GATE} code {sid}"
+        )
+    if code == "CHANGES_REQUESTED":  # the requested changes come first, a crash or not
+        why = f" (last attempt: {reason})" if reason else ""
+        return f"fix {sid} (progress/review_{sid}.md), then code gate{why}"
+    if reason:
+        return f"code gate again (last attempt: {reason}): {GATE} code {sid}"
+    return f"implement {sid} (implementer), then code gate: {GATE} code {sid}"
+
+
+def _close_next(sid: str) -> str:
+    if _resume.last_failure_reason("code", sid):  # a later code attempt failed
+        return _code_next(sid, "APPROVED")
+    state = _approval(sid) if _resume.has_attempts("code", sid) else "unknown"
+    if state in ("stale", "missing"):  # only with ledger evidence (else as before #46)
+        why = "no longer covers the tree" if state == "stale" else "has no gate record"
+        return _budget("code", sid) or (
+            f"the code approval of {sid} {why}: code gate again: {GATE} code {sid}"
+        )
+    if budget := _budget("close", sid):
+        return budget
+    msg = Path(f"progress/close_{sid}.msg")
+    reason = _resume.last_failure_reason("close", sid)
+    if reason and msg.is_file():  # the documenter wrote it, then the commit failed
+        return (
+            f"retry the close of {sid} ({msg} is waiting, last attempt: {reason}): "
+            f"{GATE} close {sid}"
+        )
+    if reason:
+        return f"close: {GATE} doc {sid} (last attempt: {reason})"
+    return f"close: {GATE} doc {sid}"
 
 
 def _leaf_next(sid: str) -> str:
+    """The next step of the single in_progress leaf, from its artifacts (issue #46)."""
     plan = _verdict(Path(f"progress/plan_review_{sid}.md"))
-    code = _verdict(Path(f"progress/review_{sid}.md"))
-    gate = ("plan", plan) if plan != "PLAN_APPROVED" else ("code", code)
-    if gate[1] not in ("PLAN_APPROVED", "APPROVED") and (capped := _capped(gate[0], sid)):
-        return capped
-    if plan == "CHANGES_REQUESTED":
-        return f"fix the spec of {sid} (progress/plan_review_{sid}.md), then plan gate"
     if plan != "PLAN_APPROVED":
-        return f"plan gate: {GATE} plan {sid}"
-    if code == "CHANGES_REQUESTED":
-        return f"fix {sid} (progress/review_{sid}.md), then code gate"
+        return _plan_next(sid, plan)
+    if seal := _seal_next(sid):
+        return seal
+    code = _verdict(Path(f"progress/review_{sid}.md"))
     if code != "APPROVED":
-        return f"implement {sid} (implementer), then code gate: {GATE} code {sid}"
-    return f"close: {GATE} doc {sid}"
+        return _code_next(sid, code)
+    if error := _resume.ledger_error("code", sid):  # its history cannot be trusted
+        return f"needs human: {error}"
+    return _close_next(sid)
+
+
+def _pending_close(leaves: list[Item], active: str) -> str | None:
+    """Evidence of an interrupted close: the spec says done (the documenter's edit),
+    no close commit, and the ledger says the close failed."""
+    for leaf in leaves:
+        sid = str(leaf["id"])
+        error = _resume.ledger_error("close", sid) if leaf["status"] == "done" else None
+        if error and not _harness.tagged_commits(sid):
+            return f"needs human: {error}; {sid} says done but has no close commit"
+        reason = _resume.last_failure_reason("close", sid)
+        if not (leaf["status"] == "done" and reason) or _harness.tagged_commits(sid):
+            continue
+        msg = Path(f"progress/close_{sid}.msg")
+        if active:
+            return f"needs human: the close of {sid} failed ({reason}){active}"
+        if _approval(sid) != "fresh":  # a retry would only be refused again
+            return (
+                f"needs human: the close of {sid} failed ({reason}) and its code approval no "
+                "longer covers the tree, while its spec already says done"
+            )
+        if not msg.is_file():  # the documenter stopped after `status: done`, before its message
+            return (
+                f"needs human: the close of {sid} stopped before its commit ({reason}): its spec "
+                "says done but no close commit and no message exist"
+            )
+        return _budget("close", sid) or (
+            f"retry the close of {sid} ({msg} is waiting, last attempt: {reason}): "
+            f"{GATE} close {sid}"
+        )
+    return None
+
+
+def _pending_pr(leaves: list[Item], active: str) -> str | None:
+    for tid in _resume.failed_prs():
+        owned = [leaf for leaf in leaves if str(leaf["id"]).rsplit(".", 1)[0] == tid]
+        if not owned or not all(_harness.complete(leaf) for leaf in owned):
+            continue
+        reason = _resume.last_failure_reason("pr", tid) or "unreadable ledger"
+        if active:
+            return f"needs human: the PR of {tid} did not go through ({reason}){active}"
+        return _budget("pr", tid) or (
+            f"retry the PR of {tid} (last attempt: {reason}): {GATE} pr {tid}"
+        )
+    return None
+
+
+def _resume_next(data: Item) -> str | None:
+    """Steps that come before everything else (issue #46): a broken invariant, a close
+    whose commit failed after the spec said done, a PR that did not go through."""
+    if run := _resume.running():  # a gate, close or PR still at work: never a second one
+        return _resume.wait_text(run)
+    if _resume.index_stale():  # the specs moved on: derive nothing from the old index
+        return _resume.STALE_INDEX
+    leaves = _harness.leaves(data)
+    started = [str(leaf["id"]) for leaf in leaves if leaf["status"] == "in_progress"]
+    if len(started) > 1:
+        return (
+            f"needs human: {len(started)} subtasks are in_progress ({', '.join(started)}); "
+            "exactly one may be: the human fixes their specs, then make plan"
+        )
+    active = f"; {started[0]} is in_progress meanwhile" if started else ""
+    return _pending_close(leaves, active) or _pending_pr(leaves, active)
 
 
 def _close_gate_next(gate: str, fid: str, path: Path, approved: str) -> str:
@@ -303,7 +476,7 @@ def _task_gate_next(tid: str) -> str | None:
     path = _harness.task_review(tid)
     verdict = _verdict(path)
     if verdict == "TASK_APPROVED":
-        return None
+        return _seal_failed("task", tid, f"task {tid}")
     if capped := _capped("task", tid):
         return capped
     if verdict == "CHANGES_REQUESTED":
@@ -332,7 +505,10 @@ def _task_flow_next(data: Item, pid: str) -> str:
                 f"kickoff task {tid}{after}: one question at a time if the plan no longer "
                 "fits, then write its subtask specs + make plan (claude-planner)"
             )
-        gate = None if _harness.task_approved(tid, pid) else _task_gate_next(tid)
+        if _harness.task_approved(tid, pid):
+            gate = _seal_failed("task", tid, f"task {tid}")
+        else:
+            gate = _task_gate_next(tid)
         return gate or _phase_next(data, pid)
     if previous and not _harness.task_closed(previous, pid):
         path = _harness.task_close(previous)
@@ -354,6 +530,23 @@ def _phase_next(data: Item, pid: str) -> str:
     return f"resolve blocked subtask(s): {', '.join(blocked) or 'see dependencies'}"
 
 
+def _seal_failed(gate: str, fid: str, what: str) -> str | None:
+    """An approved plan-level gate whose last attempt failed at the seal (issue #46):
+    run the gate again so it seals (auto mode; manual mode records no attempt)."""
+    if error := _resume.ledger_error(gate, fid):  # its seal history cannot be trusted
+        return f"needs human: {error}"
+    reason = _resume.seal_failure(gate, fid)
+    if not reason:
+        return None
+    cmd = f"{GATE} {gate}" if gate == "roadmap" else f"{GATE} {gate} {fid}"
+    if _manual():  # manual mode: only the human seals
+        target = gate if gate == "roadmap" else f"{gate} {fid}"
+        return f"needs human: seal {what} (human only): {GATE} seal {target}"
+    return _budget(gate, fid) or (
+        f"finish the seal of {what} (last attempt: {reason}): {gate} gate again: {cmd}"
+    )
+
+
 def _roadmap_next(data: Item) -> str | None:
     """The step before any phase work, or None once the roadmap is approved."""
     if not data["phases"]:
@@ -365,7 +558,7 @@ def _roadmap_next(data: Item) -> str | None:
         return f"fix the roadmap ({_harness.ROADMAP_REVIEW}), then roadmap gate: {GATE} roadmap"
     if roadmap != "ROADMAP_APPROVED":
         return f"roadmap gate: {GATE} roadmap"
-    return None
+    return _seal_failed("roadmap", "roadmap", "the roadmap")
 
 
 def _current_phase(data: Item) -> Item | None:
@@ -404,13 +597,14 @@ def _breakdown_next(data: Item, pid: str) -> str:
         return f"fix the breakdown of phase {pid} ({_harness.phase_review(pid)}), then phase gate"
     if verdict != "PHASE_APPROVED":
         return f"phase gate: {GATE} phase {pid}"
-    if flow == _harness.TASK_FLOW or not _harness.phase_exempt(pid):
-        return _task_flow_next(data, pid)
-    return _phase_next(data, pid)
+    if seal := _seal_failed("phase", pid, f"phase {pid}"):
+        return seal
+    task_flow = flow == _harness.TASK_FLOW or not _harness.phase_exempt(pid)
+    return _task_flow_next(data, pid) if task_flow else _phase_next(data, pid)
 
 
 def next_step(data: Item, queue: list[Item] | None = None) -> str:
-    early = _lane_next(data, queue) or _roadmap_next(data)
+    early = _resume_next(data) or _lane_next(data, queue) or _roadmap_next(data)
     if early:
         return early
     phase = _current_phase(data)

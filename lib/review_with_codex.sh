@@ -58,6 +58,11 @@ HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 CODEX_DIR="$PROJECT_DIR/.claude/codex"
 cd "$PROJECT_DIR" || exit 1
+# Run marker (issue #46): resume waits while any gate run of this project is alive,
+# whatever its mode or stage. A dead run's marker is ignored and later rotated.
+_RUNS="$(git rev-parse --git-path harness-gate-runs 2>/dev/null)" &&
+  mkdir -p "$_RUNS" && : >"$_RUNS/run_$$" 2>/dev/null
+unset _RUNS
 
 # Gate controls (issue #90): from harness.toml only. A control variable in the
 # environment is dropped with one warning, so no child script can read it either.
@@ -228,6 +233,24 @@ new_log() { mktemp "${TMPDIR:-/tmp}/harness-check-$1.XXXXXX"; }
 # is recorded under .git/harness-gate-runs/ with the check result and fingerprints
 # of the implementation (files: + tests/unit/) and the toolkit.
 GATE_RUN_PY="$HARNESS_DIR/_gate_run.py"
+# Attempt ledger and budget (issue #46, lib/_resume.py): every attempt of a step
+# (a Codex gate in auto mode, the close, the PR) on one id is recorded under
+# .git/harness-gate-runs/attempts_<step>_<id>.json. Only an outcome (a final verdict,
+# the close commit, the PR) ends one well; after harness.toml [review] max_attempts
+# failed ones in a row the step is refused before it launches (the human decides).
+RESUME_PY="$HARNESS_DIR/_resume.py"
+# $1 = step, $2 = id. Checks the budget and records the start in one locked step;
+# exit 1 (with the reason) when the budget is used up or the ledger cannot be read
+# or written (fail closed: a broken ledger must not lift the budget).
+attempt_begin() { python3 "$RESUME_PY" begin "$1" "$2" "$$"; }
+# $1 = step, $2 = id, $3 = ok|fail, $4 = reason. The outcome already happened, so a
+# write failure cannot undo it: it is reported for the human to repair.
+attempt_end() {
+  python3 "$RESUME_PY" end "$1" "$2" "$$" "$3" "${4:-}" ||
+    fail "could not record the outcome ($3) of the $1 attempt on $2: the human checks" \
+      "$(git rev-parse --git-path harness-gate-runs 2>/dev/null)" >&2
+}
+
 # $1 = id, $2 = check rc, $3 = log. A red check stops the code gate here: no
 # reviewer, no verdict, no round (never called in plan mode nor the re-gate).
 code_gate_record() {
@@ -236,6 +259,7 @@ code_gate_record() {
   [ "$rc" -eq 0 ] && return 0
   if [ "$rc" -eq 10 ]; then
     fail "$CHECK_CMD is red (exit $2): the code review was not launched (log: $3)" >&2
+    [ "$MODE_EXEC" != "auto" ] || attempt_end code "$1" fail "check red (exit $2)"
   fi
   exit 1
 }
@@ -254,20 +278,25 @@ code_gate_fresh() { python3 "$GATE_RUN_PY" fresh "$1"; }
 # Commit a close: the documenter's message, only with the check green.
 close_commit() {
   local id="$1" msg="progress/close_$1.msg" log text
+  CLOSE_WHY="no valid commit message ($msg)"
   python3 "$HARNESS_DIR/_guard.py" commit-message "$msg" "$id" || return 1
+  CLOSE_WHY="the code approval is stale or missing"
   code_gate_fresh "$id" || return 1
   log="$(new_log close)"
   if ! run_check_recorded "$log"; then
+    CLOSE_WHY="check red after the close"
     fail "$CHECK_CMD is red after the close of $id: nothing committed (log: $log)" >&2
     tail -n 30 "$log" >&2
     return 1
   fi
   # The check itself may rewrite files: the approval must still cover what is staged.
+  CLOSE_WHY="the check changed what the approval covers"
   code_gate_fresh "$id" || return 1
   # Stage only the subtask's manifest (issue #40): a foreign path in the tree or the
   # index blocks the close with its reason; the manifest is never widened.
   local scope_py="$HARNESS_DIR/_close_scope.py" scope
   if ! python3 "$scope_py" check "$id"; then
+    CLOSE_WHY="paths outside the manifest"
     fail "the close of $id touches paths outside its manifest: nothing committed" >&2
     return 1
   fi
@@ -279,16 +308,28 @@ close_commit() {
   then
     rm -f "$scope"
     printf '%s\n' "$text" >"$msg"
+    CLOSE_WHY="could not stage the manifest"
     fail "could not stage the manifest of $id: nothing committed" >&2
     return 1
   fi
   rm -f "$scope"
   if ! printf '%s\n' "$text" | git commit -q -F -; then
     printf '%s\n' "$text" >"$msg"  # kept for the retry
+    CLOSE_WHY="git commit failed"
     fail "git commit failed for the close of $id: message restored to $msg" >&2
     return 1
   fi
   ok "closed -> $id ; commit $(git rev-parse --short HEAD)"
+}
+# The close as one recorded attempt of the `close` step: $1 = id.
+close_attempt() {
+  CLOSE_WHY="the close stopped early"
+  if close_commit "$1"; then
+    attempt_end close "$1" ok "closed"
+    return 0
+  fi
+  attempt_end close "$1" fail "$CLOSE_WHY"
+  return 1
 }
 
 # An issue (ISS-n) is claimed with a tag until its PR is open: drop the claim then.
@@ -312,6 +353,7 @@ open_pr() {
   # git push sends only HEAD: uncommitted changes (untracked included) would let a
   # green check of the working tree stand for a commit it never ran on.
   if [ -n "$(git status --porcelain -uall 2>&1)" ]; then
+    PR_WHY="the tree has uncommitted changes"
     fail "the tree has uncommitted changes: the PR for task $tid was not pushed or" \
       "opened. Commit or remove them first; $retry" >&2
     return 1
@@ -319,6 +361,7 @@ open_pr() {
   # Index flags hide edits from git status and the fingerprint alike: the check
   # would read files whose content is not what gets pushed.
   if ! index_flags_clear; then
+    PR_WHY="files marked assume-unchanged or skip-worktree"
     fail "files marked assume-unchanged or skip-worktree: the PR for task $tid was not" \
       "pushed or opened. Clear the flags (git update-index --no-assume-unchanged" \
       "--no-skip-worktree <file>) first; $retry" >&2
@@ -327,10 +370,12 @@ open_pr() {
   # Branch guard (issue #80): only the branch the task/issue lives on, never the
   # base or main/master, never one carrying base commits origin does not have.
   if ! python3 "$PR_PY" guard "$tid" "$base"; then
+    PR_WHY="the branch guard refused $branch"
     fail "the PR for task $tid was not pushed or opened; $retry" >&2
     return 1
   fi
   case "$branch" in main|master|"$base"|HEAD)
+    PR_WHY="refusing to push $branch"
     fail "refusing to push $branch for task $tid; $retry" >&2; return 1 ;;
   esac
   if ! green_record_current; then
@@ -339,6 +384,7 @@ open_pr() {
     local log
     log="$(new_log pr)"
     if ! run_check_recorded "$log" || ! green_record_current; then
+      PR_WHY="no green check for this exact state"
       fail "no green make check for this exact state (log: $log): the PR for task $tid" \
         "was not pushed or opened. Fix the tree until \`make check\` is green; $retry" >&2
       tail -n 30 "$log" >&2
@@ -346,55 +392,84 @@ open_pr() {
     fi
   fi
   if ! command -v "$GH" >/dev/null 2>&1; then
+    PR_WHY="gh not found"
     warn "gh not found: the PR for task $tid was not opened; $retry" >&2
     return 0
   fi
   if ! git push -q -u origin "$branch"; then
+    PR_WHY="could not push $branch"
     warn "could not push $branch: the PR for task $tid was not opened; $retry" >&2
     return 0
   fi
   if "$GH" pr view "$branch" --json url >/dev/null 2>&1; then
     ok "PR already open for $branch (pushed the new commits)"
+    # Only an open PR is an outcome: a merged or closed one is not (attempt ledger).
+    if [ "$("$GH" pr view "$branch" --json state --jq .state 2>/dev/null)" = "OPEN" ]; then
+      PR_OK=1
+    else
+      PR_WHY="the PR of $branch is not open (merged, closed or unknown)"
+    fi
     cleanup_claim "$tid" "$retry"
     return 0
   fi
   title="$(python3 "$PR_PY" title "$tid")"
   body="$(mktemp "${TMPDIR:-/tmp}/harness-pr.XXXXXX")"
   if ! python3 "$PR_PY" body "$tid" "$base" >"$body"; then
+    PR_WHY="could not build the PR body"
     warn "could not build the PR body for task $tid; $retry" >&2
     return 0
   fi
   if "$GH" pr create --head "$branch" --base "$base" --title "$title" --body-file "$body"; then
     ok "PR opened for task $tid ($branch -> $base)"
+    PR_OK=1
     cleanup_claim "$tid" "$retry"
   else
+    PR_WHY="gh pr create failed"
     warn "gh pr create failed for task $tid; $retry" >&2
   fi
   rm -f "$body"
   return 0
 }
 
+# The PR as one recorded attempt of the `pr` step: $1 = task/issue id. Returns
+# open_pr's own code; the attempt is a success only when the PR is open.
+open_pr_attempt() {
+  local rc
+  PR_WHY="the PR step stopped early"; PR_OK=""
+  open_pr "$1"; rc=$?
+  if [ -n "$PR_OK" ]; then attempt_end pr "$1" ok "PR open"
+  else attempt_end pr "$1" fail "$PR_WHY"; fi
+  return $rc
+}
+
 # After a close: open the task PR when that close finished the task.
 open_pr_if_due() {
   local tid
   tid="$(python3 "$PR_PY" pr-due "$1")" || return 0
+  if ! attempt_begin pr "$tid"; then
+    warn "the PR for task $tid was not pushed or opened (see above)" >&2
+    return 0
+  fi
   # The close commit moved HEAD, so the record of the pre-commit check no longer
   # matches: check the committed state again (only when a PR is due).
   local log
   log="$(new_log pr)"
   if ! run_check_recorded "$log"; then
+    attempt_end pr "$tid" fail "check red after the close commit"
     warn "$CHECK_CMD is red after the close commit: the PR for task $tid was not opened" \
       "(log: $log). Fix it until \`make check\` is green, then:" \
       "./harness/review_with_codex.sh pr $tid" >&2
     return 0
   fi
-  open_pr "$tid" || true
+  open_pr_attempt "$tid" || true
 }
 
 case "$PHASE" in
   seal)    exec python3 "$HARNESS_DIR/_guard.py" seal "$@" ;;
-  close)   [ -n "${1:-}" ] || usage; close_commit "$1" || exit 1; open_pr_if_due "$1"; exit 0 ;;
-  pr)      [ -n "${1:-}" ] || usage; open_pr "$1"; exit $? ;;
+  close)   [ -n "${1:-}" ] || usage; attempt_begin close "$1" || exit 1
+           close_attempt "$1" || exit 1; open_pr_if_due "$1"; exit 0 ;;
+  pr)      [ -n "${1:-}" ] || usage; attempt_begin pr "$1" || exit 1
+           open_pr_attempt "$1"; exit $? ;;
   # Selection contract (issue #65, I4b): Codex reviews progress/oracle_contract.json,
   # bound to its diff hash; the human then runs _oracle.py contract-approve <hash>.
   contract) exec python3 "$HARNESS_DIR/_oracle.py" contract-review ;;
@@ -408,6 +483,10 @@ case "$PHASE" in
   *) usage ;;
 esac
 [ -n "$ID" ] || usage
+# Attempt budget (issue #46), read-only pre-check: a refused attempt changes nothing,
+# not even the red record below. The locked check-and-start comes after the caps.
+STEP="$PHASE"; [ "$PHASE" != "doc" ] || STEP="close"
+if [ "$MODE_EXEC" = "auto" ]; then python3 "$RESUME_PY" budget "$STEP" "$ID" || exit 1; fi
 # A plan gate run never reuses an older red record (issue #65): it is dropped before
 # anything that can exit, and only an approval that sealed the oracle writes a new one.
 [ "$PHASE" != "plan" ] || python3 "$HARNESS_DIR/_oracle.py" red-drop "$ID" || true
@@ -504,6 +583,13 @@ case "$PHASE" in
 esac
 FEATURE_NAME="$(python3 "$HARNESS_PY" feature-name "$ID" 2>/dev/null)"
 
+# Attempt budget (issue #46): only runs the harness launches itself are attempts, so
+# manual mode (the human runs Codex) records none. The doc gate is the `close` step.
+# Started here, after every refusal that launches nothing (preconditions, round cap,
+# review policy): from now on the run does work (the check, Codex, a commit).
+if [ "$MODE_EXEC" = "auto" ]; then
+  attempt_begin "$STEP" "$ID" || exit 1
+fi
 CHECK_LOG="$(new_log "$PHASE")"
 # Close gates (issue #62) read a state the last close already checked: when the green
 # record matches this exact state, reuse it instead of a second full check.
@@ -723,18 +809,25 @@ codex exec "${CODEX_ARGS[@]}" <<<"$PROMPT"
 RC=$?
 
 if [ "$PHASE" = "doc" ]; then
-  [ $RC -eq 0 ] || exit $RC
-  close_commit "$ID" || exit 1
+  if [ $RC -ne 0 ]; then
+    attempt_end close "$ID" fail "documenter exited $RC"
+    exit $RC
+  fi
+  close_attempt "$ID" || exit 1
   open_pr_if_due "$ID"
   exit 0
 fi
 
 if [ $RC -ne 0 ]; then
   fail "the reviewer exited $RC: $VERDICT_FILE not accepted, nothing recorded or sealed" >&2
+  attempt_end "$STEP" "$ID" fail "reviewer exited $RC"
   exit $RC
 fi
 # Validate and make the verdict final (receipt included); an invalid one is undone.
-TOKEN="$(python3 "$VERDICT_PY" commit --owner $$ "$PHASE" "$VERDICT_FILE")" || exit 1
+if ! TOKEN="$(python3 "$VERDICT_PY" commit --owner $$ "$PHASE" "$VERDICT_FILE")"; then
+  attempt_end "$STEP" "$ID" fail "invalid verdict in $VERDICT_FILE"
+  exit 1
+fi
 trap - EXIT TERM INT
 [ "$PHASE" != "code" ] || code_gate_bind "$ID" "$TOKEN"
 
@@ -748,11 +841,15 @@ python3 "$PR_PY" record "$PHASE" "$ID" "$VERDICT_FILE" ||
 # acceptance tests + spec): check.sh then fails if it changes afterwards,
 # whichever tool changed it.
 if [ -n "$SEAL_ON" ] && [ "$TOKEN" = "$SEAL_ON" ]; then
-  python3 "$HARNESS_DIR/_guard.py" seal "${SEAL_ARGS[@]}" || exit 1
+  if ! python3 "$HARNESS_DIR/_guard.py" seal "${SEAL_ARGS[@]}"; then
+    attempt_end "$STEP" "$ID" fail "seal failed after $TOKEN"
+    exit 1
+  fi
   # After Codex wrote the oracle: run it alone and record it collected and failing,
   # with the check result and the oracle/selection fingerprints (WARN only).
   if [ "$PHASE" = "plan" ]; then
     python3 "$HARNESS_DIR/_oracle.py" red-record "$ID" "$CHECK_RC" || true
   fi
 fi
+attempt_end "$STEP" "$ID" ok "$TOKEN"
 exit 0
