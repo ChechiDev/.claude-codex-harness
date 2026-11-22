@@ -198,9 +198,7 @@ def test_round6_bypasses_are_blocked(project: Project, tmp_path: Path) -> None:
         "script --output-limit 10 -c 'git commit -m y' /dev/null",
     ],
 )
-def test_verification_long_option_values_do_not_hide_the_body(
-    project: Project, cmd: str
-) -> None:
+def test_verification_long_option_values_do_not_hide_the_body(project: Project, cmd: str) -> None:
     res = _guard(project, cmd)
     assert res.returncode == BLOCKED, (cmd, res.stderr)
 
