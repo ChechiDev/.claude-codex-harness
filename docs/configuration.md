@@ -209,7 +209,11 @@ A subtask spec may rate itself, among its `- key: value` lines:
 ```
 
 The rating sets the Codex reasoning effort and adds review checklists to that
-subtask's `plan` and `code` gates (issue #44). The built-in table, which
+subtask's `plan` and `code` gates (issue #44). The phase, task and issue gates, which
+approve the specs before any plan gate, take the strictest rating among their
+subtasks (issue #107): their reviewer applies the checklists to those specs, and an
+open subtask with an invalid rating stops the gate (done/baseline ones are exempt,
+as in `make check`). The built-in table, which
 `harness.toml` overrides per field and extends with new surfaces:
 
 ```toml
