@@ -21,7 +21,16 @@ lighter review (risk washing):
 - an invalid value or an unknown surface fails closed (the gate stops, `make check`
   fails). A spec without the fields reviews exactly as before.
 
+Issue #107: the phase, task and issue gates review the specs of their subtasks before
+any of them reaches its plan gate, so they take the policy of the strictest rating
+among those subtasks (each resolved as above); an open subtask whose rating cannot
+be trusted stops them, a done/baseline one is exempt (as in `make check`). Their
+subtasks and statuses come from docs/plan/ itself, not from feature_list.json, so a
+stale index cannot hide a spec the gate reviews.
+
 Usage: python3 _review_risk.py policy <N.M.K|ISS-n.k> <role effort> <codex dir>
+       python3 _review_risk.py gate-policy <plan|code|phase|task|issue> <id> <role effort>
+                                <codex dir>
   prints the effort, then the reasons (one line, may be empty), then one checklist
   path per line; [FAIL] and exit 1 when the policy cannot be trusted.
 """
@@ -43,6 +52,8 @@ RE_FIRST_SECTION = re.compile(r"^## ", re.MULTILINE)
 RISK_RANK = {risk: n for n, risk in enumerate(_config.RISKS)}
 EFFORT_RANK = {effort: n for n, effort in enumerate(_config.CODEX_EFFORTS)}
 COMPLETE = ("done", "baseline")
+LEAF_GATES = ("plan", "code")
+CONTAINER_GATES = ("phase", "task", "issue")
 
 
 class RatingError(Exception):
@@ -169,19 +180,21 @@ def _describe(rating: Rating, source: str) -> list[str]:
     return out + [f"surface {s} ({source})" for s in rating.surfaces]
 
 
-def _leaf(item_id: str) -> _harness.Item:
-    leaf = next((x for x in _harness.leaves() if str(x["id"]) == item_id), None)
+def _leaf(item_id: str, data: _harness.Item | None = None) -> _harness.Item:
+    leaf = next((x for x in _harness.leaves(data) if str(x["id"]) == item_id), None)
     if leaf is None:
         raise RatingError(f"unknown subtask {item_id}")
     return leaf
 
 
-def resolve(root: Path, item_id: str, cfg: _config.Config) -> tuple[Rating, list[str]]:
+def resolve(
+    root: Path, item_id: str, cfg: _config.Config, data: _harness.Item | None = None
+) -> tuple[Rating, list[str]]:
     """The effective rating of a subtask's gates and why: the highest of its spec, its
-    sealed rating and its files."""
+    sealed rating and its files. `data`: the plan to read (default feature_list.json)."""
     import _plan_seal  # lazy: _plan_seal imports this module
 
-    leaf = _leaf(item_id)
+    leaf = _leaf(item_id, data)
     spec = str(leaf.get("spec") or "")
     rating = spec_rating(root, spec)
     reasons = _describe(rating, "declared")
@@ -212,13 +225,86 @@ def _highest(base: str, efforts: list[str]) -> str:
     return best
 
 
-def policy(root: Path, item_id: str, base_effort: str, codex_dir: Path) -> Policy:
-    """The effort and checklists of a subtask's plan/code gate. Raises RatingError."""
+def source_plan(root: Path) -> _harness.Item | None:
+    """The plan as docs/plan/ says now (what the phase/task/issue gate reviews), parsed
+    as `make plan` would, without writing anything; None without docs/plan/."""
+    import sync_plan  # lazy: sync_plan imports _plan_seal, which imports this module
+
+    plan_dir = root / sync_plan.PLAN_DIR
+    if not plan_dir.is_dir():
+        return None
+    parser = sync_plan.PlanParser(plan_dir)
+    parser.parse()
+    if parser.errors:
+        raise RatingError(f"docs/plan does not parse ({parser.errors[0]}): fix it, then make plan")
+    data = sync_plan.build(parser)
+    # Spec paths project-relative, as feature_list.json and the plan seals name them
+    # (the sealed rating is looked up by that exact path).
+    for owner in [*data.get("features", []), *data.get("issues", [])]:
+        for sub in owner.get("subtasks") or []:
+            spec = Path(str(sub.get("spec") or ""))
+            if spec.is_absolute():
+                sub["spec"] = spec.relative_to(root).as_posix()
+    return data
+
+
+def members(gate: str, cid: str, data: _harness.Item | None = None) -> list[_harness.Item]:
+    """The subtasks a phase (NN), task (N.M) or issue (ISS-n) gate reviews."""
+    every = _harness.leaves(data)
+    if gate == "phase":
+        return [x for x in every if str(x["phase"]) == cid]
+    if gate == "task":
+        return [x for x in every if _harness.parse_id(str(x["id"])) == ("task", cid)]
+    return [x for x in every if str(x["issue"]) == cid]
+
+
+def resolve_container(
+    root: Path, gate: str, cid: str, cfg: _config.Config, codex_dir: Path
+) -> tuple[Rating, list[str]]:
+    """The strictest rating among the subtasks of a phase/task/issue gate, and why
+    (each reason names its subtask), read from docs/plan/ (feature_list.json without
+    it). An open subtask whose policy cannot be trusted stops the gate; a done/baseline
+    one is left out, as problems() exempts it."""
+    data = source_plan(root)
+    rating, reasons = Rating(), []
+    for leaf in members(gate, cid, data):
+        sid = str(leaf["id"])
+        try:
+            found, why = resolve(root, sid, cfg, data)
+            _apply(found, cfg, "", codex_dir)  # its own checklists must exist too
+        except (RatingError, OSError, ValueError):
+            if leaf["status"] in COMPLETE:
+                continue
+            raise
+        rating = rating.merge(found)
+        reasons += [f"{sid}: {w}" for w in why]
+    return rating, reasons
+
+
+def gate_policy(root: Path, gate: str, cid: str, base_effort: str, codex_dir: Path) -> Policy:
+    """The effort and checklists of a plan/code gate (one subtask) or of a phase/task/
+    issue gate (its subtasks). Raises RatingError."""
+    if gate not in LEAF_GATES + CONTAINER_GATES:
+        raise RatingError(f"the {gate} gate has no review policy")
     try:
         cfg = _config.load(root)
     except _config.ConfigError as exc:
         raise RatingError(str(exc)) from exc
-    rating, reasons = resolve(root, item_id, cfg)
+    if gate in LEAF_GATES:
+        rating, reasons = resolve(root, cid, cfg)
+    else:
+        rating, reasons = resolve_container(root, gate, cid, cfg, codex_dir)
+    return _apply(rating, cfg, base_effort, codex_dir, tuple(reasons))
+
+
+def _apply(
+    rating: Rating,
+    cfg: _config.Config,
+    base_effort: str,
+    codex_dir: Path,
+    reasons: tuple[str, ...] = (),
+) -> Policy:
+    """The policy a rating gets from the table. Raises RatingError (missing checklist)."""
     if rating.empty():
         return Policy(base_effort, (), ())
     # Every level up to the effective one applies: a higher risk never reviews lighter
@@ -232,7 +318,12 @@ def policy(root: Path, item_id: str, base_effort: str, codex_dir: Path) -> Polic
     if missing:
         raise RatingError(f"review checklist(s) not found: {', '.join(missing)}")
     effort = _highest(base_effort, [rule.effort for rule in rules])
-    return Policy(effort, paths, tuple(reasons))
+    return Policy(effort, paths, reasons)
+
+
+def policy(root: Path, item_id: str, base_effort: str, codex_dir: Path) -> Policy:
+    """The effort and checklists of a subtask's plan/code gate. Raises RatingError."""
+    return gate_policy(root, "code", item_id, base_effort, codex_dir)
 
 
 def default_codex_dir(root: Path) -> Path:
@@ -289,11 +380,17 @@ def warnings(units: list[_harness.Item], root: Path) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 4 or argv[0] != "policy":
-        print("usage: _review_risk.py policy <id> <role effort> <codex dir>", file=sys.stderr)
+    if argv[:1] == ["policy"] and len(argv) == 4:
+        argv = ["gate-policy", "code", *argv[1:]]
+    if len(argv) != 5 or argv[0] != "gate-policy":
+        print(
+            "usage: _review_risk.py policy <id> <role effort> <codex dir>\n"
+            "       _review_risk.py gate-policy <gate> <id> <role effort> <codex dir>",
+            file=sys.stderr,
+        )
         return 2
     try:
-        result = policy(Path.cwd(), argv[1], argv[2], Path(argv[3]))
+        result = gate_policy(Path.cwd(), argv[1], argv[2], argv[3], Path(argv[4]))
     except RatingError as exc:
         say("FAIL", f"review policy: {exc}", sys.stderr)
         return 1

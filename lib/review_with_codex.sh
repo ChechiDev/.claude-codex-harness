@@ -19,7 +19,9 @@
 #
 # Reads the model and effort from the role prompt header (codex/*.md) and passes
 # them to the codex CLI; a subtask's plan/code gates may raise the effort and add
-# checklists by its risk/surfaces rating (issue #44, _review_risk.py). Execution mode via harness.toml [codex] mode:
+# checklists by its risk/surfaces rating (issue #44, _review_risk.py), and so may the
+# phase/task/issue gates by the strictest rating of their subtasks (issue #107).
+# Execution mode via harness.toml [codex] mode:
 #   auto   (default) → runs codex
 #   manual           → prints the command and prompt for you to launch it yourself
 #
@@ -275,9 +277,26 @@ code_gate_bind() {
 # The close refuses an approval that no longer covers the tree.
 code_gate_fresh() { python3 "$GATE_RUN_PY" fresh "$1"; }
 
+# The close message during the commit (I7): it waits in the git dir, where no hook
+# can stage it, and goes back to progress/ on any failure or signal; only a
+# successful commit removes it. After a SIGKILL the next close (or doc) restores it,
+# so the retry reuses it and nothing regenerates it.
+close_msg_backup() { git rev-parse --git-path "harness-close-$1.msg" 2>/dev/null; }
+# $1 = id. Exit 0 when it put a waiting message back in progress/.
+close_msg_recover() {
+  local msg="progress/close_$1.msg" bak
+  bak="$(close_msg_backup "$1")" && [ -n "$bak" ] && [ -f "$bak" ] || return 1
+  # A message in progress/ is newer; one HEAD already carries was committed.
+  if [ -e "$msg" ] || [ "$(git log -1 --format=%B 2>/dev/null)" = "$(cat "$bak")" ]; then
+    rm -f "$bak"; return 1
+  fi
+  mkdir -p progress && mv -f "$bak" "$msg" || return 1
+  warn "the close of $1 was interrupted: its message is back in $msg" >&2
+}
 # Commit a close: the documenter's message, only with the check green.
 close_commit() {
-  local id="$1" msg="progress/close_$1.msg" log text
+  local id="$1" msg="progress/close_$1.msg" log text bak
+  close_msg_recover "$id" || true
   CLOSE_WHY="no valid commit message ($msg)"
   python3 "$HARNESS_DIR/_guard.py" commit-message "$msg" "$id" || return 1
   CLOSE_WHY="the code approval is stale or missing"
@@ -300,25 +319,43 @@ close_commit() {
     fail "the close of $id touches paths outside its manifest: nothing committed" >&2
     return 1
   fi
+  # A message in the index would be committed with the close: refuse it.
+  if [ -n "$(GIT_LITERAL_PATHSPECS=1 git ls-files -- "$msg" 2>&1)" ]; then
+    CLOSE_WHY="the close message is in the index"
+    fail "$msg is in the git index: nothing committed. Unstage it (git rm --cached" \
+      "-- $msg) and retry" >&2
+    return 1
+  fi
   text="$(cat "$msg")"
-  rm -f "$msg"  # never part of the commit: list the manifest without it
+  # Never part of the commit: set aside (I7, see close_msg_recover) until it succeeds.
+  bak="$(close_msg_backup "$id")"
+  if [ -z "$bak" ] || ! mv -f "$msg" "$bak"; then
+    CLOSE_WHY="could not set the close message aside"
+    fail "could not move $msg to the git dir: nothing committed" >&2
+    return 1
+  fi
+  CLOSE_ID="$id"
+  trap 'close_msg_recover "$CLOSE_ID"; exit 130' INT
+  trap 'close_msg_recover "$CLOSE_ID"; exit 143' TERM
+  trap 'close_msg_recover "$CLOSE_ID"; exit 129' HUP
   scope="$(new_log scope)"
   if ! python3 "$scope_py" files "$id" >"$scope" || { [ -s "$scope" ] &&
       ! GIT_LITERAL_PATHSPECS=1 git add -A --pathspec-from-file="$scope" --pathspec-file-nul; }
   then
     rm -f "$scope"
-    printf '%s\n' "$text" >"$msg"
+    close_msg_recover "$id" 2>/dev/null; trap - INT TERM HUP
     CLOSE_WHY="could not stage the manifest"
-    fail "could not stage the manifest of $id: nothing committed" >&2
+    fail "could not stage the manifest of $id: nothing committed (message kept in $msg)" >&2
     return 1
   fi
   rm -f "$scope"
   if ! printf '%s\n' "$text" | git commit -q -F -; then
-    printf '%s\n' "$text" >"$msg"  # kept for the retry
+    close_msg_recover "$id" 2>/dev/null; trap - INT TERM HUP
     CLOSE_WHY="git commit failed"
-    fail "git commit failed for the close of $id: message restored to $msg" >&2
+    fail "git commit failed for the close of $id: message kept in $msg for the retry" >&2
     return 1
   fi
+  rm -f "$bak"; trap - INT TERM HUP
   ok "closed -> $id ; commit $(git rev-parse --short HEAD)"
 }
 # The close as one recorded attempt of the `close` step: $1 = id.
@@ -501,8 +538,18 @@ case "$PHASE" in
   task-close)  python3 "$HARNESS_PY" task-close-ready "$ID" || exit 1 ;;
   phase-close) python3 "$HARNESS_PY" phase-close-ready "$ID" || exit 1 ;;
   issue)   python3 "$HARNESS_PY" issue-ready "$ID" || exit 1 ;;
-  doc)     python3 "$HARNESS_PY" close-ready "$ID" || exit 1
-           code_gate_fresh "$ID" || exit 1 ;;
+  doc)     close_msg_recover "$ID" || true
+           python3 "$HARNESS_PY" close-ready "$ID" || exit 1
+           code_gate_fresh "$ID" || exit 1
+           # A waiting message (a failed or interrupted close) is for the approval that
+           # still holds: `close` reuses it; doc never regenerates it (I7). Only the
+           # human removes it to get a new one (Claude cannot write progress/close_*).
+           if [ -e "progress/close_$ID.msg" ]; then
+             fail "progress/close_$ID.msg is waiting from an earlier close: run" \
+               "./harness/review_with_codex.sh close $ID (the doc gate would regenerate" \
+               "it; to get a new one, the human removes it first)" >&2
+             exit 1
+           fi ;;
   plan)    python3 "$HARNESS_PY" subtask-ready "$ID" || exit 1
            python3 "$HARNESS_DIR/_guard.py" migrates-ready "$ID" || exit 1 ;;
   issue-draft)
@@ -526,10 +573,12 @@ EFFORT="$(read_cfg codex_effort)"
 # Review policy (issue #44): a subtask's plan and code gates take the effort and the
 # extra checklists of its rating (spec `- risk:`/`- surfaces:`, its sealed rating and
 # its files:, see _review_risk.py); never below the role's effort. Fails closed.
+# Issue #107: the phase, task and issue gates, which approve those specs first, take
+# the strictest rating among their subtasks; their checklists apply to the specs.
 POLICY_STEP=""
-if [ "$PHASE" = "plan" ] || [ "$PHASE" = "code" ]; then
-  _POLICY="$(python3 "$HARNESS_DIR/_review_risk.py" policy "$ID" "$EFFORT" "$CODEX_DIR")" ||
-    exit 1
+case "$PHASE" in plan|code|phase|task|issue)
+  _POLICY="$(python3 "$HARNESS_DIR/_review_risk.py" gate-policy "$PHASE" "$ID" "$EFFORT" \
+    "$CODEX_DIR")" || exit 1
   { IFS= read -r EFFORT; IFS= read -r _WHY; } <<<"$_POLICY"
   _LISTS="$(printf '%s\n' "$_POLICY" | sed '1,2d' | sed 's/^/  - /')"
   if [ -n "$_WHY" ]; then
@@ -537,15 +586,21 @@ if [ "$PHASE" = "plan" ] || [ "$PHASE" = "code" ]; then
 
 Review policy (issue #44): reasoning effort $EFFORT; rating: $_WHY."
     if [ -n "$_LISTS" ]; then
+      _APPLY=""
+      case "$PHASE" in phase|task|issue)
+        _APPLY="
+At this gate apply every item to the subtask specs under review (what each subtask
+must change, prove and keep safe), for the subtasks the rating names." ;;
+      esac
       POLICY_STEP="$POLICY_STEP
 Extra review checklists: read each file and apply every item on top of your role;
 your verdict adds a \`## Checklists\` section, one line per item: met, gap (file:line)
-or n/a (why). Any gap means CHANGES_REQUESTED.
+or n/a (why). Any gap means CHANGES_REQUESTED.$_APPLY
 $_LISTS"
     fi
   fi
-  unset _POLICY _WHY _LISTS
-fi
+  unset _POLICY _WHY _LISTS _APPLY ;;
+esac
 
 # What this gate reviews, and where its verdict goes.
 case "$PHASE" in
