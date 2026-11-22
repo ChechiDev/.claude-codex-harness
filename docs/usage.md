@@ -269,10 +269,19 @@ Recoverable states it names (besides the usual gate steps):
 | last gate run crashed or was killed | `<plan\|code> gate again (last attempt: ...)` |
 | `PLAN_APPROVED`, no acceptance seal, gate stopped before sealing | `finish the seal ...` (plan gate again); manual mode: the human seals |
 | `APPROVED`, but the bound approval no longer covers the tree | `the code approval of <id> ...: code gate again` |
-| `progress/close_<id>.msg` waiting and the ledger says the close failed | `retry the close of <id>: ... close <id>` |
+| `progress/close_<id>.msg` waiting and the ledger says the close failed, or the code approval still covers the tree (`doc` would refuse); a stale approval with code-gate attempts in the ledger, or a used-up close budget, comes first | `retry the close of <id> (...): ... close <id>` |
 | last PR attempt failed | `retry the PR of <N.M>: ... pr <N.M>` |
 | more than one leaf `in_progress` | `needs human: ...` |
 | a step used its attempt budget | `needs human (N failed attempts) ...` |
+
+With `docs/plan/` present, `feature_list.json` is checked against the specs first: a
+stale index resumes as `make plan` and nothing else (a gate run still in progress
+comes first: resume waits for it). A project with no `docs/plan/`
+(one older than docs/plan, or a test fixture) has nothing to check it against, so
+`_resume.py` prints a `WARN` on stderr naming the missing source and then the same
+action, taken from `feature_list.json` alone. `--json` lists that warning in
+`warnings` (an empty list when the specs exist). This is WARN only for now (plan
+rule 0.5); it may become a FAIL later.
 
 The attempt budget is in [configuration](configuration.md#attempt-budget-harnesstoml-review).
 

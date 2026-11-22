@@ -25,7 +25,7 @@ from typing import Any
 
 import _resume
 import pytest
-from conftest import LEAF_ID, TOOLKIT, Plan, Project, bind_code_approval
+from conftest import DECLARED, LEAF_ID, TOOLKIT, Plan, Project, bind_code_approval
 
 GATE = "./harness/review_with_codex.sh"
 
@@ -457,10 +457,33 @@ def test_a_waiting_close_message_resumes_as_a_close_retry(code_ready: Project) -
     assert action["authorized"] is True
 
 
-def test_a_close_message_without_ledger_evidence_changes_nothing(code_ready: Project) -> None:
+def test_a_close_message_under_a_fresh_approval_resumes_as_close(code_ready: Project) -> None:
+    # i107: `doc` refuses while the message waits and the approval still covers the
+    # tree, so even with no failed attempt in the ledger the step is `close`.
     code_ready.set_verdict("code", "APPROVED", with_gate_record=True)
     code_ready.write(f"progress/close_{LEAF_ID}.msg", "feat: x [1.1.1]\n")
-    assert _status_next(code_ready) == f"close: {GATE} doc {LEAF_ID}"
+    expected = (
+        f"retry the close of {LEAF_ID} (progress/close_{LEAF_ID}.msg is waiting): "
+        f"{GATE} close {LEAF_ID}"
+    )
+    assert _status_next(code_ready) == expected
+    action = _resume_json(code_ready)
+    assert action["text"] == expected
+    assert action["kind"] == "close" and action["authorized"] is True
+    assert action["command"] == [GATE, "close", LEAF_ID]
+
+
+@pytest.mark.parametrize("approval", ["stale", "missing"])
+def test_a_close_message_without_a_fresh_approval_changes_nothing(
+    code_ready: Project, approval: str
+) -> None:
+    code_ready.set_verdict("code", "APPROVED", with_gate_record=approval == "stale")
+    code_ready.write(f"progress/close_{LEAF_ID}.msg", "feat: x [1.1.1]\n")
+    if approval == "stale":
+        code_ready.write(DECLARED, "LATE = 1\n")  # the approval no longer covers it
+    expected = f"close: {GATE} doc {LEAF_ID}"
+    assert _status_next(code_ready) == expected
+    assert _resume_json(code_ready)["text"] == expected
 
 
 def test_an_uncommitted_done_close_resumes_as_a_close_retry(code_ready: Project) -> None:
@@ -1086,3 +1109,94 @@ def test_a_live_gate_run_marker_is_waited_for(code_ready: Project) -> None:
         proc.kill()
         proc.wait()
     assert _resume_json(code_ready)["kind"] == "implement"
+
+
+# ── #105: no docs/plan/ (feature_list.json unchecked) warns, same action ────
+
+
+def test_resume_without_docs_plan_warns_and_keeps_the_action(code_ready: Project) -> None:
+    assert not (code_ready.root / "docs/plan").exists()
+    expected = _status_next(code_ready)
+    res = _py(code_ready, "_resume.py")
+    assert res.returncode == 0, res.stderr
+    assert "WARN" in res.stderr
+    assert "docs/plan/" in res.stderr and "feature_list.json" in res.stderr
+    assert f"Resume: implement · {expected}" in res.stdout
+    assert f"Run: {GATE} code {LEAF_ID}" in res.stdout
+
+
+def test_resume_json_without_docs_plan_lists_the_warning(code_ready: Project) -> None:
+    res = _py(code_ready, "_resume.py", "--json")
+    assert res.returncode == 0, res.stderr
+    action = json.loads(res.stdout)
+    assert action["text"] == _status_next(code_ready)
+    assert action["command"] == [GATE, "code", LEAF_ID]
+    assert action["authorized"] is True
+    assert len(action["warnings"]) == 1
+    assert "docs/plan/" in action["warnings"][0]
+    assert "feature_list.json" in action["warnings"][0]
+    assert "WARN" in res.stderr
+
+
+def test_resume_with_docs_plan_does_not_warn(plan: Plan) -> None:
+    res = plan.phase("01").phase("02").sync().run_py("_resume.py", "--json")
+    assert res.returncode == 0, res.stderr
+    action = json.loads(res.stdout)
+    assert action["command"] == [GATE, "roadmap"]
+    assert action["warnings"] == []
+    assert "WARN" not in res.stderr
+    text = plan.run_py("_resume.py")
+    assert text.returncode == 0, text.stderr
+    assert "WARN" not in text.stderr and "docs/plan/" not in text.stderr
+
+
+def test_a_stale_index_with_docs_plan_does_not_warn_about_the_source(plan: Plan) -> None:
+    plan.phase("01", "1.1").sub("1.1.1", "in_progress").approve_roadmap().approve_phase("01")
+    plan.sync()
+    spec = plan.root / "docs/plan/phase-01-p01/1.1.1-s.md"
+    spec.write_text(spec.read_text().replace("status: in_progress", "status: done"))
+    res = plan.run_py("_resume.py", "--json")
+    action = json.loads(res.stdout)
+    assert action["kind"] == "fix" and action["warnings"] == []
+    assert "WARN" not in res.stderr
+
+
+# ── i107: a waiting close message under a fresh approval resumes as `close` ──
+
+
+def test_a_waiting_close_message_without_a_failed_attempt_is_a_close_retry() -> None:
+    text = (
+        f"retry the close of {LEAF_ID} (progress/close_{LEAF_ID}.msg is waiting): "
+        f"{GATE} close {LEAF_ID}"
+    )
+    action = _resume.classify(text)
+    assert action.kind == "close" and action.authorized is True
+    assert action.command == [GATE, "close", LEAF_ID]
+
+
+def test_a_close_retry_with_mismatched_ids_waits_for_the_human() -> None:
+    text = f"retry the close of {LEAF_ID} (progress/close_1.1.2.msg is waiting): {GATE} close 1.1.2"
+    action = _resume.classify(text)
+    assert action.kind == "human" and action.command is None
+
+
+def test_with_code_attempts_a_stale_approval_comes_before_a_waiting_message(
+    code_ready: Project,
+) -> None:
+    code_ready.set_verdict("code", "APPROVED", with_gate_record=True)
+    _ok(code_ready, "code")
+    code_ready.write(f"progress/close_{LEAF_ID}.msg", "feat: x [1.1.1]\n")
+    code_ready.write(DECLARED, "LATE = 1\n")
+    expected = f"the code approval of {LEAF_ID} no longer covers the tree: code gate again: "
+    assert _status_next(code_ready) == f"{expected}{GATE} code {LEAF_ID}"
+    assert _resume_json(code_ready)["command"] == [GATE, "code", LEAF_ID]
+
+
+def test_the_close_budget_comes_before_a_waiting_message(code_ready: Project) -> None:
+    code_ready.set_verdict("code", "APPROVED", with_gate_record=True)
+    code_ready.write(f"progress/close_{LEAF_ID}.msg", "feat: x [1.1.1]\n")
+    _fail(code_ready, "close", 3, "git commit failed")
+    action = _resume_json(code_ready)
+    assert action["kind"] == "human" and action["command"] is None
+    assert action["text"].startswith("needs human (3 failed attempts)")
+    assert _status_next(code_ready) == action["text"]
