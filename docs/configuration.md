@@ -326,7 +326,7 @@ creates the worktree.
 | Variable | Values | Default | Read by |
 |----------|--------|---------|---------|
 | `HARNESS_CHECK_CMD` | a shell command | `make check` | `review_with_codex.sh`: the check it runs outside the sandbox before each gate and before the close commit (test fixtures only: a decision run warns) |
-| `HARNESS_ALLOW_COMMIT` | `1` | unset | `guard_bash.sh`: lets Claude run `git commit` for a conscious manual commit |
+| `HARNESS_ALLOW_COMMIT` | `1` \| `force` | unset | `guard_bash.sh`: lets Claude run `git commit` for a conscious manual commit. With `1` the tree being committed should have a green record (`.git/harness-check.ok`, see below); with `force` that check is skipped and the use is logged |
 | `HARNESS_GH` | a path | `gh` | `_issue.py`, `plan_status.py` and `issue.sh` outside the gates; the gates use `[pr] gh` |
 
 Set them for the whole Claude Code session, not inline on one command. The
@@ -336,6 +336,16 @@ typed as a command is still blocked:
 ```bash
 HARNESS_ALLOW_COMMIT=1 claude          # this session may commit
 ```
+
+With `HARNESS_ALLOW_COMMIT=1` the guard also checks that the green record matches
+the tree at the moment of the commit, the same check as the PR barrier (issue #61).
+A missing or stale record is a WARN for now (the commit still runs; it becomes a
+block in the WARN→FAIL calendar) that tells you to run
+`bash harness/run_check.sh --record` and commit that same state. Stage and commit in
+one call: a separate `git add` changes the fingerprint after the check.
+`HARNESS_ALLOW_COMMIT=force` is the valve for a human who knowingly commits without
+a green record: no record check, one line (UTC time, `HEAD`, fingerprint) appended to
+`.git/harness-commit-force.log`. Any other value keeps commits blocked.
 
 ### Codex sandbox
 

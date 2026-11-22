@@ -11,8 +11,11 @@ git config is isolated, HARNESS_* vars are dropped.
 
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -90,9 +93,8 @@ def _sh(cwd: Path, env: dict[str, str], *argv: str) -> None:
     subprocess.run(list(argv), cwd=cwd, env=env, check=True, capture_output=True)
 
 
-def install_project(tmp: Path, kind: str, toolkit: Path = TOOLKIT) -> Installed:
-    """Install the harness into a throwaway project of the given kind (from `toolkit`,
-    the real worktree by default, or a throwaway copy of it)."""
+def _build_template(tmp: Path, kind: str, toolkit: Path) -> Installed:
+    """Run the real install.sh once into `tmp` (the slow part: uv sync, git, hooks)."""
     env = isolated_env(tmp)
     repo = tmp / f"{kind}-proj"
     repo.mkdir()
@@ -125,3 +127,39 @@ def install_project(tmp: Path, kind: str, toolkit: Path = TOOLKIT) -> Installed:
     elif res.returncode != 0:
         raise AssertionError(f"install.sh failed for {kind}:\n{res.stdout}\n{res.stderr}")
     return Installed(kind=kind, root=root, repo=repo, env=env, install_output=res.stdout)
+
+
+# One installed template per (kind) for the real toolkit, built once per process (each
+# xdist worker builds its own). Tests get a private copy; the template is never handed out.
+_TEMPLATES: dict[str, Installed] = {}
+
+
+def _template(kind: str) -> Installed:
+    if kind not in _TEMPLATES:
+        base = Path(tempfile.mkdtemp(prefix=f"harness-tpl-{kind}-"))
+        atexit.register(shutil.rmtree, base, ignore_errors=True)
+        _TEMPLATES[kind] = _build_template(base, kind, TOOLKIT)
+    return _TEMPLATES[kind]
+
+
+def install_project(tmp: Path, kind: str, toolkit: Path = TOOLKIT) -> Installed:
+    """Install the harness into a throwaway project of the given kind (from `toolkit`,
+    the real worktree by default, or a throwaway copy of it).
+
+    For the real toolkit the install runs once per process; every call gets its own copy
+    of that template (own git repo, HOME and venv), so tests stay isolated. A custom
+    `toolkit` always gets a real install."""
+    if toolkit != TOOLKIT:
+        return _build_template(tmp, kind, toolkit)
+    tpl = _template(kind)
+    env = isolated_env(tmp)
+    repo = tmp / f"{kind}-proj"
+    shutil.copytree(tpl.repo, repo, symlinks=True, ignore=shutil.ignore_patterns(".venv"))
+    for key in ("HOME", "CLAUDE_HOME"):  # what install.sh left outside the repo
+        src = Path(tpl.env[key])
+        if src.is_dir():
+            shutil.copytree(src, env[key], symlinks=True, dirs_exist_ok=True)
+    root = repo / tpl.root.relative_to(tpl.repo)
+    if (tpl.root / "pyproject.toml").exists():
+        _sh(root, env, "uv", "sync", "--all-groups", "--quiet", "--offline")
+    return Installed(kind=kind, root=root, repo=repo, env=env, install_output=tpl.install_output)

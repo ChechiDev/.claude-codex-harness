@@ -207,6 +207,22 @@ branch / opens the PR (`review_with_codex.sh pr`); only the human merges.
 `uv run <program>` asks first. The deny list holds only what the guard always
 blocks with no valve, so it never removes a legitimate path.
 
+**Manual commits** (issue #61, item 5). A session started with
+`HARNESS_ALLOW_COMMIT=1` may commit only a tree the harness has seen green: the
+guard compares the green record (`.git/harness-check.ok`, written only by
+`harness/run_check.sh --record` after a clean green check of an unchanged tree)
+with the fingerprint of the tree at the moment of the call — the same check as the
+PR barrier of #55, index flags included. A missing, stale or unverifiable record is
+a **WARN** for now (the commit goes ahead) and becomes a **BLOCK** in the WARN→FAIL
+calendar. `HARNESS_ALLOW_COMMIT=force` is the human valve: it skips the record check
+and appends one line (UTC time, `HEAD`, fingerprint; never the command) to
+`.git/harness-commit-force.log`, which Claude's tools cannot write. Limits: the
+fingerprint is taken before the command runs, so a `git add` in a *separate* call
+before the commit moves the status and makes the record stale (stage and commit in
+one call, or re-run the check after staging); an edit made earlier on the same line
+(`echo x > f && git commit -a`) is not seen; a `git -C <other>` commit is compared with
+the project's own tree.
+
 **Outcome check.** `make check` (`_guard.py integrity`) lists the commits on the
 branch past its base (`origin/HEAD`, else `main`) that the close did not make —
 a close commit has a subject ending in `[<leaf>]` and is the commit that marks
@@ -231,6 +247,32 @@ non-builtin git subcommand blocks when the config git would read is unknown
 `-c` value, `include.path`, a `source`d file, a git config file written earlier
 on the line); a same-line `git config --global alias.X …` counts even if a
 local alias of the same name would win.
+
+### Working-tree fingerprint
+
+`_guard.py fingerprint` is the key of the green record: the Stop hook, the PR
+barrier, the gates' record reuse and the manual-commit check above compare it with
+`.git/harness-check.ok`. It hashes `HEAD`, `git status`, the diff against `HEAD`, the
+contents of untracked (not ignored) files, the toolkit behind the `harness` and
+`.claude/settings.json` links, and (issue #61, item 4) a fixed list of files that
+drive the check, by content, whether git tracks, ignores or never sees them:
+`Makefile`, `GNUmakefile`, `makefile`, `harness.toml`, `feature_list.json`, the whole
+`docs/plan/` tree, `pyproject.toml`, `setup.cfg`, `tox.ini`, `pytest.ini` and the root
+`conftest.py`. An ignored file outside that list does not count. Anything it cannot
+read (a dangling link, an untraversable directory, an unreadable file) gives no
+fingerprint, so nothing is green. Files under `.git/` are not part of it (the record
+itself, the attempt ledger, the force log, the close message the harness sets aside
+as `.git/harness-close-<id>.msg`) unless a listed input is a link into `.git/`.
+Limits: every file under `docs/plan/` counts, ignored ones included, so a tool that
+writes there during the check (a cache, a coverage file) keeps the record from being
+written; inputs are read whole into memory.
+When the list was added every existing record stopped matching once; the next gate,
+close or `pr` (or `harness/run_check.sh --record`) writes a fresh one.
+
+The attempt ledger of `harness/resume` (`.git/harness-gate-runs/attempts_*.json`) is
+written only by the harness steps: `_resume.py begin|end` is a sealer for the Bash
+guard (`budget` and the read-only next action stay open), so Claude cannot reset an
+attempt budget.
 
 The outcome layer is what makes the rules hold regardless of *how* a file was
 written. The close window exists because the documenter marks the subtask
