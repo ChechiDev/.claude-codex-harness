@@ -16,6 +16,16 @@
                                          one id before the gate stops and needs the human
                                          (default 3; 0 = no cap). No env override, by design.
 
+  [review.risk.high]                     review policy by a subtask spec's `- risk:` (low |
+  codex_effort = "xhigh"                 medium | high) and `- surfaces:` (issue #44):
+  checklists = ["high-risk"]             effort low | medium | high | xhigh of its plan and
+  [review.surfaces.security]             code gates (never below the reviewer role's own) and
+  codex_effort = "xhigh"                 extra checklists (codex/checklist-<name>.md).
+  checklists = ["security"]              Built-in rules (high, security, data, migrations)
+  paths = ["src/app/auth/**"]            merge per field with these; a surface's `paths`
+                                         (globs as high_risk_paths) add it to any subtask
+                                         whose files: match. Unknown keys fail closed.
+
   [codex]
   mode = "auto"                          auto (runs codex) | manual (prints the command)
   sandbox = "workspace-write"            workspace-write | read-only | danger-full-access
@@ -50,7 +60,7 @@ import string
 import sys
 import tomllib
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -70,10 +80,37 @@ SESSION_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 SESSION_KEYS = frozenset(
     {"model", "effort", "high_risk_model", "high_risk_effort", "high_risk_paths"}
 )
+# Review policy by risk and surface (issue #44).
+RISKS = ("low", "medium", "high")
+CODEX_EFFORTS = ("low", "medium", "high", "xhigh")
+RE_RULE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
+RULE_KEYS = frozenset({"codex_effort", "checklists"})
+SURFACE_KEYS = RULE_KEYS | {"paths"}
 
 
 class ConfigError(Exception):
     """harness.toml exists but cannot be trusted: the harness fails closed."""
+
+
+@dataclass(frozen=True)
+class ReviewRule:
+    """What one risk level or surface adds to a subtask's review (issue #44)."""
+
+    effort: str = ""  # "" = the reviewer role's own effort
+    checklists: tuple[str, ...] = ()  # codex/checklist-<name>.md
+    paths: tuple[str, ...] = ()  # surfaces only: files: matching one add the surface
+
+
+DEFAULT_RISK_RULES: dict[str, ReviewRule] = {
+    "low": ReviewRule(),
+    "medium": ReviewRule(),
+    "high": ReviewRule("xhigh", ("high-risk",)),
+}
+DEFAULT_SURFACE_RULES: dict[str, ReviewRule] = {
+    "security": ReviewRule("xhigh", ("security",)),
+    "data": ReviewRule("", ("data",)),
+    "migrations": ReviewRule("xhigh", ("migrations",)),
+}
 
 
 @dataclass(frozen=True)
@@ -95,6 +132,10 @@ class Config:
     session_high_risk_model: str = "opus"
     session_high_risk_effort: str = "high"
     session_high_risk_paths: tuple[str, ...] = ()
+    review_risk: dict[str, ReviewRule] = field(default_factory=lambda: dict(DEFAULT_RISK_RULES))
+    review_surfaces: dict[str, ReviewRule] = field(
+        default_factory=lambda: dict(DEFAULT_SURFACE_RULES)
+    )
 
     @property
     def needs_ticket(self) -> bool:
@@ -255,6 +296,62 @@ def _sessions(section: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _rule(table: object, where: str, keys: frozenset[str], base: ReviewRule) -> ReviewRule:
+    """One [review.risk.<level>] / [review.surfaces.<name>] table merged over `base`."""
+    if not isinstance(table, dict):
+        raise ConfigError(f"{CONFIG_FILE}: [{where}] must be a table")
+    unknown = set(table) - keys
+    if unknown:
+        raise ConfigError(f"{CONFIG_FILE}: [{where}] unknown key(s) {sorted(unknown)}")
+    effort = table.get("codex_effort", base.effort)
+    if "codex_effort" in table and effort not in CODEX_EFFORTS:
+        raise ConfigError(
+            f"{CONFIG_FILE}: [{where}] codex_effort must be one of {', '.join(CODEX_EFFORTS)}"
+        )
+    checklists = table.get("checklists", list(base.checklists))
+    if not isinstance(checklists, list) or not all(
+        isinstance(c, str) and RE_RULE_NAME.fullmatch(c) for c in checklists
+    ):
+        raise ConfigError(
+            f"{CONFIG_FILE}: [{where}] checklists must be a list of names "
+            "(codex/checklist-<name>.md: a-z, 0-9, -)"
+        )
+    raw = table.get("paths", list(base.paths))
+    paths = [_risk_glob(g) for g in raw] if isinstance(raw, list) else [None]
+    if None in paths:
+        raise ConfigError(
+            f"{CONFIG_FILE}: [{where}] paths must be a list of project-relative globs (* ? ** only)"
+        )
+    return ReviewRule(
+        str(effort),
+        tuple(dict.fromkeys(checklists)),
+        tuple(p for p in paths if p is not None),
+    )
+
+
+def _rules(
+    review: dict[str, Any], name: str, defaults: dict[str, ReviewRule], keys: frozenset[str]
+) -> dict[str, ReviewRule]:
+    tables = review.get(name, {})
+    if not isinstance(tables, dict):
+        raise ConfigError(f"{CONFIG_FILE}: [review.{name}] must be a table of tables")
+    rules = dict(defaults)
+    for key, table in tables.items():
+        allowed = key in RISKS if name == "risk" else bool(RE_RULE_NAME.fullmatch(key))
+        if not allowed:
+            what = f"one of {', '.join(RISKS)}" if name == "risk" else "a name (a-z, 0-9, -)"
+            raise ConfigError(f"{CONFIG_FILE}: [review.{name}.{key}]: the key must be {what}")
+        rules[key] = _rule(table, f"review.{name}.{key}", keys, rules.get(key, ReviewRule()))
+    return rules
+
+
+def _review_rules(review: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "review_risk": _rules(review, "risk", DEFAULT_RISK_RULES, RULE_KEYS),
+        "review_surfaces": _rules(review, "surfaces", DEFAULT_SURFACE_RULES, SURFACE_KEYS),
+    }
+
+
 def _section(data: dict[str, Any], name: str) -> dict[str, Any] | None:
     section = data.get(name)
     if section is None:
@@ -284,6 +381,7 @@ def load(root: Path) -> Config:
         src_dirs=_src_dirs(scope),
         git_configured=git is not None,
         max_rounds=_max_rounds(review),
+        **_review_rules(review),
         gh=_gh(pr),
         **_codex(_section(data, "codex") or {}),
         **_sessions(_section(data, "sessions") or {}),

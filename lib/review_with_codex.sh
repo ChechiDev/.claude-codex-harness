@@ -18,7 +18,8 @@
 # it approved so `make check` catches any later silent change.
 #
 # Reads the model and effort from the role prompt header (codex/*.md) and passes
-# them to the codex CLI. Execution mode via harness.toml [codex] mode:
+# them to the codex CLI; a subtask's plan/code gates may raise the effort and add
+# checklists by its risk/surfaces rating (issue #44, _review_risk.py). Execution mode via harness.toml [codex] mode:
 #   auto   (default) → runs codex
 #   manual           → prints the command and prompt for you to launch it yourself
 #
@@ -443,6 +444,30 @@ EFFORT="$(read_cfg codex_effort)"
 : "${MODEL:=default}"
 : "${EFFORT:=medium}"
 
+# Review policy (issue #44): a subtask's plan and code gates take the effort and the
+# extra checklists of its rating (spec `- risk:`/`- surfaces:`, its sealed rating and
+# its files:, see _review_risk.py); never below the role's effort. Fails closed.
+POLICY_STEP=""
+if [ "$PHASE" = "plan" ] || [ "$PHASE" = "code" ]; then
+  _POLICY="$(python3 "$HARNESS_DIR/_review_risk.py" policy "$ID" "$EFFORT" "$CODEX_DIR")" ||
+    exit 1
+  { IFS= read -r EFFORT; IFS= read -r _WHY; } <<<"$_POLICY"
+  _LISTS="$(printf '%s\n' "$_POLICY" | sed '1,2d' | sed 's/^/  - /')"
+  if [ -n "$_WHY" ]; then
+    POLICY_STEP="
+
+Review policy (issue #44): reasoning effort $EFFORT; rating: $_WHY."
+    if [ -n "$_LISTS" ]; then
+      POLICY_STEP="$POLICY_STEP
+Extra review checklists: read each file and apply every item on top of your role;
+your verdict adds a \`## Checklists\` section, one line per item: met, gap (file:line)
+or n/a (why). Any gap means CHANGES_REQUESTED.
+$_LISTS"
+    fi
+  fi
+  unset _POLICY _WHY _LISTS
+fi
+
 # What this gate reviews, and where its verdict goes.
 case "$PHASE" in
   roadmap)
@@ -613,7 +638,7 @@ Test suite: this sandbox cannot run it (local sockets are blocked).
 Do NOT run \`make check\`, \`make verify\`, the tests or anything that runs them.
 The harness ran \`$CHECK_CMD\` outside the sandbox just before this session:
 exit code $CHECK_RC, full output in $CHECK_LOG.
-That result is the one AGENTS.md step 1 asks for.$ASSUME_STEP$CLOSE_STEP
+That result is the one AGENTS.md step 1 asks for.$ASSUME_STEP$CLOSE_STEP$POLICY_STEP
 
 Respect your role's output contract (write the verdict/result to the indicated
 progress/ file and return a single reference line).

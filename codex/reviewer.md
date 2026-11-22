@@ -70,6 +70,31 @@ after the `**Verdict:**` line, and on a re-review a `## Finding → fix` section
 mapping each finding of the previous round to its fix (`file:line`) or `still
 open`. The verdict line and its tokens stay exactly as each mode shows them.
 
+## Risk and surfaces (issue #44)
+
+A subtask spec may declare `- risk: low|medium|high` and `- surfaces: <names>`
+(`security`, `data`, `migrations`, or the project's own in `harness.toml`). The rating
+picks the reasoning effort of its `plan` and `code` gates and adds review checklists;
+the phase/task/issue gate that seals the spec seals its rating with it. Rating too low
+is how a review gets lighter than the change deserves, so:
+
+- In `phase`, `task` and `issue` modes, and again in `plan` mode, check every spec's
+  rating against what it changes (its `files:`, layer, description and acceptance
+  criteria). An **understated** rating is CHANGES_REQUESTED: a missing or low `risk:`
+  on a change to authentication, authorization, money, persistence, migrations, public
+  APIs or shared infrastructure, or a missing surface the change clearly touches
+  (auth or input handling → `security`; queries, transactions or stored data →
+  `data`; schema changes → `migrations`). Name the rating it needs. An absent rating
+  is fine for a change with none of these traits.
+- Never accept a lowered rating as a fix: if a previous round asked for a rating,
+  the new spec keeps it or raises it.
+- When the prompt has a **Review policy** with extra checklists, read each checklist
+  file and apply every item on top of this role. Add a `## Checklists` section to the
+  verdict, one line per item: `met`, `gap` (cite `file:line`) or `n/a` (say why). Any
+  `gap` means CHANGES_REQUESTED. In `plan` mode apply the items to the spec and to
+  the acceptance tests you write (what the code must prove); in `code` mode to the
+  code.
+
 ---
 
 ## `roadmap` mode

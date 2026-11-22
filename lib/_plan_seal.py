@@ -17,6 +17,15 @@ changes afterwards. Any change needs a new Codex approval (which re-seals).
 subtask cannot become (or stop being) baseline after the approval. A
 subtask's own plan gate (PLAN_APPROVED) re-seals that one spec; while that gate
 is still open, a change to the in_progress spec is only a warning.
+
+Review rating (issue #44): writing a phase/task/issue seal adds a
+`<rating>  rating:<spec>` line for each spec that declares `- risk:` / `- surfaces:`
+(the rating token, see _review_risk.py). The *_entries functions stay digests only, so
+their other readers (_legacy, _supersede, _close_scope) and every seal written before
+#44 are unchanged. The sealed rating is a floor: its subtask's gates never review below
+it, and lowering it after the approval fails `make check`, even through the plan gate's
+re-seal (which keeps a raise only), until the phase/task/issue gate (or the human)
+seals it again.
 """
 
 from __future__ import annotations
@@ -29,6 +38,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import _harness
+import _review_risk
 
 PLAN_DIR = Path("docs/plan")
 INDEX_RE = re.compile(r"<!-- plan:index:start -->.*?<!-- plan:index:end -->", re.DOTALL)
@@ -37,6 +47,8 @@ RE_ISSUE_FILE = re.compile(r"^(ISS-\d+)-[a-z0-9][a-z0-9-]*\.md$")
 RE_STATUS = re.compile(r"^- status:(?![ \t]*baseline[ \t]*$).*$\n?", re.MULTILINE | re.IGNORECASE)
 
 Entries = dict[str, str]
+RATING_PREFIX = "rating:"
+INVALID_RATING = "invalid"  # never parses: a gate reading it fails closed
 
 
 def roadmap_manifest(root: Path) -> Path:
@@ -80,6 +92,34 @@ def _header(text: str) -> str:
 
 def _rel(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
+
+
+RE_SPEC_REL = re.compile(
+    r"^docs/plan/(?:phase-\d{2}-[a-z0-9][a-z0-9-]*|issues/ISS-\d+-[a-z0-9][a-z0-9-]*)/[^/]+\.md$"
+)
+
+
+def _rating_token(root: Path, spec: str) -> str | None:
+    """The rating token a spec declares now (None: unrated or missing; INVALID_RATING
+    when it cannot be parsed, which never matches a valid sealed rating)."""
+    try:
+        rating = _review_risk.parse_rating((root / spec).read_text("utf-8"))
+    except OSError:
+        return None
+    except (_review_risk.RatingError, UnicodeDecodeError):
+        return INVALID_RATING
+    return None if rating.empty() else rating.token()
+
+
+def _ratings(root: Path, entries: Entries) -> Entries:
+    """`rating:<spec>` -> token for every rated spec among the entries' paths."""
+    out: Entries = {}
+    for rel in entries:
+        if RE_SPEC_REL.match(rel):
+            token = _rating_token(root, rel)
+            if token is not None:
+                out[RATING_PREFIX + rel] = token
+    return out
 
 
 def roadmap_entries(root: Path) -> Entries:
@@ -127,11 +167,11 @@ def task_entries(root: Path, tid: str) -> Entries:
     path = _phase_files(root).get(f"{int(tid.split('.')[0]):02d}")
     if path is None:
         return {}
-    specs = [f for f in path.with_suffix("").glob("*.md") if _task_of_spec(f) == tid]
-    return {
-        _rel(root, f): _digest(RE_STATUS.sub("", f.read_text("utf-8")))
-        for f in sorted(specs, key=_spec_key)
-    }
+    specs = sorted(
+        (f for f in path.with_suffix("").glob("*.md") if _task_of_spec(f) == tid), key=_spec_key
+    )
+    entries = {_rel(root, f): _digest(RE_STATUS.sub("", f.read_text("utf-8"))) for f in specs}
+    return entries
 
 
 def record_legacy(root: Path, data: dict[str, object]) -> list[str]:
@@ -167,7 +207,7 @@ def record_legacy(root: Path, data: dict[str, object]) -> list[str]:
         }
         record.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
         sealed[rel] = _digest(record.read_text("utf-8"))
-        write(manifest, sealed)
+        _write_raw(manifest, sealed)
         written.append(rel)
     return written
 
@@ -207,20 +247,57 @@ def read(manifest: Path) -> Entries:
     return entries
 
 
-def write(manifest: Path, entries: Entries) -> None:
+def _write_raw(manifest: Path, entries: Entries) -> None:
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text("".join(f"{d}  {rel}\n" for rel, d in entries.items()), "utf-8")
 
 
+def write(manifest: Path, entries: Entries) -> None:
+    """Write an owner seal (roadmap, phase, task, issue) of what its gate approved: the
+    digests plus the current rating of every rated spec among them (issue #44)."""
+    digests = {rel: d for rel, d in entries.items() if not rel.startswith(RATING_PREFIX)}
+    _write_raw(manifest, {**digests, **_ratings(manifest.parent.parent, digests)})
+
+
+def _owner_manifest(root: Path, spec: str, owner: str) -> Path:
+    """The seal that holds a spec: its issue (ISS-n), its task (N.M) or its phase (NN)."""
+    if owner.startswith("ISS-"):
+        return issue_manifest(root, owner)
+    tid = _task_of_spec(Path(spec))
+    if task_manifest(root, tid).is_file():
+        return task_manifest(root, tid)
+    return phase_manifest(root, owner)
+
+
+def sealed_rating(root: Path, spec: str, owner: str) -> _review_risk.Rating | None:
+    """The rating its phase/task/issue gate sealed for the spec (None: none sealed).
+    Raises RatingError on an unreadable one."""
+    manifest = _owner_manifest(root, spec, owner)
+    if not manifest.is_file():
+        return None
+    token = read(manifest).get(RATING_PREFIX + spec)
+    return None if token is None else _review_risk.Rating.from_token(token)
+
+
+def _keeps_rating(sealed: str | None, current: str | None) -> bool:
+    """The current rating token is at least as strict as the sealed one."""
+    if sealed is None or sealed == current:  # unchanged, even an unparseable one
+        return True
+    if current is None:
+        return False
+    try:
+        old = _review_risk.Rating.from_token(sealed)
+        new = _review_risk.Rating.from_token(current)
+    except _review_risk.RatingError:
+        return False
+    return new.covers(old)
+
+
 def reseal_spec(root: Path, spec: str, owner: str) -> bool:
-    """Refresh one spec's digest in its phase (NN) or issue (ISS-n) seal, after its
-    plan gate approved it."""
+    """Refresh one spec's digest in its phase (NN), task (N.M) or issue (ISS-n) seal,
+    after its plan gate approved it. Its sealed rating only goes up (issue #44)."""
     is_issue = owner.startswith("ISS-")
-    manifest = issue_manifest(root, owner) if is_issue else phase_manifest(root, owner)
-    if not is_issue:
-        tid = _task_of_spec(Path(spec))
-        if task_manifest(root, tid).is_file():
-            manifest = task_manifest(root, tid)
+    manifest = _owner_manifest(root, spec, owner)
     if not manifest.is_file():
         return False
     entries = read(manifest)
@@ -232,7 +309,10 @@ def reseal_spec(root: Path, spec: str, owner: str) -> bool:
         current = phase_entries(root, owner)
     if spec in current:
         entries[spec] = current[spec]
-        write(manifest, entries)
+        key, token = RATING_PREFIX + spec, _rating_token(root, spec)
+        if token is not None and _keeps_rating(entries.get(key), token):
+            entries[key] = token
+        _write_raw(manifest, entries)
     return True
 
 
@@ -246,6 +326,24 @@ def _diff(sealed: Entries, current: Entries, what: str) -> list[tuple[str, str]]
             out.append((rel, f"{rel} added after {what} was approved"))
         elif sealed[rel] != current[rel]:
             out.append((rel, f"{rel} changed after {what} was approved"))
+    return out
+
+
+def _lowered(root: Path, sealed: Entries, current: Entries, what: str) -> list[str]:
+    """A sealed rating the spec no longer meets: always a problem, even under the plan
+    gate. A seal from before issue #44 has no rating line; with the spec unchanged its
+    rating is the sealed text itself, and a changed spec is reported by its digest."""
+    out = []
+    for key, token in sealed.items():
+        if not key.startswith(RATING_PREFIX):
+            continue
+        spec = key.removeprefix(RATING_PREFIX)
+        now = _rating_token(root, spec) if spec in current else None
+        if not _keeps_rating(token, now):
+            out.append(
+                f"the review rating of {spec} was lowered after {what} was approved "
+                f"(sealed {token}, now {now or 'none'}): its gates keep the sealed one"
+            )
     return out
 
 
@@ -315,11 +413,16 @@ def verify(root: Path, exempt: Callable[[str], bool] | None = None) -> tuple[lis
             continue
         if _harness.assumed("phase", pid):
             continue
-        for rel, msg in _diff(read(manifest), phase_entries(root, pid), f"phase {pid}"):
+        sealed, current = read(manifest), phase_entries(root, pid)
+        digests = {k: v for k, v in sealed.items() if not k.startswith(RATING_PREFIX)}
+        for rel, msg in _diff(digests, current, f"phase {pid}"):
             if rel == open_spec:
                 warnings.append(f"{msg}: its subtask is still in its plan gate")
             else:
                 problems.append(msg + gate.format(f"phase {pid}"))
+        problems += [
+            m + gate.format(f"phase {pid}") for m in _lowered(root, sealed, current, f"phase {pid}")
+        ]
     _verify_tasks(root, open_spec, problems, warnings)
     _verify_issues(root, open_spec, problems, warnings, is_exempt)
     return problems, warnings
@@ -341,11 +444,14 @@ def _verify_tasks(
         tid = manifest.name.removeprefix("plan_task_").removesuffix(".sha256")
         if _harness.assumed("task", tid):
             continue
-        for rel, msg in _diff(read(manifest), task_entries(root, tid), f"task {tid}"):
+        sealed, current = read(manifest), task_entries(root, tid)
+        digests = {k: v for k, v in sealed.items() if not k.startswith(RATING_PREFIX)}
+        for rel, msg in _diff(digests, current, f"task {tid}"):
             if rel == open_spec:
                 warnings.append(f"{msg}: its subtask is still in its plan gate")
             else:
                 problems.append(msg + gate.format(tid))
+        problems += [m + gate.format(tid) for m in _lowered(root, sealed, current, f"task {tid}")]
 
 
 def _verify_issues(
@@ -368,8 +474,11 @@ def _verify_issues(
             continue
         if _harness.assumed("issue", iid):
             continue
-        for rel, msg in _diff(read(manifest), issue_entries(root, iid), f"issue {iid}"):
+        sealed, current = read(manifest), issue_entries(root, iid)
+        digests = {k: v for k, v in sealed.items() if not k.startswith(RATING_PREFIX)}
+        for rel, msg in _diff(digests, current, f"issue {iid}"):
             if rel == open_spec:
                 warnings.append(f"{msg}: its subtask is still in its plan gate")
             else:
                 problems.append(msg + gate.format(iid))
+        problems += [m + gate.format(iid) for m in _lowered(root, sealed, current, f"issue {iid}")]
