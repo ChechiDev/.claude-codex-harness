@@ -431,3 +431,16 @@ def test_warm_fails_when_the_offline_install_misses_the_cache(
     monkeypatch.setattr(warm, "install", fake_install)
     assert warm.main([str(tmp_path)]) == 1
     assert "Failed to download" in capsys.readouterr().err
+
+
+def test_isolated_env_drops_inherited_pytest_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The e2e job exports PYTEST_ADDOPTS=-rs; in a throwaway project's own pytest it
+    # replaced the default -r (fE), so `make check` printed no FAILED summary (#123).
+    from i0_projects import isolated_env  # noqa: PLC0415
+
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-rs")
+    monkeypatch.setenv("PYTEST_PLUGINS", "xdist")
+    env = isolated_env(tmp_path)
+    assert not any(k.startswith("PYTEST_") for k in env)

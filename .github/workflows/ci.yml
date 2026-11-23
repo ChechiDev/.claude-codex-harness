@@ -84,6 +84,15 @@ jobs:
       # setup-uv's UV_PYTHON): warm and check the cache in that same environment
       - name: warm the uv cache for the throwaway projects (they sync offline)
         run: uv run python tests/tools/warm_uv_cache.py
+      # the C template lints with clang-format/cppcheck/clang-tidy only when installed;
+      # the fixtures' C sources assume a bare gcc+make box, and the runner image ships
+      # clang-format (whose default style rejects them): remove the optional linters
+      - name: hide the optional C linters (the fixtures assume a bare gcc+make box)
+        run: |
+          for t in clang-format clang-tidy cppcheck; do
+            for _ in 1 2 3 4 5; do p="$(command -v "$t")" || break; sudo rm -f -- "$p"; hash -r; done
+            if command -v "$t"; then echo "::error::$t is still on PATH"; exit 1; fi
+          done
       - name: e2e shard
         run: >-
           uv run python tests/tools/pytest_timed.py -o addopts= -q -m e2e -n 2

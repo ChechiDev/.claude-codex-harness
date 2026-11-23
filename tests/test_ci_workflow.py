@@ -154,6 +154,18 @@ def test_e2e_shards_warm_the_cache_in_the_tests_own_environment() -> None:
     assert "bash install.sh" not in shard
 
 
+def test_e2e_shards_hide_the_optional_c_linters_before_the_tests() -> None:
+    # The C template lints with clang-format/cppcheck/clang-tidy only when installed;
+    # the fixtures' C sources assume a bare gcc+make box. The runner image ships
+    # clang-format, whose default style rejected them (#123): the shard removes the
+    # optional linters, checks they are gone, and only then runs the tests.
+    shard = _shard_job()
+    step = shard[shard.index("hide the optional C linters") : shard.index("--splits")]
+    for tool in ("clang-format", "clang-tidy", "cppcheck"):
+        assert tool in step
+    assert "command -v" in step and "exit 1" in step
+
+
 def test_e2e_shards_upload_their_records_even_on_failure() -> None:
     shard = _shard_job()
     upload = shard[shard.index("actions/upload-artifact") :]
