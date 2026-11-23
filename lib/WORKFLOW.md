@@ -21,17 +21,23 @@ closes (single commit). The `implementer` (Claude subagent) writes the code.
 - ❌ Do not write acceptance tests: Codex writes them (`tests/acceptance/`).
 - ❌ Do not set `status: done`, write `docs/reference/`, or commit: Codex closes.
 - ❌ Do not hand-edit `feature_list.json`: edit `docs/plan/` and run `make plan`.
-- ❌ Do not write the plan yourself: `PLAN.md`, phase files, specs, `ISS-<n>.<k>`
-  specs, the `## Project context` of `CLAUDE.md` and planning gate fixes go
-  through `subagent_type: "claude-planner"` (it may write only `docs/plan/**`
-  and `CLAUDE.md`; the harness blocks the rest). The one exception: you set
+- ❌ Do not write the plan yourself: `docs/stack.md`, `PLAN.md`, phase files, specs,
+  `ISS-<n>.<k>` specs, the `## Project context` of `CLAUDE.md` and planning gate
+  fixes go through `subagent_type: "claude-planner"` (it may write only
+  `docs/plan/**`, `docs/stack.md` and `CLAUDE.md`; the harness blocks the rest). The one exception: you set
   `status: in_progress` when a subtask starts.
 - ✅ Implement via `subagent_type: "implementer"` (one subtask `N.M.K` or `ISS-<n>.<k>`).
-- ✅ Run gates via `./harness/review_with_codex.sh roadmap | phase <NN> | task <N.M>
+- ✅ Run gates via `./harness/review_with_codex.sh stack | roadmap | phase <NN> | task <N.M>
   | task-close <N.M> | phase-close <NN> | issue <ISS-n> | issue-draft
   | <plan|code|doc> <N.M.K|ISS-n.k>`.
-- ✅ Plan by discovery (you ask the user, one question at a time) → claude-planner
-  writes PLAN.md + every phase → roadmap gate; then **one phase at a time into
+- ✅ First the **stack step** (you ask the user, one question at a time: project
+  type and language first, then only the categories that apply) → claude-planner
+  writes `docs/stack.md` → stack gate (`STACK_APPROVED`, sealed; any change to it
+  re-runs the gate) → user OK. The roadmap gate and `make check` wait for it
+  (a project whose roadmap or plan was approved before it only gets a WARN).
+- ✅ Then plan by discovery on the approved `docs/stack.md` (never ask for the stack
+  again; one question at a time) → claude-planner writes PLAN.md + every phase →
+  roadmap gate; then **one phase at a time into
   tasks only** → phase gate; then, per task at its kickoff, its subtask specs →
   task gate. Stop for the user's OK at each level.
 - ✅ After the last subtask of a task: task-close gate (`TASK_CLOSE_APPROVED`, needed
@@ -79,7 +85,7 @@ frontmatter `model:` if you have them).
 | leader (main session) | Opus 5.5 / high |
 | claude-planner (`.claude/agents/claude-planner.md`) | Opus 5.5 / xhigh |
 | implementer (`.claude/agents/implementer.md`) | sonnet / medium |
-| codex-planner (`codex-planner.md`: `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates) | gpt-6-astra / high |
+| codex-planner (`codex-planner.md`: `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates) | gpt-6-astra / high |
 | reviewer (`codex/reviewer.md`: `plan`, `code`, `issue`, `issue-draft` gates) | gpt-6-sol / high |
 | documenter (`codex/documenter.md`: `doc` close) | gpt-6-luna / low |
 

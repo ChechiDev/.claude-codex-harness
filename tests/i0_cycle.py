@@ -25,6 +25,21 @@ PHASE_MD = (
 )
 
 
+# The stack step (issue #115): a new project approves docs/stack.md before the roadmap.
+STACK_MD = (
+    "# Stack\n\n## Project type\n- type: library\n- language: as installed\n"
+    "- why: a tiny greeting library.\n\n"
+    "## Architecture\n- decision: none\n- why: one function.\n\n"
+    "## Persistence\n- decision: not applicable\n- why: no state.\n\n"
+    "## Framework\n- decision: not applicable\n- why: plain language only.\n\n"
+    "## Toolchain\n- tests: the template's\n- lint: the template's\n"
+    "- types: the template's\n- build: the template's\n- why: harness defaults.\n\n"
+    "## Deploy\n- decision: not applicable\n- why: a library.\n\n"
+    # The Python scaffold's pyproject.toml (C projects have no manifest to compare).
+    "## Key dependencies\n- pydantic: data validation.\n- pydantic-settings: settings.\n"
+)
+
+
 def spec(files: list[str], test: str, status: str = "pending") -> str:
     listed = "".join(f"  - {f}\n" for f in files)
     return (
@@ -43,6 +58,7 @@ printf '%s\n' "$phase $id" >> "$I0_LOG"
 printf '%s\n' "$prompt" > "$I0_LOG.prompt.$phase"
 verdict() { printf '# Review\n\n**Verdict:** %s\n' "$2" > "$1"; }
 case "$phase" in
+  stack)   verdict progress/stack_review.md STACK_APPROVED ;;
   roadmap) verdict progress/roadmap_review.md ROADMAP_APPROVED ;;
   issue)   verdict "progress/issue_review_$id.md" ISSUE_APPROVED ;;
   phase)   verdict "progress/phase_review_$id.md" PHASE_APPROVED ;;
@@ -129,6 +145,13 @@ def gate(project: Installed, env: dict[str, str], *args: str) -> subprocess.Comp
         check=False,
         timeout=900,
     )
+
+
+def stack_step(project: Installed, env: dict[str, str]) -> None:
+    """The stack step of a new project (issue #115): docs/stack.md, then its gate."""
+    (project.root / "docs" / "stack.md").write_text(STACK_MD)
+    res = gate(project, env, "stack")
+    assert res.returncode == 0, f"stack gate failed:\n{res.stdout}{res.stderr}"
 
 
 def hook(project: Installed, script: str, payload: str) -> subprocess.CompletedProcess[str]:

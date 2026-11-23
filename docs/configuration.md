@@ -100,7 +100,7 @@ projects installed earlier keep working on the branches they already use.
 
 With `auto_pr` on (the default, also without a `[git]` section), the close of
 the last subtask of a task pushes the task branch and opens its PR with `gh`
-(details in [usage](usage.md), step 6). `pr_template` points to a Markdown file,
+(details in [usage](usage.md), step 7). `pr_template` points to a Markdown file,
 relative to the project root, that replaces the default body. It may use these
 placeholders, each as many times as it likes, and leave out any of them:
 
@@ -148,7 +148,7 @@ max_rounds = 3   # default: 3; 0 = no cap
 ```
 
 After `max_rounds` consecutive `CHANGES_REQUESTED` verdicts of one gate on one id
-(roadmap, phase `NN`, issue `ISS-n`, issue draft, or the `plan` / `code` gate of
+(stack, roadmap, phase `NN`, issue `ISS-n`, issue draft, or the `plan` / `code` gate of
 one subtask), counted from `progress/review_history/`, `review_with_codex.sh`
 refuses to launch that review (non-zero exit, nothing written) and `make status`
 shows `Next: needs human (N rounds) ...`. The subtask stays `in_progress`. An
@@ -380,7 +380,7 @@ codex_effort: high
 
 | Role file | Model / effort | Used by gates |
 |-----------|----------------|---------------|
-| `codex/codex-planner.md` | `gpt-6-astra` / `high` | `roadmap`, `phase`, `task`, `task-close`, `phase-close` |
+| `codex/codex-planner.md` | `gpt-6-astra` / `high` | `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` |
 | `codex/reviewer.md` | `gpt-6-sol` / `high` | `plan`, `code`, `issue`, `issue-draft` |
 | `codex/documenter.md` | `gpt-6-luna` / `low` | `doc` |
 
