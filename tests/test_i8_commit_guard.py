@@ -427,6 +427,47 @@ def test_merge_of_the_base_is_not_reported(project: Project) -> None:
     assert "not made by the harness close" not in res.stdout, res.stdout
 
 
+def _git_in(project: Project, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=project.root, check=True, capture_output=True)
+
+
+def _with_origin(project: Project, tmp_path: Path) -> None:
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    _git_in(project, "remote", "add", "origin", str(remote))
+
+
+def test_commit_already_on_the_remote_base_is_not_reported(
+    project: Project, tmp_path: Path
+) -> None:
+    """Issue #119: pre-harness code pushed to origin/main is base, not branch work,
+    even when the local main lags behind (the base is read from the remote first)."""
+    _with_origin(project, tmp_path)
+    project.write("legacy.txt", "x\n")
+    project.commit_all("pre-harness code")
+    _git_in(project, "push", "-q", "origin", "HEAD:main")
+    _git_in(project, "reset", "-q", "--hard", "HEAD~1")  # local main behind origin/main
+    _git_in(project, "switch", "-qc", "feat/1.1-users", "origin/main")
+    res = _integrity(project)
+    assert "not made by the harness close" not in res.stdout, res.stdout
+
+
+def test_commit_pushed_off_the_base_still_warns(project: Project, tmp_path: Path) -> None:
+    """Issue #119: being pushed is not enough; a commit outside the close that the
+    base does not contain (here, on another remote branch) is still reported."""
+    _with_origin(project, tmp_path)
+    _git_in(project, "push", "-q", "origin", "main")
+    _git_in(project, "switch", "-qc", "chore/project-setup")
+    project.write("legacy.txt", "x\n")
+    project.commit_all("pre-harness code")
+    _git_in(project, "push", "-q", "origin", "chore/project-setup")
+    _branch(project)
+    res = _integrity(project)
+    assert res.returncode == 0, res.stdout  # WARN only (plan 0.5)
+    line = next(ln for ln in res.stdout.splitlines() if "not made by the harness close" in ln)
+    assert "WARN" in line and "pre-harness code" in line
+
+
 def test_outcome_check_covers_a_long_branch(project: Project) -> None:
     _branch(project)
     project.write("notes.txt", "x\n")

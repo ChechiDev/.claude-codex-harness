@@ -64,11 +64,24 @@ def build_legacy(tmp: Path, toolkit: Path = TOOLKIT) -> Installed:
     """Install a Python project and take it through one closed subtask + a baseline."""
     project = install_project(tmp, "python", toolkit=toolkit)
     env = fake_tools(project, tmp, ORACLE, ORACLE_BODY, SPEC)
+    # The install leaves the project on its setup branch; the human merges it into main,
+    # and the pre-harness code lives on main (issue #119).
+    setup = git(project, "branch", "--show-current")
+    git(project, "switch", "-q", "main")
+    git(project, "merge", "-q", "--ff-only", setup)
     for rel, text in BASELINE_CODE.items():
         _write(project.root, rel, text)
     git(project, "add", "-A")
     git(project, "commit", "-qm", "pre-harness code")
     git(project, "push", "-q", "origin", "main")
+    # issue #119: the pre-harness code is base (origin/main), not work of the task branch
+    on_base = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"],
+        cwd=project.root,
+        env=project.env,
+        check=False,
+    )
+    assert on_base.returncode == 0, "the pre-harness commit must be on origin/main"
     stack_step(project, env)  # issue #115: the stack comes before the plan
     _plan(project, "pending")
     branch = project.run("python3", "harness/_harness.py", "branch", TASK).stdout.strip()
