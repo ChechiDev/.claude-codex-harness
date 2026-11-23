@@ -376,3 +376,58 @@ def test_check_shards_cli(tmp_path: Path) -> None:
 def test_parse_collect_only_output() -> None:
     text = "tests/test_x.py::a\ntests/test_x.py::b[1-2]\n\n3 tests collected in 0.1s\n"
     assert ms.parse_collected(text) == ["tests/test_x.py::a", "tests/test_x.py::b[1-2]"]
+
+
+# ── uv cache warm-up for the e2e shards (#123) ───────────────────────────────
+
+
+def test_warm_env_is_the_tests_isolated_env_with_the_network_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import warm_uv_cache as warm  # noqa: PLC0415
+    from i0_projects import isolated_env  # noqa: PLC0415
+
+    monkeypatch.setenv("UV_PYTHON", "3.12")  # what setup-uv exports in CI
+    monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", "/opt/uv-python")
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    env = warm.warm_env(tmp_path / "a")
+    expected = isolated_env(tmp_path / "b")
+    expected.pop("UV_OFFLINE")
+    assert "UV_OFFLINE" not in env
+    assert not any(k.startswith("UV_") for k in env if k != "UV_CACHE_DIR")
+    for key in ("HOME", "CLAUDE_HOME", "GIT_CONFIG_GLOBAL"):  # per-dir paths
+        env.pop(key)
+        expected.pop(key)
+    assert env == expected
+
+
+def test_warm_checks_the_cache_offline_after_the_online_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import warm_uv_cache as warm  # noqa: PLC0415
+
+    calls: list[tuple[str, bool]] = []
+
+    def fake_install(base: Path, offline: bool) -> subprocess.CompletedProcess[str]:
+        calls.append((base.name, offline))
+        return subprocess.CompletedProcess([], 0, "ok\n", "")
+
+    monkeypatch.setattr(warm, "install", fake_install)
+    assert warm.main([str(tmp_path)]) == 0
+    assert calls == [("online", False), ("offline", True)]
+    assert warm.main(["a", "b"]) == 2
+
+
+def test_warm_fails_when_the_offline_install_misses_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import warm_uv_cache as warm  # noqa: PLC0415
+
+    def fake_install(base: Path, offline: bool) -> subprocess.CompletedProcess[str]:
+        rc = 1 if offline else 0
+        return subprocess.CompletedProcess([], rc, "", "error: Failed to download `mypy`")
+
+    monkeypatch.setattr(warm, "install", fake_install)
+    assert warm.main([str(tmp_path)]) == 1
+    assert "Failed to download" in capsys.readouterr().err

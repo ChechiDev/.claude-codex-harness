@@ -74,8 +74,12 @@ CI owns the full suite; a session tests what it touches.
 - **fast tier, ruff, mypy**: `uv sync --locked`, `uv run pytest -n auto -rs`,
   `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy`.
 - **e2e shard N/8** (`fail-fast: false`, so every shard reports): warms the uv cache
-  with one online `install.sh --python` run (the throwaway projects sync with
-  `UV_OFFLINE=1`, so a cold runner cache fails every installed-project test), then
+  with `uv run python tests/tools/warm_uv_cache.py` (the throwaway projects sync with
+  `UV_OFFLINE=1`, so a cold runner cache fails every installed-project test). It runs
+  `install.sh --python` online and then offline in the fixtures' own `isolated_env`:
+  that env drops every `UV_*` variable, setup-uv's `UV_PYTHON` included, so a bare
+  `install.sh` in the workflow env would cache wheels for another interpreter (#123).
+  Then
 
   ```bash
   uv run python tests/tools/pytest_timed.py -o addopts= -q -m e2e -n 2 \

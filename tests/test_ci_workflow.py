@@ -140,8 +140,18 @@ def test_e2e_shards_warm_the_uv_cache_before_the_tests() -> None:
     # the throwaway projects sync offline (tests/i0_projects.py): an install.sh run with
     # the network on fills the uv cache first, or every installed-project test errors
     shard = _shard_job()
-    assert "install.sh" in shard
-    assert shard.index("install.sh") < shard.index("--splits")
+    assert "warm_uv_cache.py" in shard
+    assert shard.index("warm_uv_cache.py") < shard.index("--splits")
+
+
+def test_e2e_shards_warm_the_cache_in_the_tests_own_environment() -> None:
+    # isolated_env drops every UV_* variable (setup-uv's UV_PYTHON included), so a bare
+    # install.sh in the workflow env resolves wheels for another interpreter than the
+    # tests (#123: cp312 warmed, cp314 wanted). The warm runs under `uv run` (same PATH
+    # as pytest) through the tool that reuses isolated_env.
+    shard = _shard_job()
+    assert re.search(r"run:\s*uv run python tests/tools/warm_uv_cache\.py", shard)
+    assert "bash install.sh" not in shard
 
 
 def test_e2e_shards_upload_their_records_even_on_failure() -> None:

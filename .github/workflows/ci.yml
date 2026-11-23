@@ -80,11 +80,10 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
       - run: uv sync --locked
+      # the throwaway projects sync offline in isolated_env (no UV_* vars, so not
+      # setup-uv's UV_PYTHON): warm and check the cache in that same environment
       - name: warm the uv cache for the throwaway projects (they sync offline)
-        run: |
-          mkdir -p "$RUNNER_TEMP/warm/py"
-          CLAUDE_HOME="$RUNNER_TEMP/warm/claude-home" \
-            bash install.sh "$RUNNER_TEMP/warm/py" --python demo
+        run: uv run python tests/tools/warm_uv_cache.py
       - name: e2e shard
         run: >-
           uv run python tests/tools/pytest_timed.py -o addopts= -q -m e2e -n 2
