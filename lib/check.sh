@@ -57,6 +57,9 @@ if [ -f feature_list.json ]; then
 else
   fail "Missing feature_list.json (run: make plan)"; EXIT=1
 fi
+# Stack step (issue #115): docs/stack.md approved before the discovery; WARN only for
+# projects planned before it, and for dependency drift.
+if ! python3 "$HARNESS_DIR/_stack.py" check; then EXIT=1; fi
 
 echo ""
 echo "── 5. Gate consistency ─────────────────────────────────"

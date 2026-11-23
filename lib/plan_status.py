@@ -25,6 +25,7 @@ import _gate_run
 import _harness
 import _pr
 import _resume
+import _stack
 from _status import Kind, paint
 
 Item = dict[str, Any]
@@ -108,8 +109,18 @@ def _sub_line(sub: Item) -> str:
     return line
 
 
+def _stack_lines() -> list[str]:
+    """The `Stack` line (issue #115), only in a project that uses the stack step."""
+    state = _stack.label(Path("."))
+    if state is None:
+        return []
+    kind: Kind = "OK" if state == _stack.APPROVED else "WARN"
+    return [f"Stack      {paint(state, kind, OUT)}"]
+
+
 def _tree(data: Item) -> list[str]:
-    lines = [f"Roadmap    {_gate_state(_harness.ROADMAP_REVIEW, 'ROADMAP_APPROVED')}", ""]
+    roadmap = f"Roadmap    {_gate_state(_harness.ROADMAP_REVIEW, 'ROADMAP_APPROVED')}"
+    lines = [*_stack_lines(), roadmap, ""]
     for phase in data["phases"]:
         lines.append(_phase_line(data, phase))
         for task in (t for t in data["features"] if t["phase"] == phase["id"]):
@@ -538,13 +549,41 @@ def _seal_failed(gate: str, fid: str, what: str) -> str | None:
     reason = _resume.seal_failure(gate, fid)
     if not reason:
         return None
-    cmd = f"{GATE} {gate}" if gate == "roadmap" else f"{GATE} {gate} {fid}"
+    single = gate in ("roadmap", "stack")  # gates that take no id
+    cmd = f"{GATE} {gate}" if single else f"{GATE} {gate} {fid}"
     if _manual():  # manual mode: only the human seals
-        target = gate if gate == "roadmap" else f"{gate} {fid}"
+        target = gate if single else f"{gate} {fid}"
         return f"needs human: seal {what} (human only): {GATE} seal {target}"
     return _budget(gate, fid) or (
         f"finish the seal of {what} (last attempt: {reason}): {gate} gate again: {cmd}"
     )
+
+
+STACK_STEP = (
+    "ask the leader to define the stack (stack step: one question at a time -> "
+    "docs/stack.md), then stack gate"
+)
+STACK_NEXT = {
+    _stack.CHANGED: f"docs/stack.md changed since STACK_APPROVED: stack gate again: {GATE} stack",
+    _stack.REJECTED_STATE: f"fix the stack ({_stack.STACK_REVIEW}), then stack gate: {GATE} stack",
+    _stack.MISSING: STACK_STEP,
+    _stack.DRAFT: STACK_STEP,
+    _stack.UNREVIEWED: f"stack gate: {GATE} stack",
+}
+
+
+def _stack_next() -> str | None:
+    """The stack step (issue #115): before the discovery, and again whenever
+    docs/stack.md changed after its approval. None when it does not apply."""
+    root = Path(".")
+    state = _stack.state(root) if _stack.required(root) else _stack.OK_STATE
+    if state == _stack.OK_STATE:
+        return None
+    if state == _stack.UNSEALED:
+        return _seal_failed("stack", "stack", "the stack") or (
+            f"needs human: seal the stack (human only): {GATE} seal stack"
+        )
+    return _capped("stack", "stack") or STACK_NEXT[state]
 
 
 def _roadmap_next(data: Item) -> str | None:
@@ -604,7 +643,7 @@ def _breakdown_next(data: Item, pid: str) -> str:
 
 
 def next_step(data: Item, queue: list[Item] | None = None) -> str:
-    early = _resume_next(data) or _lane_next(data, queue) or _roadmap_next(data)
+    early = _resume_next(data) or _stack_next() or _lane_next(data, queue) or _roadmap_next(data)
     if early:
         return early
     phase = _current_phase(data)
@@ -621,7 +660,7 @@ def main() -> int:
     if data["phases"]:
         lines = [*_tree(data), "─" * 60, _summary(data)]
     else:
-        lines = ["No phases planned yet."]
+        lines = [*_stack_lines(), "No phases planned yet."]
     # Only a project that uses the issues lane (docs/plan/issues/, shipped with new
     # projects and added by --migrate) asks GitHub: the others stay offline as before.
     lane = (_harness.FEATURES_FILE.parent / "docs/plan/issues").is_dir()

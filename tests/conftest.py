@@ -294,6 +294,14 @@ class Plan:
     def approve_phase(self, n: str) -> Plan:
         return self.verdict(f"phase_review_{n}.md", "PHASE_APPROVED")
 
+    def approve_stack(self) -> Plan:
+        """Past the stack step (issue #115): docs/stack.md STACK_APPROVED and sealed."""
+        (self.root / "docs" / "stack.md").write_text("# Stack\n")
+        self.verdict("stack_review.md", "STACK_APPROVED")
+        res = self.run_py("_guard.py", "seal", "stack")
+        assert res.returncode == 0, res.stdout + res.stderr
+        return self
+
     def sync(self) -> Plan:
         plan = self.root / "docs" / "plan"
         for n, tasks in self.phases.items():
