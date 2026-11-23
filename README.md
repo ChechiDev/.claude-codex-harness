@@ -242,4 +242,4 @@ uv run mypy              # strict, over lib/_guard.py, lib/_harness.py and tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs the fast tier, ruff and mypy on every PR and
-push to `main`, and the e2e tier nightly or by hand. Tiers, the e2e guard, CI and the session rule: [docs/testing.md](docs/testing.md).
+push to `main`, and the full e2e tier on every PR (8 shards plus an aggregate check), nightly and by hand. Tiers, the e2e guard, CI and the session rule: [docs/testing.md](docs/testing.md).
