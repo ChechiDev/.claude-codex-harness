@@ -92,7 +92,11 @@ docs/plan/
 ## Flow
 
 ```
-[leader] discovery, one question at a time (reads the repo first if there is code)
+[leader] stack step, one question at a time: project type + language first, then
+   only the categories that apply (reads the code and its manifest first)
+   → [claude-planner] docs/stack.md (each decision and why)
+   → [Codex] stack gate → STACK_APPROVED (sealed) → you approve
+[leader] discovery on docs/stack.md, one question at a time (reads the repo first if there is code)
    → [claude-planner] PLAN.md + every phase file (title + goal)
    → [Codex] roadmap gate → ROADMAP_APPROVED (sealed) → you approve
 [claude-planner] break down the current phase: tasks only
@@ -155,7 +159,14 @@ docs/plan/issues/
 
 Enforced by the hooks in `settings.json` and by `make check`:
 
-0. **Plan gates.** No phase is broken down without `progress/roadmap_review.md` =
+0. **Stack before the plan** (issue #115). While `docs/stack.md` is not
+   `STACK_APPROVED` with its seal (`progress/stack.sha256`) matching, the roadmap
+   gate refuses to run and `make check` fails once a phase file exists; any
+   change to `docs/stack.md` voids the approval (stack gate again). Projects
+   whose roadmap or plan (a phase) was approved before the stack step only get a
+   WARN, with or without `docs/stack.md`. Dependency drift between `pyproject.toml`
+   `[project] dependencies` and `docs/stack.md` is a WARN (`lib/_stack.py`).
+   **Plan gates.** No phase is broken down without `progress/roadmap_review.md` =
    `ROADMAP_APPROVED`; phases are broken down one at a time; no subtask starts
    without `progress/phase_review_<NN>.md` = `PHASE_APPROVED` and its `depends`
    done. What Codex approved is **sealed** (`progress/plan_roadmap.sha256`,
@@ -305,6 +316,9 @@ temp dir, without writing to the project.
 ## On-disk state contract
 
 ```
+docs/stack.md                      # the stack: each decision and why (claude-planner, versioned)
+progress/stack_review.md           # STACK_APPROVED | CHANGES_REQUESTED (Codex)
+progress/stack.sha256              # seal of the approved docs/stack.md
 docs/plan/PLAN.md                  # vision… + generated index (claude-planner / make plan)
 docs/plan/phase-NN-<slug>.md       # one phase: title, goal, tasks (claude-planner)
 docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md  # subtask spec + status (source of truth)

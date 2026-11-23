@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from conftest import TOOLKIT, write_payload
-from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, hook, spec
+from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, hook, spec, stack_step
 from i0_projects import Installed, install_project
 
 STRUCTURAL = "Structural refactor (no behaviour change)"
@@ -258,6 +258,7 @@ def test_test_only_subtask_with_empty_files_completes_its_cycle(tmp_path: Path) 
     project = install_project(tmp_path, "python")
     env = fake_tools(project, tmp_path, ORACLE_PATH, ORACLE, SPEC)
     git(project, "push", "-q", "origin", "main")
+    stack_step(project, env)  # issue #115: the stack comes before the plan
 
     # Plan synchronization keeps the empty list; the gates accept the subtask.
     _write_plan(project, "pending")

@@ -10,6 +10,7 @@ Commands:
   seal <id>         record progress/acceptance_<id>.sha256 (needs PLAN_APPROVED) and
                     re-seal its spec in the phase seal
   seal roadmap      record progress/plan_roadmap.sha256 (needs ROADMAP_APPROVED)
+  seal stack        record progress/stack.sha256 (needs STACK_APPROVED, issue #115)
   seal task <N.M>   record progress/plan_task_N.M.sha256 (needs TASK_APPROVED)
   seal phase <NN>   record progress/plan_phase_<NN>.sha256 (needs PHASE_APPROVED)
   seal issue <ISS-n>  record progress/plan_issue_<ISS-n>.sha256 (needs ISSUE_APPROVED)
@@ -54,6 +55,7 @@ import _plan_seal
 import _pywrites
 import _seal_required
 import _shell
+import _stack
 import _supersede
 import _upgrade
 import _verdict
@@ -78,7 +80,7 @@ RE_CODEX_OWNED = re.compile(
     # Legacy record of a phase broken down whole (issue #62), sealed in its phase seal.
     r"|progress/task_flow_legacy_[^/]+\.json"
     r"|progress/(roadmap_review|issue_draft_review|legacy_inventory_review"
-    r"|oracle_contract_review|config_contract_review)\.md"
+    r"|oracle_contract_review|config_contract_review|stack_review)\.md"
     # Sealed I4 baseline (issue #65): written only by the human-run _oracle.py.
     r"|progress/(oracle|contract)_baseline\.json"
     # Sealed legacy inventory (M0b): written only by the human-run legacy_inventory.sh.
@@ -255,21 +257,21 @@ MSG_EXPECT_RED = (
 
 
 MSG_ASSUME = (
-    "BLOCKED: HARNESS_ASSUME_APPROVED is set only by the roadmap/phase/issue gate for its "
-    "counterfactual run (review_with_codex.sh). Run `make check` without it."
+    "BLOCKED: HARNESS_ASSUME_APPROVED is set only by the roadmap/phase/issue/stack gate for "
+    "its counterfactual run (review_with_codex.sh). Run `make check` without it."
 )
 
 
 MSG_PLANNER_SCOPE = (
-    "BLOCKED: the claude-planner subagent may write only docs/plan/** and CLAUDE.md "
-    "(target: {target}). Return the request to the leader instead."
+    "BLOCKED: the claude-planner subagent may write only docs/plan/**, docs/stack.md and "
+    "CLAUDE.md (target: {target}). Return the request to the leader instead."
 )
 
 # Per-agent write scopes (#63): an agent listed here may write only inside its
 # project-relative prefixes / exact files; every other path is blocked for it.
 # Claude Code sets `agent_type` in the hook payload for calls made by a subagent.
 AGENT_WRITE_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "claude-planner": (("docs/plan/",), ("CLAUDE.md",)),
+    "claude-planner": (("docs/plan/",), ("CLAUDE.md", "docs/stack.md")),
 }
 
 
@@ -854,7 +856,7 @@ SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
-    r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|acceptance_|plan_"
+    r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|stack_review|acceptance_|plan_"
     r"|pr_|legacy_inventory|issue_review|issue_draft_review|verdict_|review_history/"
     r"|task_review|task_close|phase_close|task_flow_legacy"
     r"|issue_migrations_|oracle_migrations/|close_|[^/\s'\"]*\.sha256)|\.harness\b"
@@ -888,6 +890,7 @@ PROTECTED_TEMPLATES = (
     ),
     "progress/task_flow_legacy_*.json",
     "progress/roadmap_review.md",
+    "progress/stack_review.md",
     "progress/issue_draft_review.md",
     "progress/legacy_inventory_review.md",
     "progress/legacy_inventory.json",
@@ -2663,6 +2666,8 @@ def seal_draft() -> int:
 def seal_command(args: list[str]) -> int:
     if args in (["roadmap"], ["draft"]):
         return seal_roadmap() if args == ["roadmap"] else seal_draft()
+    if args == ["stack"]:  # issue #115
+        return _stack.seal(ROOT)
     owned = {"phase": seal_phase, "issue": seal_issue, "task": seal_task}
     if len(args) == 2 and args[0] in owned:
         return owned[args[0]](args[1])
@@ -2670,7 +2675,7 @@ def seal_command(args: list[str]) -> int:
         return seal(args[0])
     print(
         "usage: _guard.py seal <N.M.K|ISS-n.k> | roadmap | phase <NN> | task <N.M> | issue <ISS-n>"
-        " | draft",
+        " | draft | stack",
         file=sys.stderr,
     )
     return 2

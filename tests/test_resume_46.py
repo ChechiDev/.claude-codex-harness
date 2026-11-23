@@ -23,8 +23,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import _config
 import _resume
 import pytest
+from _gate_run import live_run
 from conftest import DECLARED, LEAF_ID, TOOLKIT, Plan, Project, bind_code_approval
 
 GATE = "./harness/review_with_codex.sh"
@@ -55,17 +57,22 @@ def _ledger(project: Project, step: str, fid: str = LEAF_ID) -> Path:
     return _runs(project) / f"attempts_{step}_{fid}.json"
 
 
+def _attempt(project: Project, path: Path, tag: str, outcome: str, reason: str) -> None:
+    """One begin+end of the ledger, in process (same locked functions the CLI calls; the
+    CLI wiring itself is covered by the tests that go through `_py`)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cap = _config.load(project.root).max_attempts
+    assert _resume.begin(path, tag, cap, live_run) is None
+    _resume.end(path, tag, outcome, reason)
+
+
 def _fail(project: Project, step: str, n: int, reason: str, fid: str = LEAF_ID) -> None:
     for i in range(n):
-        tag = str(1000 + i)
-        assert _py(project, "_resume.py", "begin", step, fid, tag).returncode == 0
-        res = _py(project, "_resume.py", "end", step, fid, tag, "fail", reason)
-        assert res.returncode == 0, res.stderr
+        _attempt(project, _ledger(project, step, fid), str(1000 + i), "fail", reason)
 
 
 def _ok(project: Project, step: str, fid: str = LEAF_ID) -> None:
-    assert _py(project, "_resume.py", "begin", step, fid, "77").returncode == 0
-    assert _py(project, "_resume.py", "end", step, fid, "77", "ok", "done").returncode == 0
+    _attempt(project, _ledger(project, step, fid), "77", "ok", "done")
 
 
 def _resume_json(project: Project) -> dict[str, Any]:
@@ -603,7 +610,7 @@ def test_starting_the_next_subtask_waits_for_the_users_ok(plan: Plan) -> None:
 
 
 def test_a_plan_level_gate_is_authorized(plan: Plan) -> None:
-    res = plan.phase("01").phase("02").sync().run_py("_resume.py", "--json")
+    res = plan.approve_stack().phase("01").phase("02").sync().run_py("_resume.py", "--json")
     action = json.loads(res.stdout)
     assert action["kind"] == "review"
     assert action["command"] == [GATE, "roadmap"]
@@ -1139,7 +1146,7 @@ def test_resume_json_without_docs_plan_lists_the_warning(code_ready: Project) ->
 
 
 def test_resume_with_docs_plan_does_not_warn(plan: Plan) -> None:
-    res = plan.phase("01").phase("02").sync().run_py("_resume.py", "--json")
+    res = plan.approve_stack().phase("01").phase("02").sync().run_py("_resume.py", "--json")
     assert res.returncode == 0, res.stderr
     action = json.loads(res.stdout)
     assert action["command"] == [GATE, "roadmap"]

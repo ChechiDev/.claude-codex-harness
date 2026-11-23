@@ -68,6 +68,7 @@ GATE_TOKENS: dict[str, str] = {
     "task": "TASK_APPROVED",
     "task-close": "TASK_CLOSE_APPROVED",
     "phase-close": "PHASE_CLOSE_APPROVED",
+    "stack": "STACK_APPROVED",
 }
 # Close gates (issue #62): an approval must carry a traceability matrix, one row per
 # goal point / acceptance criterion with its test and status, and no `gap` row.
@@ -282,6 +283,7 @@ VERDICT_NAMES: tuple[tuple[re.Pattern[str], str, Callable[[re.Match[str]], str]]
     (re.compile(r"^task_review_(.+)\.md$"), "task", lambda m: m.group(1)),
     (re.compile(r"^task_close_(.+)\.md$"), "task-close", lambda m: m.group(1)),
     (re.compile(r"^phase_close_(\d+)\.md$"), "phase-close", lambda m: m.group(1)),
+    (re.compile(r"^stack_review\.md$"), "stack", lambda m: "stack"),
     (re.compile(r"^review_(.+)\.md$"), "code", lambda m: m.group(1)),
 )
 RECEIPT_NAME = re.compile(r"^verdict_(.+)\.sha256$")
@@ -300,6 +302,7 @@ def verdict_path(gate: str, item_id: str) -> str:
         "task": f"progress/task_review_{item_id}.md",
         "task-close": f"progress/task_close_{item_id}.md",
         "phase-close": f"progress/phase_close_{item_id}.md",
+        "stack": "progress/stack_review.md",
     }[gate]
 
 

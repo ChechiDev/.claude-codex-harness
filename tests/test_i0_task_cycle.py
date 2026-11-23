@@ -1,6 +1,6 @@
 """I0.3 + I0.4: the whole task cycle on installed projects, as it behaves today.
 
-One subtask (1.1.1) in one task (1.1) in one phase (01): plan -> roadmap gate -> phase
+One subtask (1.1.1) in one task (1.1) in one phase (01): stack gate -> plan -> roadmap gate -> phase
 gate -> plan gate (sealed oracle) -> implementation inside the declared files -> code
 gate -> close (one commit) -> PR. Run on a Python project, a C project and a Python
 project installed in backend/ of an existing repo. Codex and gh are fakes
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, hook, spec
+from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, hook, spec, stack_step
 from i0_projects import Installed, install_project
 
 pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
@@ -102,6 +102,10 @@ def test_task_cycle_end_to_end(tmp_path: Path, kind: str) -> None:
     env = fake_tools(project, tmp_path, case.oracle_path, case.oracle, SPEC)
     git(project, "push", "-q", "origin", "main")
 
+    # 0. Stack step (issue #115): docs/stack.md approved and sealed before the plan.
+    stack_step(project, env)
+    assert (project.root / "progress/stack.sha256").is_file()
+
     # 1. Plan in docs/plan, task branch, roadmap and phase gates (both sealed).
     _plan(project, case)
     branch = project.run("python3", "harness/_harness.py", "branch", TASK).stdout.strip()
@@ -153,7 +157,20 @@ def test_task_cycle_end_to_end(tmp_path: Path, kind: str) -> None:
     # 6. The project stays healthy and the gates ran in order.
     _ok(project.make("check"), "final make check")
     gates = (tmp_path / "codex.log").read_text().split()
-    assert gates == ["roadmap", "roadmap", "phase", "01", "plan", SID, "code", SID, "doc", SID]
+    assert gates == [
+        "stack",
+        "stack",
+        "roadmap",
+        "roadmap",
+        "phase",
+        "01",
+        "plan",
+        SID,
+        "code",
+        SID,
+        "doc",
+        SID,
+    ]
     if kind == "nested":
         assert not (project.root / ".git").exists(), "the cycle created a nested repo"
         assert git(project, "rev-parse", "--show-toplevel") == str(project.repo)

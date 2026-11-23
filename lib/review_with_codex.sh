@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # The single entry point through which Claude (leader) invokes Codex.
+#   review_with_codex.sh stack                Codex reviews docs/stack.md (issue #115)
 #   review_with_codex.sh roadmap              Codex reviews PLAN.md + every phase (scope)
 #   review_with_codex.sh phase <NN>           Codex reviews the breakdown of phase NN (tasks)
 #   review_with_codex.sh task <N.M>           Codex reviews the subtask specs of task N.M
@@ -10,7 +11,7 @@
 #   review_with_codex.sh <plan|code|doc> <N.M.K|ISS-n.k>   per-subtask gates and close
 #   review_with_codex.sh close <N.M.K>        check + commit a close (after manual `doc`)
 #   review_with_codex.sh pr <N.M|ISS-n>       push the task/issue branch and open its PR
-#   review_with_codex.sh seal <N.M.K|roadmap|phase NN|task N.M|issue ISS-n|draft>
+#   review_with_codex.sh seal <N.M.K|roadmap|stack|phase NN|task N.M|issue ISS-n|draft>
 #                                             (human, manual mode: seal)
 #
 # Each gate checks its preconditions first (roadmap approved before a phase gate,
@@ -84,10 +85,10 @@ unset _CONTROL
 export HARNESS_CODEX_MODE="$MODE_EXEC"
 
 usage() {
-  echo "usage: review_with_codex.sh roadmap | phase <NN> | task <N.M> | task-close <N.M>" \
+  echo "usage: review_with_codex.sh stack | roadmap | phase <NN> | task <N.M> | task-close <N.M>" \
        "| phase-close <NN> | issue <ISS-n> | issue-draft" \
        "| <plan|code|doc> <N.M.K|ISS-n.k> | close <N.M.K> | pr <N.M> | pr <ISS-n>" \
-       "| seal <N.M.K|roadmap|phase NN|task N.M|issue ISS-n|draft> | contract" >&2
+       "| seal <N.M.K|roadmap|stack|phase NN|task N.M|issue ISS-n|draft> | contract" >&2
   exit 2
 }
 PHASE="${1:-}"; shift || true
@@ -511,6 +512,7 @@ case "$PHASE" in
   # bound to its diff hash; the human then runs _oracle.py contract-approve <hash>.
   contract) exec python3 "$HARNESS_DIR/_oracle.py" contract-review ;;
   roadmap) ID="roadmap"; ROLE="$CODEX_DIR/codex-planner.md" ;;
+  stack)   ID="stack"; ROLE="$CODEX_DIR/codex-planner.md" ;;
   phase)   ID="${1:-}"; ROLE="$CODEX_DIR/codex-planner.md" ;;
   task|task-close|phase-close) ID="${1:-}"; ROLE="$CODEX_DIR/codex-planner.md" ;;
   plan|code) ID="${1:-}"; ROLE="$CODEX_DIR/reviewer.md" ;;
@@ -532,7 +534,10 @@ CODEX_PHASE="$PHASE"
 
 # Preconditions: never review a step whose prerequisite is not approved yet.
 case "$PHASE" in
-  roadmap) python3 "$HARNESS_PY" roadmap-ready || exit 1 ;;
+  # The roadmap waits for an approved, intact docs/stack.md (issue #115).
+  roadmap) python3 "$HARNESS_PY" roadmap-ready || exit 1
+           python3 "$HARNESS_DIR/_stack.py" roadmap-ready || exit 1 ;;
+  stack)   python3 "$HARNESS_DIR/_stack.py" ready || exit 1 ;;
   phase)   python3 "$HARNESS_PY" phase-ready "$ID" || exit 1 ;;
   task)    python3 "$HARNESS_PY" task-ready "$ID" || exit 1 ;;
   task-close)  python3 "$HARNESS_PY" task-close-ready "$ID" || exit 1 ;;
@@ -607,6 +612,9 @@ case "$PHASE" in
   roadmap)
     TARGET="the roadmap: docs/plan/PLAN.md and the title + goal of every docs/plan/phase-*.md"
     VERDICT_FILE="progress/roadmap_review.md"; SEAL_ARGS=(roadmap); SEAL_ON="ROADMAP_APPROVED" ;;
+  stack)
+    TARGET="the stack: docs/stack.md (project type, language and each stack decision with its why)"
+    VERDICT_FILE="progress/stack_review.md"; SEAL_ARGS=(stack); SEAL_ON="STACK_APPROVED" ;;
   phase)
     PHASE_FILE="$(ls docs/plan/phase-"$ID"-*.md 2>/dev/null | head -1)"
     TARGET="the breakdown of phase $ID: ${PHASE_FILE:-docs/plan/phase-$ID-<slug>.md} (tasks) and every subtask spec in ${PHASE_FILE%.md}/"
@@ -704,6 +712,7 @@ if [ "$CHECK_RC" -ne 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ]; then
   ASSUME=""
   case "$PHASE" in
     roadmap) ASSUME="roadmap" ;;
+    stack)   ASSUME="stack" ;;
     phase)   ASSUME="phase:$ID" ;;
     task)    ASSUME="task:$ID" ;;
     issue)   ASSUME="issue:$ID" ;;
@@ -744,6 +753,10 @@ fi
 CONTEXT="Context you must read: AGENTS.md, docs/architecture.md, docs/conventions.md,
 CHECKPOINTS.md, feature_list.json, and progress/current.md."
 case "$PHASE" in
+  stack)
+    CONTEXT="Context you must read: docs/stack.md, AGENTS.md, the existing code and its
+package manifest or lock file if there is one (pyproject.toml, package.json, Cargo.toml…),
+and progress/current.md. No plan exists yet: the stack comes before the discovery." ;;
   task-close|phase-close)
     GOAL_FILE="$(ls docs/plan/phase-"${ID%%.*}"-*.md docs/plan/phase-0"${ID%%.*}"-*.md 2>/dev/null | head -1)"
     [ "$PHASE" = "task-close" ] || GOAL_FILE="docs/plan/PLAN.md $GOAL_FILE"
