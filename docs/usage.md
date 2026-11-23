@@ -39,10 +39,55 @@ Archify is installed only under the project's `.agents/skills/archify/`
 `.claude/skills` link. Claude does not load it automatically: ask
 "Read `.agents/skills/archify/SKILL.md` and follow it".
 
-## 1. Plan the roadmap
+## 1. Define the stack (before the discovery)
 
-Tell the leader what to build. It reads the repo first if there is code, then
-asks one question at a time:
+A new project starts with the **stack step** (issue #115): `make status` says
+`ask the leader to define the stack`. The leader reads the code and its package
+manifest first if there are any, then asks one question at a time: first the
+project type (API, CLI, library, scraper, firmware, front end…) and the
+language, then only the categories that answer makes relevant: architecture
+(hexagonal, layered, none…), persistence, framework, toolchain (tests, lint,
+types, build), deploy and key dependencies. Nothing is assumed: a category that
+does not apply is recorded as `not applicable` with its reason.
+
+`claude-planner` writes `docs/stack.md` (from `templates/docs/stack.md`: each
+decision and why; exact versions stay in the package manifest or lock file) and
+the leader runs the **stack gate**:
+
+```bash
+./harness/review_with_codex.sh stack
+```
+
+| Produces | Check before approving |
+|----------|------------------------|
+| `progress/stack_review.md` (`STACK_APPROVED` / `CHANGES_REQUESTED`) | the verdict line and the analysis |
+| `progress/stack.sha256` (on approval) | the decisions match what you want |
+
+Then the leader stops for your OK. `docs/stack.md` is versioned in git; the
+discovery and `claude-planner` read it and never ask for the stack again.
+
+- **Order.** Until `docs/stack.md` is `STACK_APPROVED` and intact, the roadmap
+  gate refuses to run and `make check` fails as soon as a phase file
+  (`docs/plan/phase-*.md`) exists.
+- **Changes.** The stack can be edited (through `claude-planner`), but any change
+  to `docs/stack.md` voids its approval: `make status` asks for the stack gate
+  again, and `make check` fails once the discovery has started.
+- **Dependencies.** For Python, `make check` warns (never fails) when the
+  first-level `[project] dependencies` of `pyproject.toml` and the
+  `## Key dependencies` list of `docs/stack.md` differ. Other manifests are not
+  read yet.
+- **Existing projects.** A project whose roadmap or plan (a phase) was approved
+  before the stack step only gets a `make check` WARN, with or without
+  `docs/stack.md`; it is never blocked. To adopt the step, copy the template to
+  `docs/stack.md` and ask the leader for the stack step; from its first approval
+  on, the rules above apply to it. Any other project, including one installed
+  before the stack step that has no `docs/stack.md` and no approved plan yet,
+  starts with the stack step.
+
+## 2. Plan the roadmap
+
+Tell the leader what to build. It reads `docs/stack.md` and the repo first if
+there is code, then asks one question at a time (never about the stack again):
 
 ```text
 Let's plan a library with a single function slugify(text: str) -> str.
@@ -65,7 +110,7 @@ fixes the plan, and re-runs the gate. From
 here on the roadmap is sealed: editing it fails `make check` until the gate
 approves the change again.
 
-## 2. Break down the current phase (tasks only)
+## 3. Break down the current phase (tasks only)
 
 ```text
 OK, roadmap approved. Break down phase 01 and run the phase gate.
@@ -83,7 +128,7 @@ order; no subtask specs yet), then runs:
 | `progress/phase_review_01.md` (`PHASE_APPROVED`) | the tasks, in order, cover the phase goal |
 | `progress/plan_phase_01.sha256` | each task has one clear goal and layer |
 
-## 2b. Task kickoff and task gate
+## 3b. Task kickoff and task gate
 
 ```text
 OK, phase approved. Start the kickoff of task 1.1.
@@ -105,7 +150,7 @@ production file, acceptance criteria, description), then runs:
 | `progress/task_review_1.1.md` (`TASK_APPROVED`) | every file the code needs is in `files:` (a missing one blocks the implementer later) |
 | `progress/plan_task_1.1.sha256` | acceptance criteria are concrete examples, not prose |
 
-## 3. Plan gate for a subtask
+## 4. Plan gate for a subtask
 
 ```text
 OK, phase approved. Start the first subtask and run its plan gate.
@@ -131,7 +176,7 @@ fail by design, unless the spec declares a confirmed marker (structural refactor
 or test-only verification), whose tests may already pass. The advisory Stop hook warns that there is no green full check; that is
 expected, not a harness fault.
 
-## 4. Implement and code gate
+## 5. Implement and code gate
 
 ```text
 OK. Launch the implementer, then the code gate. Stop before the close.
@@ -151,7 +196,7 @@ does not commit or mark the subtask done. The leader then runs:
 | | `git diff --stat HEAD -- src` lists only the declared files |
 | | `make check` green |
 
-## 5. Close
+## 6. Close
 
 ```text
 OK, run the close.
@@ -186,7 +231,7 @@ make status                       # the subtask is [DONE]
 The first close commit also carries every plan file that was never committed
 (`docs/plan/`, verdicts, seals), since Claude cannot commit them earlier.
 
-## 6. Task pull request
+## 7. Task pull request
 
 When a close finishes the **last subtask of a task** `N.M`, Codex also writes
 `progress/pr_N.M.md` (overview, approach, decisions, issues resolved and open,
@@ -210,7 +255,7 @@ The "issues resolved" part comes from `progress/review_history/`: every gate
 verdict (roadmap, phase, plan, code) is appended there, so rounds a gate
 rejected survive the next verdict that overwrites the review file.
 
-## 6b. Task close and phase close
+## 7b. Task close and phase close
 
 After the last close of a task, the leader runs the task-close gate:
 
@@ -235,13 +280,13 @@ A phase broken down whole before this flow keeps working (no task gate); only
 its tasks not yet done when `make plan` first saw it
 (`progress/task_flow_legacy_NN.json`, sealed) need a task-close.
 
-## 7. Next subtask, next phase
+## 8. Next subtask, next phase
 
 The leader shows `make status` and waits. When a task's PR is merged, the next
 task starts from `main`. When a phase is done, the leader breaks down the next
-one (step 2).
+one (step 3).
 
-## 7b. Resume after an interruption
+## 8b. Resume after an interruption
 
 After a crash, a closed session or a failed step, nothing has to be remembered:
 
@@ -285,7 +330,7 @@ rule 0.5); it may become a FAIL later.
 
 The attempt budget is in [configuration](configuration.md#attempt-budget-harnesstoml-review).
 
-## 8. Issues lane (a GitHub issue at any point)
+## 9. Issues lane (a GitHub issue at any point)
 
 An issue never becomes a task of a phase: it has its own lane, with the same
 gates (design: [design/issues-lane.md](design/issues-lane.md)).
@@ -315,7 +360,7 @@ harness/issue.sh resume              # after a `now` issue is merged: back to th
   `./harness/review_with_codex.sh issue-draft` → `DRAFT_APPROVED` → your OK →
   `harness/issue.sh publish`.
 
-## 9. Existing projects: migrate the copied harness files
+## 10. Existing projects: migrate the copied harness files
 
 Copied files (`Makefile`, `CLAUDE.md`, `AGENTS.md`, `docs/plan/issues/README.md`)
 do not follow the toolkit; they change only through a migration. These commands
@@ -465,10 +510,11 @@ an inventory, `make check` is unchanged.
 
 With `[codex] mode = "manual"` in `harness.toml` (see [configuration](configuration.md)), each
 gate prints the exact `codex exec …` command, the prompt and the verdict file
-instead of running Codex. After an approved roadmap, phase or plan gate,
+instead of running Codex. After an approved stack, roadmap, phase or plan gate,
 **you** seal what was approved; the Bash guard blocks Claude from doing it:
 
 ```bash
+./harness/review_with_codex.sh seal stack
 ./harness/review_with_codex.sh seal roadmap
 ./harness/review_with_codex.sh seal phase 01
 ./harness/review_with_codex.sh seal task 1.1
@@ -574,10 +620,10 @@ instead, yourself, from a shell outside Claude:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `BLOCKED: there is no in_progress feature` on a `src/` write | no subtask started | let the leader start one (step 3) |
+| `BLOCKED: there is no in_progress feature` on a `src/` write | no subtask started | let the leader start one (step 4) |
 | `BLOCKED: '<path>' is NOT in the declared 'files:'` | the code needs a file the plan did not declare | the leader adds it to the spec, `make plan`, and the plan gate runs again |
 | `[FAIL] … no longer matches its seal` | a sealed acceptance test or plan file changed | revert it, or re-run the gate that approved it |
-| `make check` red right after the plan gate | acceptance tests are red until the code exists (unless under a confirmed marker) | expected; continue to step 4 |
+| `make check` red right after the plan gate | acceptance tests are red until the code exists (unless under a confirmed marker) | expected; continue to step 5 |
 | The close says `blocked -> see progress/current.md` | Codex could not finish the close | fix the cause recorded there, then re-run `doc <N.M.K>` |
 | `<N.M.K> is already closed (status: done)` on `doc` | the close already ran (even if it looked interrupted) | do not close again; if only the PR is missing, `./harness/review_with_codex.sh pr <N.M>` |
 | `<N.M.K> has no APPROVED code review` on `doc` | the close needs the code gate first | run `./harness/review_with_codex.sh code <N.M.K>` |

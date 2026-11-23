@@ -603,7 +603,7 @@ def test_starting_the_next_subtask_waits_for_the_users_ok(plan: Plan) -> None:
 
 
 def test_a_plan_level_gate_is_authorized(plan: Plan) -> None:
-    res = plan.phase("01").phase("02").sync().run_py("_resume.py", "--json")
+    res = plan.approve_stack().phase("01").phase("02").sync().run_py("_resume.py", "--json")
     action = json.loads(res.stdout)
     assert action["kind"] == "review"
     assert action["command"] == [GATE, "roadmap"]
@@ -1139,7 +1139,7 @@ def test_resume_json_without_docs_plan_lists_the_warning(code_ready: Project) ->
 
 
 def test_resume_with_docs_plan_does_not_warn(plan: Plan) -> None:
-    res = plan.phase("01").phase("02").sync().run_py("_resume.py", "--json")
+    res = plan.approve_stack().phase("01").phase("02").sync().run_py("_resume.py", "--json")
     assert res.returncode == 0, res.stderr
     action = json.loads(res.stdout)
     assert action["command"] == [GATE, "roadmap"]

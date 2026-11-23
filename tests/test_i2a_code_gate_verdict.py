@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from conftest import write_control
-from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, spec
+from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, spec, stack_step
 from i0_projects import Installed, install_project
 
 pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
@@ -77,6 +77,7 @@ def cycle(tmp_path: Path) -> Cycle:
         **fake_tools(project, tmp_path, ORACLE_PATH, ORACLE, SPEC),
         "HARNESS_CHECK_CMD": "true",
     }
+    stack_step(project, env)  # issue #115: the stack comes before the plan
     _write_plan(project, "pending")
     branch = project.run("python3", "harness/_harness.py", "branch", TASK).stdout.strip()
     git(project, "switch", "-qc", branch)

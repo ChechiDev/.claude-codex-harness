@@ -17,13 +17,13 @@ def _status(plan: Plan) -> str:
 
 
 def test_empty_plan_points_at_discovery(plan: Plan) -> None:
-    out = _status(plan.sync())
+    out = _status(plan.approve_stack().sync())
     assert "No phases planned yet" in out
     assert "Next: ask the leader to plan the project" in out
 
 
 def test_roadmap_waiting_for_codex(plan: Plan) -> None:
-    out = _status(plan.phase("01").phase("02").sync())
+    out = _status(plan.approve_stack().phase("01").phase("02").sync())
     assert "Roadmap    pending Codex review" in out
     assert "Phase 01 — P01 · not broken down yet" in out
     assert "Next: roadmap gate: ./harness/review_with_codex.sh roadmap" in out

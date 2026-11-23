@@ -17,7 +17,7 @@ Allowed for subtask X (N.M.K or ISS-n.k), owner O (task N.M or issue ISS-n):
   progress     review_X.md, plan_review_X.md, impl_X.md, close_X.msg,
                review_history/X.md, current.md, history.md, pr_O.md
   concept docs docs/architecture.md, docs/conventions.md (documenter.md step 1)
-  chain        the harness bookkeeping of the chain roadmap -> phase NN | issue ISS-n
+  chain        the harness bookkeeping of the chain stack -> roadmap -> phase NN | issue ISS-n
                -> leaf, by exact name (issue #40): the gate verdicts (roadmap_review,
                phase_review_NN | issue_review_ISS-n) and their review_history
                (roadmap, phase-NN | ISS-n), the plan seals (plan_roadmap,
@@ -25,7 +25,9 @@ Allowed for subtask X (N.M.K or ISS-n.k), owner O (task N.M or issue ISS-n):
                verdict receipts verdict_<verdict>.sha256 of every verdict of the chain,
                the phase file docs/plan/phase-NN-<slug>.md found on disk, and every
                path listed in the approved seal plan_phase_NN | plan_issue_ISS-n.
-               The first close of a project carries the approved roadmap and phase.
+               The first close of a project carries the approved roadmap and phase,
+               and the approved stack (issue #115): docs/stack.md, stack_review.md,
+               stack.sha256, review_history/stack.md and the verdict receipt.
   task flow    (issue #62) for a task leaf N.M.K of phase NN, by exact name: the
                task gate (task_review_N.M.md, its receipt, plan_task_N.M.sha256 and
                the specs it lists, review_history/N.M.md), task_close_N.M.md and the
@@ -178,6 +180,9 @@ def _chain(sid: str, kind: str, owner: str, leaf: dict[str, Any], root: Path | N
     """Exact names of the harness bookkeeping of roadmap -> phase | issue -> leaf."""
     verdicts = ["roadmap_review.md", f"plan_review_{sid}.md", f"review_{sid}.md"]
     out = {"progress/plan_roadmap.sha256", "progress/review_history/roadmap.md"}
+    # The stack step (issue #115) comes first in the chain: its file, seal and history.
+    verdicts.append("stack_review.md")
+    out |= {"docs/stack.md", "progress/stack.sha256", "progress/review_history/stack.md"}
     folder: Path | None = None
     seal = ""
     if kind == "issue":

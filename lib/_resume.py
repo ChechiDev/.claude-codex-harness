@@ -56,6 +56,7 @@ Kind = Literal["implement", "fix", "review", "seal", "close", "pr", "human"]
 SCHEMA = 1
 MAX_ENTRIES = 20
 STEPS = (
+    "stack",
     "roadmap",
     "phase",
     "task",
@@ -438,7 +439,7 @@ class Action:
     authorized: bool
 
 
-GATES = ("roadmap", "phase", "task", "task-close", "phase-close", "issue", "plan", "code")
+GATES = ("stack", "roadmap", "phase", "task", "task-close", "phase-close", "issue", "plan", "code")
 _G = re.escape(GATE)
 _LEAF = r"\d+\.\d+\.\d+|ISS-\d+\.\d+"
 _TASK = r"\d+\.\d+"
@@ -495,12 +496,23 @@ RULES: tuple[tuple[re.Pattern[str], Kind], ...] = (
     _rule(rf"retry the PR of (?P<id>{_TASK}|{_ISSUE}) {_WHY}: (?P<cmd>{_G} pr (?P=id))", "pr"),
     _rule(
         rf"finish the seal of (?:the roadmap {_WHY}: roadmap gate again: (?P<cmd>{_G} roadmap)"
+        rf"|the stack {_WHY}: stack gate again: (?P<scmd>{_G} stack)"
         rf"|phase (?P<p>{_PHASE}) {_WHY}: phase gate again: (?P<pcmd>{_G} phase (?P=p))"
         rf"|task (?P<t>{_TASK}) {_WHY}: task gate again: (?P<tcmd>{_G} task (?P=t))"
         rf"|issue (?P<i>{_ISSUE}) {_WHY}: issue gate again: (?P<icmd>{_G} issue (?P=i)))",
         "seal",
     ),
     _rule(rf"roadmap gate: (?P<cmd>{_G} roadmap)", "review"),
+    # The stack step (issue #115).
+    _rule(rf"stack gate: (?P<cmd>{_G} stack)", "review"),
+    _rule(
+        rf"docs/stack\.md changed since STACK_APPROVED: stack gate again: (?P<cmd>{_G} stack)",
+        "review",
+    ),
+    _rule(
+        rf"fix the stack \(progress/stack_review\.md\), then stack gate: (?P<cmd>{_G} stack)",
+        "fix",
+    ),
     _rule(rf"phase gate: (?P<cmd>{_G} phase (?P<id>{_PHASE}))", "review"),
     _rule(rf"task gate: (?P<cmd>{_G} task (?P<id>{_TASK})) \(then the user's OK\)", "review"),
     _rule(rf"task-close gate: (?P<cmd>{_G} task-close (?P<id>{_TASK}))", "review"),
@@ -549,6 +561,7 @@ AUTHORIZED_STEPS = (
     "plan gate again",
     "the code approval of",
     "the index is stale vs the specs",
+    "docs/stack.md changed",
     *(f"{gate} gate: " for gate in GATES),
 )
 # Steps that need the human's OK (or the human's own work): no command, ever.

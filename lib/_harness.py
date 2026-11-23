@@ -81,7 +81,7 @@ STARTED = {"in_progress", "done"}
 RE_VERDICT = re.compile(
     r"^\*\*Verdict:\*\*[ \t]*"
     r"(ROADMAP_APPROVED|PHASE_APPROVED|ISSUE_APPROVED|DRAFT_APPROVED|PLAN_APPROVED"
-    r"|TASK_APPROVED|TASK_CLOSE_APPROVED|PHASE_CLOSE_APPROVED|APPROVED"
+    r"|TASK_APPROVED|TASK_CLOSE_APPROVED|PHASE_CLOSE_APPROVED|STACK_APPROVED|APPROVED"
     r"|CHANGES_REQUESTED)[ \t]*$",
     re.MULTILINE,
 )
@@ -272,7 +272,7 @@ ASSUME_VAR = "HARNESS_ASSUME_APPROVED"
 
 def assumed(kind: str, ident: str = "") -> bool:
     """True when the gate's counterfactual run assumes this exact target approved
-    (HARNESS_ASSUME_APPROVED=roadmap | phase:NN | issue:ISS-n), issue #27."""
+    (HARNESS_ASSUME_APPROVED=roadmap | phase:NN | issue:ISS-n | stack), issues #27, #115."""
     target = f"{kind}:{ident}" if ident else kind
     return os.environ.get(ASSUME_VAR, "") == target
 

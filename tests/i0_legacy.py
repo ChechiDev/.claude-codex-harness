@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from conftest import TOOLKIT
-from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, spec
+from i0_cycle import PHASE_MD, PLAN_MD, SID, TASK, fake_tools, gate, git, spec, stack_step
 from i0_projects import Installed, install_project
 
 SPEC = f"docs/plan/phase-01-greetings/{SID}-greet.md"
@@ -69,6 +69,7 @@ def build_legacy(tmp: Path, toolkit: Path = TOOLKIT) -> Installed:
     git(project, "add", "-A")
     git(project, "commit", "-qm", "pre-harness code")
     git(project, "push", "-q", "origin", "main")
+    stack_step(project, env)  # issue #115: the stack comes before the plan
     _plan(project, "pending")
     branch = project.run("python3", "harness/_harness.py", "branch", TASK).stdout.strip()
     git(project, "switch", "-qc", branch)

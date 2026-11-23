@@ -23,7 +23,7 @@ agent attribution). Claude Code already loads them automatically; this file only
 
 ## Project context ‹filled in by the leader during discovery›
 
-- **Domain:** ‹what this service solves›
-- **Framework:** ‹FastAPI | Django›
-- **Persistence:** ‹SQLAlchemy 2.x async | Django ORM› on PostgreSQL
-- **Own commands:** ‹docker compose up, workers, scraping…›
+- **Domain:** ‹what this project solves›
+- **Stack:** see `docs/stack.md` (decided in the stack step, approved by the
+  stack gate; never restated here)
+- **Own commands:** ‹how to run it locally, workers, scripts…›
