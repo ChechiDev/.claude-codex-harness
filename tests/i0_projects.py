@@ -60,7 +60,9 @@ class Installed:
         return self.run("make", "-s", "--no-print-directory", target)
 
 
-LEAKY = ("GIT_", "HARNESS_", "UV_", "VIRTUAL_ENV", "CLAUDE_")
+# PYTEST_*: the outer run's PYTEST_ADDOPTS (e.g. CI's -rs) must not reach the
+# throwaway project's own pytest, or it changes what `make check` prints (#123).
+LEAKY = ("GIT_", "HARNESS_", "UV_", "VIRTUAL_ENV", "CLAUDE_", "PYTEST_")
 
 
 def uv_cache() -> str:

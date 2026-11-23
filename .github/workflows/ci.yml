@@ -1,9 +1,13 @@
-# Toolkit CI (#74). Fast tier + lint/types on every PR and push to main;
-# the e2e tier nightly and on demand. Contract: tests/test_ci_workflow.py.
+# Toolkit CI (#74, #117). Fast tier + lint/types on every PR, merge queue and push to
+# main; the full e2e tier on every PR and merge queue (8 pytest-split shards plus one
+# aggregate check), nightly and on demand. Contract: tests/test_ci_workflow.py.
+# Required checks (branch protection, configured on GitHub): "fast tier, ruff, mypy"
+# and "e2e tier" (docs/testing.md).
 name: CI
 
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
   schedule:
@@ -31,6 +35,9 @@ jobs:
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: "3.12" # same interpreter as local development
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-suffix: fast
       - name: git identity for throwaway test repos
         run: |
           git config --global user.name "ci"
@@ -43,11 +50,15 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
 
-  e2e:
-    name: e2e tier
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  e2e-shard:
+    name: e2e shard ${{ matrix.shard }}/8
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false # every shard reports, so one red run shows every failure
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       PYTEST_ADDOPTS: "-rs"
     steps:
@@ -58,11 +69,88 @@ jobs:
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: "3.12" # same interpreter as local development
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            skills/py-style/assets/pyproject.toml
+          cache-suffix: e2e
       - name: git identity for throwaway test repos
         run: |
           git config --global user.name "ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
       - run: uv sync --locked
-      - name: e2e tier
-        run: make test-e2e
+      # the throwaway projects sync offline in isolated_env (no UV_* vars, so not
+      # setup-uv's UV_PYTHON): warm and check the cache in that same environment
+      - name: warm the uv cache for the throwaway projects (they sync offline)
+        run: uv run python tests/tools/warm_uv_cache.py
+      # the C template lints with clang-format/cppcheck/clang-tidy only when installed;
+      # the fixtures' C sources assume a bare gcc+make box, and the runner image ships
+      # clang-format (whose default style rejects them): remove the optional linters
+      - name: hide the optional C linters (the fixtures assume a bare gcc+make box)
+        run: |
+          for t in clang-format clang-tidy cppcheck; do
+            for _ in 1 2 3 4 5; do p="$(command -v "$t")" || break; sudo rm -f -- "$p"; hash -r; done
+            if command -v "$t"; then echo "::error::$t is still on PATH"; exit 1; fi
+          done
+      - name: e2e shard
+        run: >-
+          uv run python tests/tools/pytest_timed.py -o addopts= -q -m e2e -n 2
+          --splits 8 --group ${{ matrix.shard }}
+          --splitting-algorithm=duration_based_chunks
+          --durations-path=tests/.test_durations
+          --timing-dir=e2e-out
+          --junitxml=e2e-out/junit.xml
+      - name: upload the shard records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-shard-${{ matrix.shard }}
+          path: e2e-out/
+          if-no-files-found: warn # the aggregate reports a missing shard
+          retention-days: 14
+
+  e2e:
+    # The one e2e check to require: red unless all 8 shards succeeded and, together,
+    # ran exactly the full e2e collection (none missing, none twice, none empty).
+    name: e2e tier
+    needs: [e2e-shard]
+    if: always() && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-suffix: fast
+      - run: uv sync --locked
+      - name: download the shard records
+        continue-on-error: true # a missing shard is reported by check-shards
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: e2e-shard-*
+          path: shards
+      - name: full e2e collection
+        run: |
+          uv run pytest -o addopts= -q -m e2e --collect-only -p no:cacheprovider \
+            > collected.txt
+          tail -n 1 collected.txt
+      - name: the shards ran the full collection, green
+        run: |
+          mkdir -p shards
+          uv run python tests/tools/measure_suite.py check-shards \
+            --expected 8 --collected collected.txt \
+            --allow-skip '^tests/test_compat_(deps_docker|isolation|run_docker)\.py::.*: .*Docker Engine or image harness-compat:local not ready' \
+            shards
+      - name: every shard job succeeded
+        if: always()
+        env:
+          SHARDS_RESULT: ${{ needs.e2e-shard.result }}
+        run: |
+          echo "e2e shard jobs: $SHARDS_RESULT"
+          test "$SHARDS_RESULT" = success

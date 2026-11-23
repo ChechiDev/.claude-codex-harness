@@ -105,6 +105,6 @@ def test_make_test_runs_the_fast_tier() -> None:
 
 def test_tiers_are_documented() -> None:
     doc = (TOOLKIT / "docs" / "testing.md").read_text()
-    for needle in ("e2e", "make test-e2e", "-n auto", "flock"):
+    for needle in ("e2e", "make test-e2e", "-n auto", "e2e tier", "measure_suite.py"):
         assert needle in doc
     assert "docs/testing.md" in (TOOLKIT / "README.md").read_text()
