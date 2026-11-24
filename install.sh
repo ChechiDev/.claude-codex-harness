@@ -167,7 +167,8 @@ IGNORES=(.env .harness/migrations/)  # migration backups are machine-local (M0a)
 if [ "$TPL_LANG" = "c" ]; then
   IGNORES+=("*.o" "*.bin")
 else
-  IGNORES+=(.venv/ __pycache__/ .pytest_cache/ .mypy_cache/ .ruff_cache/ "pyproject.toml.bak.*")
+  IGNORES+=(.venv/ __pycache__/ .pytest_cache/ .mypy_cache/ .ruff_cache/ "pyproject.toml.bak.*"
+            .coverage ".coverage.*" coverage.xml htmlcov/)
 fi
 touch "$DEST/.gitignore"
 for entry in "${IGNORES[@]}"; do

@@ -77,7 +77,7 @@ Examples:
 Configure once per repo via GitHub → Settings → Branches → Add rule for `main`:
 
 - ✅ Require status checks to pass before merging
-  - Add: `ruff`, `flake8`, `mypy`, `unit` (from `ci.yml`)
+  - Add: `Lint (ruff)`, `Types (mypy)`, `Dependencies (deptry)`, `Tests + coverage` (the job names of `ci.yml`; `Vulnerabilities (pip-audit)` too if a new advisory may block merges)
 - ✅ Require branches to be up to date before merging
 - ✅ Do not allow bypassing the above settings
 - ✅ Allow force pushes: OFF
@@ -108,7 +108,7 @@ Configure once per repo via GitHub → Settings → Branches → Add rule for `m
 - `~/.agents/skills/pr/SKILL.md` — PR body template, draft PRs, merge checklist
 - `../commit/SKILL.md` — conventional commit conventions and message format
 - `~/.agents/skills/issue/SKILL.md` — issue creation, labels, and linking to branches
-- `../ci-lint/SKILL.md` — lint jobs that must pass (ruff, flake8, mypy)
-- `../ci-unit/SKILL.md` — unit test job that must pass
+- `../ci-lint/SKILL.md` — static jobs that must pass (lint, type, deps, audit)
+- `../ci-unit/SKILL.md` — test job (make test + coverage) that must pass
 - `../ci-integration/SKILL.md` — integration job (PR to main only)
 - `../../py-init/SKILL.md` — initial branch setup (`chore/project-setup`)

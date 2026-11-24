@@ -1,3 +1,8 @@
+# Python profile (v4) — the canonical pyproject.toml for NEW Python projects.
+# Read by the py-init skill and lib/scaffold_python.sh. It prescribes the toolchain,
+# not an architecture: the project's own stack decisions live in docs/stack.md.
+# Existing projects keep their copy: see docs/python-profile.md (harness) to migrate.
+
 # ── Build system — required so the src/ package is installable/importable ───
 
 [build-system]
@@ -12,88 +17,120 @@ version = "0.1.0"
 description = "Short project description"
 readme = "README.md"
 requires-python = ">=3.12"
+# Runtime dependencies: every project validates with Pydantic; the rest are the
+# project's (`uv add <pkg>`). deptry (make deps) reports any declared but unused;
+# pydantic/pydantic-settings are tolerated only while src/ has no module yet.
 dependencies = [
-    "pydantic>=2.0",
-    "pydantic-settings>=2.0",
+    "pydantic",
+    "pydantic-settings",
 ]
 
 # ── Dependency groups (PEP 735) — dev tooling, never published ───────────────
 #
-# uv add --group lint ruff       → adds to [dependency-groups.lint]
-# uv add --group test pytest     → adds to [dependency-groups.test]
-# uv sync --no-dev               → production only (CI/deploy)
-# uv sync --all-groups           → full local dev install
+# uv add --dev <pkg>     → adds to [dependency-groups.dev] (synced by default)
+# uv sync --no-dev       → production only (deploy)
+#
+# Ruff is pinned: the profile's rule set is tested against this exact version.
+# Updating it is a deliberate change (bump the pin, re-run `make lint` and fix).
 
 [dependency-groups]
-lint = [
-    "ruff",
-    "flake8",
+dev = [
+    "ruff==0.17.1",
     "mypy",
-]
-test = [
     "pytest",
     "pytest-cov",
     "pytest-mock",
-    "pytest-asyncio",
-]
-dev = [
-    { include-group = "lint" },
-    { include-group = "test" },
+    "deptry",
+    "hypothesis",
+    "pre-commit",
 ]
 
-# ── uv ────────────────────────────────────────────────────────────────────────
-
-[tool.uv]
-default-groups = ["dev"]
-
-# ── Ruff — formatter + fast linter ───────────────────────────────────────────
+# ── Ruff — formatter + linter ────────────────────────────────────────────────
+# No target-version: Ruff infers it from requires-python.
 
 [tool.ruff]
-target-version = "py312"
-line-length = 79
+line-length = 88
 src = ["src"]
 
-[tool.ruff.lint]
-select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes
-    "I",    # isort
-    "B",    # flake8-bugbear
-    "C4",   # flake8-comprehensions
-    "UP",   # pyupgrade
-    "N",    # pep8-naming
-    "ANN",  # flake8-annotations
-    "S",    # flake8-bandit (security)
-    "RUF",  # ruff-specific rules
-    "PT",   # flake8-pytest-style (PT006/PT007 parametrize, PT011 pytest.raises match=)
-    "C90",  # mccabe: cyclomatic complexity (C901) — no monster functions
-    "PLR0911", # pylint: too-many-return-statements
-    "PLR0912", # pylint: too-many-branches
-    "PLR0913", # pylint: too-many-arguments
-    "PLR0915", # pylint: too-many-statements — caps function length
-    "D103", # missing docstring in public function (enforced only in tests via per-file-ignores)
-]
-ignore = []
+[tool.ruff.format]
+preview = false
 
+[tool.ruff.lint]
+# Preview only for the rules named exactly below (PLR1702); families stay stable.
+preview = true
+explicit-preview-rules = true
+select = [
+    "E4", "E7", "E9", # pycodestyle errors that the formatter does not cover
+    "F",       # pyflakes
+    "W",       # pycodestyle warnings
+    "I",       # isort
+    "N",       # pep8-naming
+    "A",       # flake8-builtins: no shadowed builtins
+    "ICN",     # import conventions
+    "UP",      # pyupgrade
+    "FURB",    # refurb: modern idioms
+    "PTH",     # pathlib over os.path
+    "SIM",     # simplify
+    "C4",      # comprehensions
+    "PIE",     # misc. lints
+    "RET",     # return statements
+    "PERF",    # performance anti-patterns
+    "B",       # bugbear
+    "BLE",     # no blind `except Exception`
+    "RUF",     # ruff-specific (RUF100: dead noqa)
+    "PGH",     # pygrep hooks (PGH004: blanket noqa)
+    "DTZ",     # timezone-aware datetimes
+    "TRY",     # exception handling
+    "LOG",     # logging
+    "G",       # logging format (no f-strings in log calls)
+    "ANN",     # annotations
+    "TC",      # type-checking-only imports
+    "TID",     # tidy imports (no relative parent imports)
+    "SLF",     # no private member access
+    "ARG",     # unused arguments
+    "ERA",     # commented-out code
+    "S",       # bandit (security)
+    "PT",      # pytest style
+    "C90",     # mccabe complexity
+    "PLR0911", # too many return statements
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments
+    "PLR0915", # too many statements
+    "PLR1702", # too many nested blocks (preview)
+]
+ignore = [
+    "TRY003", # long messages in raise are fine: domain errors carry their context
+    "ANN401", # Any is allowed at boundaries; mypy --strict still flags its misuse
+]
+
+# Exceptions: here (per-file-ignores) or inline with a reason, the convention being
+# `# noqa: CODE  # reason`. RUF100 reports a dead noqa, PGH004 a blanket one.
 [tool.ruff.lint.per-file-ignores]
-"!tests/**/*.py" = ["D103"]  # enforce test function docstrings only in tests/
-# Tests may be longer/branchier than production code: relax the SOLID caps there.
-"tests/**/*.py" = ["S101", "PLR0915", "PLR0912", "C901"]  # allow assert + longer tests
+# Tests: asserts, unannotated fixtures, private access and longer functions.
+"tests/**/*.py" = ["ANN", "S101", "ARG", "SLF001", "PLR09", "C901"]
 
 # ── Clean-code caps (SOLID / no monster functions) ──────────────────────────
 [tool.ruff.lint.mccabe]
-max-complexity = 8      # a more branchy function → refactor it
+max-complexity = 10
 
 [tool.ruff.lint.pylint]
-max-statements = 40     # a longer function → split it
 max-args = 5
 max-branches = 10
+max-statements = 40
+max-nested-blocks = 4
 
 [tool.ruff.lint.isort]
 known-first-party = ["your_package"]
 
+# TC + Pydantic: annotations of these bases/decorators are evaluated at runtime,
+# so their imports must stay real imports. Add your own (e.g. "sqlalchemy.orm.
+# DeclarativeBase", a project base model) to these lists.
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["pydantic.BaseModel", "pydantic_settings.BaseSettings"]
+runtime-evaluated-decorators = ["pydantic.validate_call"]
+
 # ── Mypy — strict type checking ───────────────────────────────────────────────
+# python_version is explicit: mypy does not infer it from requires-python.
 
 [tool.mypy]
 strict = true
@@ -106,30 +143,31 @@ module = "tests.*"
 disallow_untyped_defs = false
 
 # ── Pytest ────────────────────────────────────────────────────────────────────
+# `make test` runs everything except the integration and e2e markers, which run
+# in their own jobs (make test-integration / make test-e2e). The markers are the
+# only criterion: conftest.py fails a test under tests/integration/ or tests/e2e/
+# that does not carry its marker. Async tests: see the py-pytest skill.
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
 # importlib mode: required so dotted acceptance filenames like
 # tests/acceptance/test_1.1.1.py (the harness id scheme) collect correctly.
 addopts = "--strict-markers --import-mode=importlib"
 markers = [
     "unit: fast isolated tests, all external deps mocked",
-    "integration: tests against real controlled services, no mocks",
-    "e2e: full flow tests with real data and network, no mocks",
+    "integration: tests against real controlled services (own CI job, make test-integration)",
+    "e2e: full flow tests with real data and network (by hand, make test-e2e)",
 ]
 
-# ── Coverage — unit tests only, 80% minimum ──────────────────────────────────
-#
-# Run: pytest tests/unit/ --cov=<project-packages> --cov-report=term-missing
+# ── Coverage — measured by `make test`; the threshold lives here only ────────
 
 [tool.coverage.run]
 source = ["src"]
 branch = true
-omit = [
-    "tests/*",
-]
+# An empty scaffold collects no data: make test reports it as "no tests selected".
+disable_warnings = ["no-data-collected"]
 
 [tool.coverage.report]
 fail_under = 80
 show_missing = true
+skip_covered = true

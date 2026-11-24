@@ -243,7 +243,10 @@ def test_python_install_syncs_then_runs_make_check(tmp_path: Path) -> None:
     assert res.returncode == 0, res.stdout + res.stderr
     calls = log.read_text().splitlines()
     assert calls[0] == "sync --all-groups --quiet"
-    assert any(call.startswith("run pytest") for call in calls[1:])
+    # make test runs pytest under coverage (Python profile v4).
+    assert any(
+        call.startswith("run coverage run --rcfile=pyproject.toml -m pytest") for call in calls[1:]
+    ), calls
     rows = [line.split()[0] for line in res.stdout.splitlines()]
     assert "[uv]" in rows
     assert res.stdout.splitlines()[-1] == "[OK]      harness ready · make check green"

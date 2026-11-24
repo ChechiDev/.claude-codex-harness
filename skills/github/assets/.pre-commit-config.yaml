@@ -1,0 +1,23 @@
+# Pre-commit hooks of the Python profile — opt-in: `make hooks` installs them.
+# Check-only (they never rewrite files: run `make fix`), and never the test suite
+# or `make check` (the harness runs those; a hook must not recurse into them).
+# always_run + pass_filenames: false: the whole project is checked on every
+# commit, even one that stages no .py file.
+default_install_hook_types: [pre-commit]
+repos:
+  - repo: local
+    hooks:
+      - id: lint
+        name: lint (ruff check + format --check)
+        entry: make lint
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      - id: type
+        name: type (mypy strict)
+        entry: make type
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
