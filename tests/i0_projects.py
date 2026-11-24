@@ -95,6 +95,28 @@ def _sh(cwd: Path, env: dict[str, str], *argv: str) -> None:
     subprocess.run(list(argv), cwd=cwd, env=env, check=True, capture_output=True)
 
 
+def _relax_coverage(root: Path) -> None:
+    """The fixtures test the harness gates, not the Python profile: their tests rarely
+    import src/, so the profile's 80% coverage threshold is off here (fail_under = 0;
+    still measured). Likewise their modules never import the profile's pydantic, so
+    deptry (strict once src/ has a module) ignores its DEP002 here, and only here.
+    test_python_profile_v4_e2e.py restores both to test the profile."""
+    pyproject = root / "pyproject.toml"
+    text = pyproject.read_text()
+    assert "fail_under = 80" in text, "the Python profile's coverage threshold moved"
+    assert "[tool.deptry" not in text, "the Python profile now configures deptry"
+    text = text.replace("fail_under = 80", "fail_under = 0", 1)
+    pyproject.write_text(text + FIXTURE_DEPTRY)
+
+
+# Appended last by _relax_coverage (a tool table: uv.lock is unaffected).
+FIXTURE_DEPTRY = (
+    "\n# Harness test fixture only: its modules never import the profile's pydantic.\n"
+    "[tool.deptry.per_rule_ignores]\n"
+    'DEP002 = ["pydantic", "pydantic-settings"]\n'
+)
+
+
 def _build_template(tmp: Path, kind: str, toolkit: Path) -> Installed:
     """Run the real install.sh once into `tmp` (the slow part: uv sync, git, hooks)."""
     env = isolated_env(tmp)
@@ -124,10 +146,15 @@ def _build_template(tmp: Path, kind: str, toolkit: Path) -> Installed:
         # as changes and the final make check is red until the user commits them.
         if res.returncode != 0 and "commit them" not in res.stdout + res.stderr:
             raise AssertionError(f"install.sh failed for {kind}:\n{res.stdout}\n{res.stderr}")
+        _relax_coverage(root)
         _sh(repo, env, "git", "add", "-A")
         _sh(repo, env, "git", "commit", "-qm", "install the harness in backend/")
     elif res.returncode != 0:
         raise AssertionError(f"install.sh failed for {kind}:\n{res.stdout}\n{res.stderr}")
+    if kind == "python":  # part of install.sh's root commit: main = the setup branch
+        _relax_coverage(root)
+        _sh(repo, env, "git", "commit", "-q", "--amend", "--no-edit", "-a")
+        _sh(repo, env, "git", "branch", "-f", "main", "HEAD")
     return Installed(kind=kind, root=root, repo=repo, env=env, install_output=res.stdout)
 
 

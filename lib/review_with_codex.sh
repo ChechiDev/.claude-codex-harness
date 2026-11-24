@@ -213,8 +213,10 @@ run_check_tolerating() {
     [ -z "$ev" ] || q="$(python3 -E -s -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' \
       "$ev/junit.xml")" || q=""
     [ -z "$q" ] || opts="$opts --junitxml=$q -o junit_family=xunit1"
+    # Excluded tests lower the coverage by design: the threshold is off for this run
+    # only (the Python profile's `make test` still measures and reports it).
     "${CLEAN_ENV[@]}" HARNESS_ASSUME_APPROVED="$target" HARNESS_EXPECT_RED="$label" \
-      PYTEST_ADDOPTS="$opts" make check >"$log" 2>&1 </dev/null
+      HARNESS_NO_COV_THRESHOLD=1 PYTEST_ADDOPTS="$opts" make check >"$log" 2>&1 </dev/null
     rc=$?
     if [ -n "$q" ]; then third_run_evidence "$log" "$label" --junit "$ev/junit.xml"
     else third_run_evidence "$log" "$label"; fi

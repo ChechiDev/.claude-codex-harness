@@ -1,5 +1,5 @@
 # Canonical setup steps — paste into any job in .github/workflows/ci.yml
-# Replace <group> with: lint | test | lint --group test (for both)
+# The dev group (synced by default) has every tool; --locked fails on a stale uv.lock.
 
 steps:
   - name: Checkout
@@ -12,4 +12,4 @@ steps:
       python-version: "3.12"
 
   - name: Install dependencies
-    run: uv sync --group <group>
+    run: uv sync --locked

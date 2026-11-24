@@ -110,24 +110,26 @@ def test_skill_tells_how_to_invoke_archify() -> None:
 
 
 def test_ci_has_no_placeholders_and_matches_make_check() -> None:
+    # The jobs call the Makefile targets make check runs: no command re-typed.
     ci = (GH_ASSETS / "ci.yml").read_text(encoding="utf-8")
     assert "<project-packages>" not in ci
-    assert "uv run ruff check ." in ci
-    assert "uv run ruff format --check ." in ci
-    assert "uv run mypy src" in ci
+    for target in ("make lint", "make type", "make deps", "make test"):
+        assert f"run: {target}" in ci, target
+    assert "uv run" not in ci
 
 
-@pytest.mark.parametrize("name", ["ci.yml", "e2e.yml", "integration-with-services.yml"])
+@pytest.mark.parametrize("name", ["ci.yml", "e2e.yml"])
 def test_empty_suites_do_not_fail(name: str) -> None:
+    # Exit 5 (no tests yet) is green inside the Makefile targets; no raw pytest here.
     body = (GH_ASSETS / name).read_text(encoding="utf-8")
-    for line in body.splitlines():
-        if "uv run pytest" in line:
-            assert '"$rc" -eq 5' in body, f"{name}: pytest exit 5 not tolerated"
+    assert "uv run pytest" not in body, name
+    makefile = (TOOLKIT / "templates" / "Makefile").read_text(encoding="utf-8")
+    assert makefile.count("if [ $$rc -eq 5 ]") == 3  # test, test-integration, test-e2e
 
 
-def test_ci_coverage_is_not_a_gate() -> None:
-    # make check has no coverage threshold: CI must not fail where it passes.
-    assert "--cov-fail-under=0" in (GH_ASSETS / "ci.yml").read_text(encoding="utf-8")
+def test_ci_coverage_threshold_is_the_pyproject_one() -> None:
+    # make check and CI enforce the same threshold: [tool.coverage.report] only.
+    assert "--cov" not in (GH_ASSETS / "ci.yml").read_text(encoding="utf-8")
 
 
 def test_skill_scaffold_steps_tolerate_existing_project() -> None:
@@ -262,8 +264,15 @@ def _py_init_scaffold(dest: Path, pkg: str) -> None:
         '    """Verify the package exposes __version__."""\n'
         f"    assert isinstance({pkg}.__version__, str)\n"
     )
-    for name in (".gitignore", ".editorconfig", ".flake8", "README.md"):
+    for name in (".gitignore", ".editorconfig", "README.md"):
         shutil.copy(SKILL_DIR / "assets" / name, dest / name)
+    shutil.copy(
+        TOOLKIT / "skills" / "py-pytest" / "assets" / "root_conftest.py", dest / "conftest.py"
+    )
+    shutil.copy(
+        TOOLKIT / "skills" / "github" / "assets" / ".pre-commit-config.yaml",
+        dest / ".pre-commit-config.yaml",
+    )
 
 
 @pytest.mark.e2e

@@ -11,11 +11,28 @@ SHARED = ["docs", "py-style", "py-pytest", "py-pydantic", "py-typing"]
 # Workflow wording: git/PR lifecycle, harness gates and role assignments.
 # "Decision Gates" (a standards section heading) is not workflow.
 WORKFLOW = re.compile(
-    r"\bcommit\w*|\bgit branch|feature branch|\bpush\b|\bpull request|\bPRs?\b|pre-PR"
+    r"(?<!pre-)\bcommit\w*|\bgit branch|feature branch|\bpush\b|\bpull request|\bPRs?\b|pre-PR"
     r"|make verify|\bgate\b(?<!Decision Gate)|\bCodex\b|\bClaude\b|\bleader\b"
     r"|\bimplementer\b|\breviewer\b|github/commit|workflow_dispatch|GitHub Actions",
     re.IGNORECASE,
 )
+
+
+@pytest.mark.parametrize(
+    ("line", "workflow"),
+    [
+        ("commit the change", True),
+        ("Transaction committed to git", True),
+        ("then git commit -m x", True),
+        ("recommit it", False),  # not a word boundary
+        ('    "pre-commit",', False),  # the pre-commit tool's name (Python profile v4)
+        ("install pre-commit, then commit", True),
+    ],
+)
+def test_the_workflow_wording_allows_only_the_pre_commit_tool_name(
+    line: str, workflow: bool
+) -> None:
+    assert bool(WORKFLOW.search(line)) is workflow
 
 
 def _shared_files() -> list[Path]:

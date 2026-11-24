@@ -29,14 +29,12 @@ jobs:
           enable-cache: true
           python-version: "3.12"
 
-      - run: uv sync --group test
+      - run: uv sync --locked
 
+      # Tests marked `e2e` (the marker is the criterion, not the directory);
+      # none yet is green.
       - name: Run e2e tests
-        run: |
-          rc=0
-          uv run pytest tests/e2e/ -v || rc=$?
-          if [ "$rc" -eq 5 ]; then echo "no e2e tests yet"; exit 0; fi
-          exit "$rc"
+        run: make test-e2e
 
       # Uncomment when schedule trigger is enabled:
       # - name: Notify on scheduled failure

@@ -256,6 +256,12 @@ MSG_EXPECT_RED = (
 )
 
 
+MSG_NO_COV_THRESHOLD = (
+    "BLOCKED: HARNESS_NO_COV_THRESHOLD is set only by the issue gate for its third run "
+    "(review_with_codex.sh), which excludes tests by design. Run `make check` without it."
+)
+
+
 MSG_ASSUME = (
     "BLOCKED: HARNESS_ASSUME_APPROVED is set only by the roadmap/phase/issue/stack gate for "
     "its counterfactual run (review_with_codex.sh). Run `make check` without it."
@@ -2146,6 +2152,8 @@ def _precheck(command: str) -> None:
         raise Blocked(MSG_ASSUME)
     if "HARNESS_EXPECT_RED" in command:  # best effort (issue #31)
         raise Blocked(MSG_EXPECT_RED)
+    if "HARNESS_NO_COV_THRESHOLD" in command:  # best effort (Python profile v4)
+        raise Blocked(MSG_NO_COV_THRESHOLD)
     control = RE_CONTROL_ASSIGN.search(command)
     if control and RE_GATE_CALL.search(command):  # best effort (issue #90)
         raise Blocked(MSG_CONTROL.format(name=control.group(1)))

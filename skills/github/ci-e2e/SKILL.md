@@ -4,7 +4,7 @@ description: "Claude only: Trigger: e2e CI, end to end, workflow_dispatch, sched
 license: Apache-2.0
 metadata:
   author: "chechidev"
-  version: "1.1"
+  version: "2.0"
 ---
 
 ## Activation Contract
@@ -21,7 +21,7 @@ Always load `ci-setup` first. Output goes into a SEPARATE file: `.github/workflo
 2. **Trigger — `workflow_dispatch` only**: E2E runs manually on demand. Add `schedule` only when there are stable e2e tests worth monitoring nightly — not before. Premature scheduling generates noise without value.
 3. **No `needs:`**: E2E has no lint dependency — it runs on demand or on schedule, not gated by lint. Lint runs in `ci.yml` on push/PR.
 4. **No coverage**: E2E tests are not subject to coverage enforcement. No `--cov` flags.
-5. **Verbose + continue on error awareness**: Run with `-v`. E2E failures may be transient (network, rate limits) — the job MUST still fail (`continue-on-error: false`) so failures are visible.
+5. **Selected by marker; failures stay visible**: Run `make test-e2e` (`pytest -m e2e`: the marker is the criterion, not the `tests/e2e/` path). E2E failures may be transient (network, rate limits) — the job MUST still fail (`continue-on-error: false`) so failures are visible.
 6. **Secrets via `env:`**: Any real credentials (API keys, tokens) MUST come from `${{ secrets.* }}`.
 7. **No `cancel-in-progress`** for scheduled runs: Scheduled runs should complete — use `cancel-in-progress: false` or omit the concurrency block.
 8. **`timeout-minutes: 30`**: Always set on the e2e job. Network-dependent tests can hang indefinitely.
@@ -45,8 +45,8 @@ Always load `ci-setup` first. Output goes into a SEPARATE file: `.github/workflo
 2. Set `on: workflow_dispatch` only. Add `schedule` later when e2e tests are stable.
 3. Add `concurrency` with `cancel-in-progress: false`.
 4. Add `permissions: contents: read`.
-5. Add canonical setup steps with `uv sync --group test`.
-6. Run `uv run pytest tests/e2e/ -v`.
+5. Add canonical setup steps (`uv sync --locked`).
+6. Run `make test-e2e`.
 7. Add `env:` block for required secrets.
 8. See `../assets/e2e.yml` for the complete workflow.
 
@@ -55,7 +55,7 @@ Always load `ci-setup` first. Output goes into a SEPARATE file: `.github/workflo
 - Separate file: `.github/workflows/e2e.yml`.
 - Only `workflow_dispatch` trigger — no `schedule` until stable e2e tests exist.
 - No `needs:`, no `--cov`.
-- `-v` flag on pytest.
+- `make test-e2e` is the test command (selection by marker).
 - `cancel-in-progress: false`.
 - `timeout-minutes: 30` on the e2e job.
 - Scheduled failure notification step present as a comment in `e2e.yml` — ready to uncomment when `schedule` trigger is enabled.
@@ -64,4 +64,4 @@ Always load `ci-setup` first. Output goes into a SEPARATE file: `.github/workflo
 
 - `../assets/e2e.yml` — complete e2e workflow file
 - `../ci-setup/SKILL.md` — canonical setup steps
-- `../../py-pytest/SKILL.md` — e2e test rules (rule 4)
+- `../../py-pytest/SKILL.md` — markers and where each kind runs (rules 3, 17)

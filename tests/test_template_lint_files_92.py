@@ -63,10 +63,14 @@ def test_the_c_template_does_not_declare_lint_files() -> None:
 def test_scoped_lint_on_an_installed_project_ignores_other_files(tmp_path: Path) -> None:
     root = tmp_path / "fresh"
     (tmp_path / "claude-home").mkdir()
-    # `uv run X` -> X from the toolkit venv; other uv commands are no-ops (no network).
+    # Command wiring only: `uv run ruff` -> ruff from the toolkit venv; every other uv
+    # command (sync, and the run of mypy/coverage/deptry the install's check makes) is a
+    # no-op (no network). The real toolchain runs in test_python_profile_v4_e2e.py.
     shim = tmp_path / "bin"
     shim.mkdir()
-    (shim / "uv").write_text('#!/bin/sh\n[ "$1" = run ] || exit 0\nshift\nexec "$@"\n')
+    (shim / "uv").write_text(
+        '#!/bin/sh\n[ "$1" = run ] || exit 0\nshift\n[ "$1" = ruff ] || exit 0\nexec "$@"\n'
+    )
     (shim / "uv").chmod(0o755)
     path = os.pathsep.join([str(shim), str(TOOLKIT / ".venv" / "bin"), os.environ["PATH"]])
     env = {"CLAUDE_HOME": str(tmp_path / "claude-home"), "HOME": str(tmp_path), "PATH": path}

@@ -2,10 +2,11 @@
 # Customize it per project (add docker, scraping targets, etc.), but keep
 # lint/type/test/verify/env-check: the harness targets (plan, status, check,
 # issue…) come from harness/harness.mk, included at the end, and call them.
-.PHONY: lint type test verify env-check install-dev
+# The project's CI calls these same targets (it has no harness/ link).
+.PHONY: lint type test test-integration test-e2e deps verify fix audit hooks env-check install-dev
 
-# Colored status tags (ok/skip/warn/fail), plain when not on a terminal.
-STATUS := ./harness/status.sh
+# Colored status tags (ok/skip/warn/fail); a plain fallback where harness/ is missing.
+STATUS := $(if $(wildcard harness/status.sh),./harness/status.sh,printf '[%s] %s\n')
 
 # Scoped lint (#76): the post-write hook runs `make lint LINT_FILES=<written file>`
 # for files with a LINT_EXTS extension; plain `make lint` checks the whole project.
@@ -19,13 +20,92 @@ lint:
 type:
 	uv run mypy src
 
-# pytest exits 5 when it collects nothing: a fresh project is green, not red.
+# Test selection, the one place it is defined (CI runs `make test` too): every test
+# except the integration and e2e markers, which run in their own jobs below. The
+# markers are the only criterion (conftest.py enforces them).
+TEST_SELECT := not integration and not e2e
+# Coverage of that selection; the threshold is [tool.coverage.report] fail_under.
+# - exit 5 (nothing collected, or only integration/e2e tests) is green; conftest.py
+#   turns a run emptied by any other deselection red.
+# - HARNESS_NO_COV_THRESHOLD=1 keeps the measure and drops only the threshold: the
+#   harness issue gate sets it when it re-runs the check without some tests.
+# - COVERAGE_XML=<file> also writes the XML report (the CI's coverage comment).
+# - --rcfile: the configuration is pyproject.toml, never an inherited COVERAGE_RCFILE.
+COVERAGE_XML ?=
+COVERAGE := uv run coverage
+
 test:
-	@uv run pytest; rc=$$?; \
-	if [ $$rc -eq 5 ]; then $(STATUS) ok "no tests yet"; else exit $$rc; fi
+	@rc=0; REQUIRE_SELECTED_TESTS=1 $(COVERAGE) run --rcfile=pyproject.toml -m pytest -m "$(TEST_SELECT)" || rc=$$?; \
+	if [ $$rc -eq 5 ]; then $(STATUS) ok "no tests selected (none yet, or only integration/e2e)"; exit 0; fi; \
+	[ $$rc -eq 0 ] || exit $$rc; \
+	[ -z "$(COVERAGE_XML)" ] || $(COVERAGE) xml --rcfile=pyproject.toml --fail-under=0 -q -o "$(COVERAGE_XML)" || exit 1; \
+	if [ "$${HARNESS_NO_COV_THRESHOLD:-}" = 1 ]; then \
+	  $(STATUS) warn "coverage threshold off (HARNESS_NO_COV_THRESHOLD=1): measured only"; \
+	  $(COVERAGE) report --rcfile=pyproject.toml --fail-under=0; \
+	else \
+	  $(COVERAGE) report --rcfile=pyproject.toml; \
+	fi
+
+# Integration (real services: the CI job provides them) and e2e (by hand). No
+# coverage threshold; exit 5 (none yet) is green.
+test-integration:
+	@rc=0; uv run pytest -m integration || rc=$$?; \
+	if [ $$rc -eq 5 ]; then $(STATUS) ok "no integration tests yet"; exit 0; fi; exit $$rc
+
+test-e2e:
+	@rc=0; uv run pytest -m e2e || rc=$$?; \
+	if [ $$rc -eq 5 ]; then $(STATUS) ok "no e2e tests yet"; exit 0; fi; exit $$rc
+
+# Declared vs imported dependencies (missing, unused, transitive, misplaced dev).
+# Strict, with one exception: while src/ holds no module (only __init__.py), the
+# profile's pydantic/pydantic-settings are unused yet, so their DEP002 is tolerated
+# with a warning. Any other finding fails; the first module makes deptry fully strict.
+DEPTRY_SCAFFOLD_IGNORES := DEP002=pydantic|pydantic-settings
+
+deps:
+	@if [ -n "$$(find -L src -type f \( -name '*.py' -o -name '*.pyi' \) ! -name '__init__.py' ! -name '__init__.pyi' -print 2>/dev/null | head -n 1)" ]; then \
+	  echo "uv run deptry src"; uv run deptry src; \
+	elif out="$$(uv run deptry src 2>&1)"; then \
+	  printf '%s\n' "$$out"; \
+	else \
+	  echo "uv run deptry src --per-rule-ignores '$(DEPTRY_SCAFFOLD_IGNORES)'  (src/ has no module yet)"; \
+	  uv run deptry src --per-rule-ignores '$(DEPTRY_SCAFFOLD_IGNORES)' || exit $$?; \
+	  $(STATUS) warn "deptry: DEP002 pydantic/pydantic-settings unused, tolerated (no module in src/): expected until src/ imports pydantic"; \
+	fi
 
 # The "all green" the harness requires before approving/closing.
-verify: lint type test
+verify: lint type test deps
+
+# Safe autofixes and formatting (never unsafe fixes). The post-write hook stays
+# check-only: run this yourself.
+fix:
+	uv run ruff check --fix -- $(LINT_FILES)
+	uv run ruff format -- $(LINT_FILES)
+
+# Known vulnerabilities in the locked dependencies (pip-audit). Outside verify: it
+# needs the network (or a prepared pip-audit cache); the project's CI runs it in its
+# own job.
+audit:
+	@req="$$(mktemp)" || exit 1; trap 'rm -f "$$req"' EXIT; \
+	uv export --format requirements-txt --all-groups --no-emit-project --quiet -o "$$req" && \
+	uvx pip-audit --disable-pip -r "$$req"
+
+# Opt-in pre-commit hooks (.pre-commit-config.yaml: lint + type, check-only). An
+# existing hook that is not pre-commit's is kept unless FORCE=1 replaces it.
+FORCE ?=
+
+hooks:
+	@hook="$$(git rev-parse --git-path hooks/pre-commit)" || exit 1; \
+	if [ -e "$$hook" ] && ! grep -q "File generated by pre-commit" "$$hook"; then \
+	  if [ "$(FORCE)" != 1 ]; then \
+	    $(STATUS) fail "$$hook exists and is not pre-commit's: kept (make hooks FORCE=1 replaces it)"; \
+	    exit 1; \
+	  fi; \
+	  $(STATUS) warn "replacing $$hook (FORCE=1)"; \
+	  uv run pre-commit install --overwrite; \
+	else \
+	  uv run pre-commit install; \
+	fi
 
 # Toolchain presence check, used by harness/check.sh (language-agnostic entry point).
 env-check:

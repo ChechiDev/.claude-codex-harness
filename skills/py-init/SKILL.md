@@ -6,7 +6,7 @@ effort: low
 license: Apache-2.0
 metadata:
   author: "chechidev"
-  version: "2.0"
+  version: "3.0"
 ---
 
 ## Activation Contract
@@ -23,11 +23,11 @@ Load all companion skills as reference — do not apply their rules during init,
 1. **`uv init --package`**: Always use `--package` flag. This enforces `src/` layout from the start. Never `uv init` without it.
 2. **Python version**: Always `--python 3.12`. Explicit, never rely on system default.
 3. **Branch `main` from the start**: `git init -b main`. Never init without `-b main` and rename after.
-4. **Harness-neutral**: py-init never writes role files (`CLAUDE.md`, `AGENTS.md`), a `Makefile`, or anything under `.claude/`. Those belong to the harness `install.sh`. In a harness project `.claude/skills` links to the shared toolkit: writing there would change every project.
+4. **Harness-neutral**: py-init never writes role files (`CLAUDE.md`, `AGENTS.md`), a `Makefile`, or anything under `.claude/`. Those belong to the harness `install.sh`. One exception: when the user declines the harness, step 26 copies the harness's template `Makefile` (standalone without `harness/`), because the CI workflows call its targets. In a harness project `.claude/skills` links to the shared toolkit: writing there would change every project.
 4b. **Initial commit on `main` before branching**: one initial commit holds the scaffold (plus the harness when installed in the guided flow). CI configuration goes on `chore/project-setup` as the first PR. On a repo that already had history when py-init started, py-init never commits, branches or pushes: it leaves the files for the human's authorised commit flow.
 5. **`pyproject.toml` from template**: Replace uv's generated `pyproject.toml` immediately with the one from `py-style/assets/pyproject.toml`. Update `name`, `description`, and `known-first-party`.
 6. **Full test structure from day one**: Create `tests/unit/`, `tests/integration/`, `tests/e2e/` with `__init__.py` and `conftest.py` at each level. Empty is fine — structure is not.
-7. **`uv sync --all-groups` locally**: Always install all groups on local setup. CI installs per group.
+7. **`uv sync`**: every tool is in the `dev` group (synced by default), locally and in CI (`uv sync --locked`).
 8. **Conventional commit for first commit**: `chore: initial project scaffolding` when py-init commits it; `chore: install harness` when `install.sh` makes it (guided flow).
 9. **GitHub config on the setup branch**: `ci.yml`, `e2e.yml`, and issue templates go on `chore/project-setup`, not on `main` directly. They get reviewed via PR.
 10. **Clean uv-generated boilerplate**: `uv init --package` generates a `main()` function in `__init__.py`. Clear it — leave only the module docstring.
@@ -104,7 +104,7 @@ bash <skills-dir>/py-init/scripts/detect_harness.sh <project-dir>
 11. Create `.gitignore` from `assets/.gitignore` (if one exists, append only the missing lines — never duplicate an entry).
 12. Create `.editorconfig` from `assets/.editorconfig`.
 13. Replace `README.md` with `assets/README.md` — update project name and description.
-14. Create `.flake8` from `assets/.flake8`.
+14. Create the profile's root files, only if missing: `conftest.py` from `../py-pytest/assets/root_conftest.py` (marker and test-selection rules) and `.pre-commit-config.yaml` from `../github/assets/.pre-commit-config.yaml` (opt-in hooks: `make hooks`).
 15. Create `.github/pull_request_template.md` from `../github/assets/pull_request_template.md`: `mkdir -p .github && cp <skills-dir>/github/assets/pull_request_template.md .github/pull_request_template.md`
 16. Copy `.gitmessage` to project root and configure git commit template:
     ```bash
@@ -138,7 +138,7 @@ bash <skills-dir>/py-init/scripts/detect_harness.sh <project-dir>
     uv run graphify --help >/dev/null
     test -f .agents/skills/archify/SKILL.md
     ```
-23. `uv sync --all-groups`
+23. `uv sync`
 
 ### Phase 2 — Harness, remote and the initial commit on main
 
@@ -153,14 +153,12 @@ bash <skills-dir>/py-init/scripts/detect_harness.sh <project-dir>
 25. Set up GitHub remote — two options:
     - **With `gh` CLI**: `gh repo create <project-name> --private --source=. --remote=origin`
     - **Manual**: ask user for the remote URL → `git remote add origin <url>`
-26. *(harness declined only)* Verify the scaffold is clean before committing:
+26. *(harness declined only)* Copy the Makefile (the CI calls its targets; its harness block is inert without `harness/`) and verify the scaffold before committing:
     ```bash
-    uv run ruff check .
-    uv run ruff format --check .
-    uv run mypy src
-    uv run pytest tests/unit/ --co -q
+    test -f Makefile || cp <skills-dir>/../templates/Makefile Makefile
+    make verify
     ```
-    `--co -q` runs collect-only. Exit 0 (smoke test collected) is expected; exit 5 is a failure here since `test_smoke.py` exists. Do not commit a broken scaffold.
+    `make verify` = lint + type + test (with the 80% coverage threshold) + deps. The smoke test must run and pass. Do not commit a broken scaffold. On the empty scaffold `make deps` warns that pydantic/pydantic-settings are unused (DEP002, tolerated until `src/` has a module) and exits 0; once `src/` has a module, deptry is fully strict.
 27. *(harness declined only)* `git add .`
 28. *(harness declined only)* `git commit -m "chore: initial project scaffolding"`
 29. *(harness declined only)* `git checkout -b chore/project-setup`
@@ -170,7 +168,7 @@ bash <skills-dir>/py-init/scripts/detect_harness.sh <project-dir>
 
 *With `harness=installed` or `history=yes`: copy the files (steps 31–33) and stop — no commit, push or PR.*
 
-31. `mkdir -p .github/workflows` and copy `github/assets/ci.yml` → `.github/workflows/ci.yml`. It runs the same commands as `make check` (`ruff check .`, `ruff format --check .`, `mypy src`, pytest with the `pyproject.toml` config; exit 5 = no tests yet is green) — no placeholders to fill.
+31. `mkdir -p .github/workflows` and copy `github/assets/ci.yml` → `.github/workflows/ci.yml`. Its jobs call the Makefile targets the harness's `make check` uses (`make lint`, `make type`, `make deps`, `make test` with the coverage XML), plus `make audit` and the service-backed `make test-integration` — no placeholders to fill (drop the services the project does not use).
 32. Copy `github/assets/e2e.yml` → `.github/workflows/e2e.yml`
 33. Copy `github/assets/issue-templates/` → `.github/ISSUE_TEMPLATE/` — update `area` options in `bug.yml` to match project modules.
 34. Confirm you are on `chore/project-setup` (`git branch --show-current`), then `git add .github`
@@ -190,7 +188,7 @@ bash <skills-dir>/py-init/scripts/detect_harness.sh <project-dir>
     CI runs on a separate branch so the workflows are reviewed via PR before landing on main.
 
     ## Implementation
-    - \`ci.yml\`: lint (ruff, flake8, mypy) + unit tests with coverage report + integration tests on PR to main
+    - \`ci.yml\`: lint, types, deptry, pip-audit + tests with coverage (make test) + integration tests with services on PR to main
     - \`e2e.yml\`: manual dispatch for end-to-end tests
     - \`.github/ISSUE_TEMPLATE/\`: YAML forms for bug reports and feature requests
 
@@ -208,11 +206,11 @@ bash <skills-dir>/py-init/scripts/detect_harness.sh <project-dir>
 - `.python-version` contains `3.12`.
 - `.gitignore` covers Python, uv, mypy, ruff, pytest, and IDE files.
 - `.editorconfig` is present with UTF-8, LF, 4-space indent for Python.
-- `.flake8` is present in the project root with flake8 configuration (flake8 does not read `pyproject.toml` natively).
+- `conftest.py` (from `py-pytest/assets/root_conftest.py`) and `.pre-commit-config.yaml` are present in the project root.
 - `README.md` is in English with minimal structure.
 - `.github/pull_request_template.md` is present with the canonical PR body sections.
 - `.gitmessage` is present in the project root and configured as `commit.template`.
-- py-init wrote no `CLAUDE.md`, `AGENTS.md`, `Makefile` or `.claude/` entry (with the harness, those are `install.sh`'s).
+- py-init wrote no `CLAUDE.md`, `AGENTS.md` or `.claude/` entry, and a `Makefile` only when the harness was declined (with the harness, those are `install.sh`'s).
 - `docs/diagrams/.gitkeep` is present.
 - Graphify dev dependency in `pyproject.toml`; git hooks installed (`post-commit`, `post-checkout`, `post-merge`, `post-rewrite`).
 - `.agents/skills/archify/SKILL.md` present (project-relative — archify is per-project); nothing written under `.claude/skills`.
@@ -224,9 +222,10 @@ bash <skills-dir>/py-init/scripts/detect_harness.sh <project-dir>
 
 - `assets/.gitignore` — canonical Python + uv gitignore
 - `assets/.editorconfig` — canonical editor config (UTF-8, LF, 4-space Python)
-- `assets/.flake8` — flake8 configuration (flake8 does not read pyproject.toml without flake8-pyproject plugin)
 - `assets/README.md` — minimal README template
-- `../py-style/assets/pyproject.toml` — canonical pyproject.toml template
+- `../py-style/assets/pyproject.toml` — canonical pyproject.toml template (the Python profile)
+- `../github/assets/.pre-commit-config.yaml` — opt-in pre-commit hooks (`make hooks`)
+- `../py-pytest/assets/root_conftest.py` — the project's root `conftest.py`: marker and selection rules
 - `scripts/detect_harness.sh` — prints `harness=` / `history=` for the preflight
 - `scripts/install_archify.sh` — Archify into `.agents/skills/` only
 - `../github/assets/ci.yml` — CI workflow
