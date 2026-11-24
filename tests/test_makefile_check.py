@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -97,8 +98,10 @@ def test_c_failing_unit_test_is_named(tmp_path: Path) -> None:
 def test_python_verify_runs_every_tool_even_after_a_failure(tmp_path: Path) -> None:
     root, env = _project(tmp_path, "templates", verify_red=True)
     out = _check(root, env, check_rc=0).stdout
-    for tool in ("uv run ruff check", "uv run mypy", "uv run pytest"):
+    for tool in ("uv run ruff check", "uv run mypy"):
         assert tool in out, out
+    # v4 profile runs pytest under coverage; check must still execute pytest.
+    assert re.search(r"uv run coverage run .*-m pytest", out), out
 
 
 def test_python_test_without_tests_is_ok(tmp_path: Path) -> None:
@@ -108,7 +111,7 @@ def test_python_test_without_tests_is_ok(tmp_path: Path) -> None:
         ["make", "-s", "test"], cwd=root, env=env, text=True, capture_output=True, check=False
     )
     assert res.returncode == 0, res.stdout + res.stderr
-    assert "[OK]    no tests yet" in res.stdout
+    assert "[OK]    no tests selected (none yet, or only integration/e2e)" in res.stdout
 
 
 def test_python_test_failure_is_still_red(tmp_path: Path) -> None:
