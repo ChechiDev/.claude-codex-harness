@@ -38,9 +38,13 @@ never a fix.
 Defined here (it has no section in `reviewer.md`); the common criteria and the
 hard rules of `reviewer.md` still apply. It runs **before the discovery**: there is
 no plan yet. The re-gate exception of `roadmap` mode applies as is in `stack` mode
-too (this overrides `reviewer.md`, which lists only `roadmap`, `phase` and
+too (this overrides `reviewer.md`, which lists only `roadmap`, `phase`, `task` and
 `issue`): a red check may be approved only with the counterfactual run
-`HARNESS_ASSUME_APPROVED=stack` green, listing the first run's FAIL lines.
+(`HARNESS_ASSUME_APPROVED=stack` plus the pending re-gates below it that the prompt
+names, issue #125) green, listing the first run's FAIL lines; and, with that run red,
+the in-progress re-gate rule of `reviewer.md` applies as is (third run green, every
+test of T accounted for). A re-gate of the stack happens when a plan already exists:
+then the stack comes after the discovery, and the plan and code are context.
 
 Input: `docs/stack.md`, written from the user's answers in the stack step. It must
 fit any kind of project and any language: never assume hexagonal architecture, a

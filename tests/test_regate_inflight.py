@@ -412,14 +412,16 @@ def test_the_prompt_requires_a_full_accounting_of_every_file_in_t(tmp_path: Path
     assert "every test" in flat.lower(), flat
 
 
-def test_reviewer_states_the_in_progress_exception_for_issue_mode_only() -> None:
+def test_reviewer_states_the_in_progress_exception_for_the_regate_modes_only() -> None:
+    """Issue #125 (B1): every re-gate mode, never a subtask gate nor the draft."""
     text = REVIEWER.read_text()
     rules = [r for r in re.split(r"(?<=[.])\s+(?=- |\d+\. )|\n", text) if EXPECT in r]
     assert rules, f"no rule of codex/reviewer.md names {EXPECT}"
     for rule in rules:
         flat = _flat(rule)
-        assert "`issue`" in flat, flat
-        for mode in ("`roadmap`", "`phase`", "`plan`", "`code`", "`doc`", "`issue-draft`"):
+        for mode in ("`roadmap`", "`phase`", "`task`", "`issue`"):
+            assert mode in flat, (mode, flat)
+        for mode in ("`plan`", "`code`", "`doc`", "`issue-draft`"):
             assert mode not in flat, (mode, flat)
     assert "every test" in _flat(" ".join(rules)).lower()
 
@@ -774,12 +776,17 @@ def test_issue_draft_gets_no_third_run(tmp_path: Path) -> None:
 
 @pytest.mark.e2e
 @pytest.mark.parametrize("gate", [("phase", "01"), ("roadmap",)], ids=["phase", "roadmap"])
-def test_phase_and_roadmap_get_no_third_run(tmp_path: Path, gate: tuple[str, ...]) -> None:
+def test_phase_and_roadmap_get_a_third_run_on_the_open_leaf(
+    tmp_path: Path, gate: tuple[str, ...]
+) -> None:
+    """Issue #125 (B1): every re-gate tolerates the in-progress subtask's own oracle."""
     project = _phase_project(tmp_path)
     _write(project, "tests/acceptance/test_1.1.2.py", OWN_BODY.replace("demo.greet", "os"))
+    _seal(project, "1.1.2")  # its plan gate wrote it: red by design, sealed
     _phase_seal_mismatch(project)
-    res = _gate(project, tmp_path, *gate)
-    assert EXPECT not in res.stdout + res.stderr
+    tolerated, rc3, log3 = _third(_prompt(project, tmp_path, *gate))
+    assert tolerated == {"tests/acceptance/test_1.1.2.py"}
+    assert rc3 == 0, log3
 
 
 # ── AC7. C projects: the third run overrides TESTS, no Makefile change ───────

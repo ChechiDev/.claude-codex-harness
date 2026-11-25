@@ -57,9 +57,11 @@ Common criteria (what a senior engineer would look at):
   and log. It must be green **in `code` mode**. In `plan` mode the acceptance tests
   you write are left **red** by design (see the plan-gate exception in `AGENTS.md`),
   except for the two declared markers described in `plan` mode.
-  Re-gate exception, in `roadmap`, `phase` and `issue` modes only: with the check red you may approve only when the prompt reports the gate's counterfactual run (`HARNESS_ASSUME_APPROVED=<target>`) green,
-  and you list the first run's FAIL lines in your verdict. A red counterfactual run, or none, means the red check blocks.
-  In-progress re-gate, in `issue` mode only: with the counterfactual run red you may approve only when the prompt reports the gate's third run (`HARNESS_EXPECT_RED=<T>`) green and your verdict accounts for every test in every file of T, not only the failures in the logs (a C test binary stops at its first failure). For each file of T read it and the subtask's changes, and state why each of its tests may fail now: an acceptance test of its own in-progress subtask (red by design) or a migrated oracle whose expectation the issue's declared behaviour change replaces; also account for every lint or build failure of those files in the first and second runs. A test or failure you cannot tie to one of these blocks approval. List T, the first run's FAIL lines and that per-file accounting in your verdict. No third run, or a red one, means the red check blocks.
+  Re-gate exception, in `roadmap`, `phase`, `task` and `issue` modes only: with the check red you may approve only when the prompt reports the gate's counterfactual run (`HARNESS_ASSUME_APPROVED=<targets>`) green,
+  and you list the first run's FAIL lines in your verdict. A red counterfactual run, or none, means the red check blocks, except under the in-progress re-gate exception below.
+  Coupled re-gates (issue #125): the counterfactual run assumes this gate's target and the pending re-gates below it that the prompt names (targets approved and sealed before, now changed or not approved: below the stack the roadmap, phases, tasks and issues; below the roadmap phases, tasks and issues; below a phase its tasks). It never assumes one above this gate. Those targets stay pending: your approval covers only this gate's target, so review only its content and never vouch for theirs; list the assumed targets in your verdict.
+  In-progress re-gate, in `roadmap`, `phase`, `task` and `issue` modes: with the counterfactual run red you may approve only when the prompt reports the gate's third run (`HARNESS_EXPECT_RED=<T>`) green and your verdict accounts for every test in every file of T, not only the failures in the logs (a C test binary stops at its first failure). For each file of T read it and the subtask's changes, and state why each of its tests may fail now: an acceptance test of the in-progress subtask (red by design while it is built, or an oracle its own re-plan must fix: its plan and code gates decide it, not this gate) or, in `issue` mode, a migrated oracle whose expectation the issue's declared behaviour change replaces; also account for every lint or build failure of those files in the first and second runs. A test or failure you cannot tie to one of these blocks approval. List T, the first run's FAIL lines and that per-file accounting in your verdict. No third run, or a red one, means the red check blocks.
+  When the prompt lists a changed test configuration (a file in the in-progress subtask's `files:` that differs from HEAD, issue #125), read each diff and confirm it changes no test collection or selection (addopts, testpaths, markers, plugins, ignored paths, coverage filters); a change you cannot confirm blocks approval. Name each file and your finding in the verdict.
 - Objective criteria from `docs/architecture.md`, `docs/conventions.md`, and `CHECKPOINTS.md`.
 - For **Python** projects the shared-standard skills apply: read `py-pytest`,
   `py-style`, `py-pydantic`, `py-typing` as authoritative. For **C** projects use
@@ -396,6 +398,19 @@ You do **two things**:
    `ACn`, write **exactly one** test `test_ac<n>_<slug>` and cite the criterion in
    its docstring. 1:1 correspondence: no orphan criterion, no orphan test.
 
+**Re-plan (issue #125)** — when the prompt says `Re-plan`: the subtask already has a
+sealed oracle and may have work in progress (or the oracle itself is defective). The
+upstream gates approved its current spec first. Review the spec as above and write
+the oracle again from the spec, black box: never derive a test from the existing
+implementation, and never shape one to make it pass. The prompt gives a read-only copy
+of the sealed oracle; your verdict adds a `## Oracle changes` section, one line per test
+changed, added or removed: the test, the cause (a defect of the old test with
+`file:line` of the copy, or a criterion the approved spec added or changed) and why the
+new test still proves its criterion. Never weaken or drop a test without such a
+criterion change; an unexplained change means CHANGES_REQUESTED. Tests that the work in
+progress already satisfies may pass. Your approval re-seals the oracle and voids any
+earlier code approval of the subtask.
+
 Verdict in `progress/plan_review_<N.M.K>.md`:
 
 ```markdown
@@ -414,6 +429,9 @@ Verdict in `progress/plan_review_<N.M.K>.md`:
 
 ## Requested changes (if CHANGES_REQUESTED)
 1. ...
+
+## Oracle changes (re-plan only)
+- test_ac1_<slug>: <cause: defect at <copy file:line> | criterion added/changed> → <why it proves ACn>
 
 ## Finding → fix (re-review only)
 - <finding of the previous round> → fixed at <file:line> | still open
@@ -489,7 +507,7 @@ In a spec, flag in `plan` mode a `## Context` path that does not exist and an
 ## Hard rules
 
 - ❌ Never approve with the harness check red. Only exceptions: the red acceptance tests of `plan` mode (see Toolchain),
-  and the re-gate exception of `roadmap`, `phase` and `issue` modes when the counterfactual run (`HARNESS_ASSUME_APPROVED`) is green.
-  In `issue` mode also the in-progress re-gate exception when the third run (`HARNESS_EXPECT_RED`) is green and every test in every file of T is accounted for (see Toolchain).
+  and the re-gate exception of `roadmap`, `phase`, `task` and `issue` modes when the counterfactual run (`HARNESS_ASSUME_APPROVED`, with the pending re-gates below the target) is green.
+  In `roadmap`, `phase`, `task` and `issue` modes also the in-progress re-gate exception when the third run (`HARNESS_EXPECT_RED`) is green and every test in every file of T is accounted for (see Toolchain).
 - ❌ Never edit the implementer's production code.
 - ✅ Be specific: cite `file:line`.

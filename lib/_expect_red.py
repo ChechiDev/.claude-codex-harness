@@ -10,7 +10,21 @@ for the set T of test files whose failure the approval under review expects:
     that seal). The comparison with the previously approved snapshot is skipped: a
     newly declared entry always differs until this gate approves it.
 
+Issue #125 extends the third run to every re-gate (stack, roadmap, phase, task):
+there T is the acceptance files of the open (in-progress, plan-approved, not
+code-approved) subtasks, no `migrates:`. It also lets a changed test configuration
+file through when it is in the `files:` of an open subtask (never a conftest.py),
+and computes the cascade of the counterfactual run (_plan_seal.cascade).
+
 Usage: _expect_red.py <ISS-n>   (cwd = project root)
+       _expect_red.py leaf      T of the open subtasks (same exit codes)
+       _expect_red.py cascade <target>  the pending re-gates below <target>, comma
+          separated on one line (possibly empty); exit 2 for a malformed target
+       _expect_red.py sealed <target>  exit 0 when <target> was sealed before (a
+          re-gate), 1 otherwise (a first approval), 2 for a malformed target
+       _expect_red.py config-ok  exit 0 with the changed test configuration files
+          (one per line, possibly none) when each is in an open subtask's `files:`
+          and none is a conftest.py; exit 1 with one line per refusal otherwise
        _expect_red.py c-makefile-ok  exit 0 when the C test list can be overridden exactly
   exit 0  T on stdout, one path per line (possibly empty)
   exit 3  some `migrates:` entry is ineligible or some path is unsafe: one line
@@ -19,6 +33,7 @@ Usage: _expect_red.py <ISS-n>   (cwd = project root)
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -27,6 +42,7 @@ from typing import Any
 
 import _harness
 import _migrate
+import _plan_seal
 
 # Paths the gate can pass to pytest/make exactly: no whitespace, quotes, globs or `$`.
 SAFE_PATH = re.compile(r"^[A-Za-z0-9._/+-]+$")
@@ -70,9 +86,13 @@ def ineligible(root: Path, leaf: str, entries: list[str]) -> list[str]:
     return out
 
 
-def tolerated(root: Path, iid: str) -> tuple[list[str], list[str]]:
-    """(T, ineligible entries). T is empty whenever an entry is ineligible."""
-    leaves = [x for x in _harness.leaves() if x.get("issue") == iid and _open(root, x)]
+def tolerated(root: Path, iid: str | None) -> tuple[list[str], list[str]]:
+    """(T, ineligible entries). T is empty whenever an entry is ineligible. With no
+    issue (issue #125), the open subtasks of any kind and only their own oracles."""
+    if iid is None:
+        leaves = [x for x in _harness.leaves() if _open(root, x)]
+    else:
+        leaves = [x for x in _harness.leaves() if x.get("issue") == iid and _open(root, x)]
     files: set[str] = set()
     problems: list[str] = []
     for leaf in leaves:
@@ -80,7 +100,7 @@ def tolerated(root: Path, iid: str) -> tuple[list[str], list[str]]:
         own = _harness.acceptance_files(root, sid)
         skip = _ignored(root, own)
         files.update(p.relative_to(root).as_posix() for p in own if p not in skip)
-        entries = [str(e) for e in leaf.get("migrates") or []]
+        entries = [str(e) for e in leaf.get("migrates") or []] if iid is not None else []
         problems += ineligible(root, sid, entries)
         files.update(entries)
     problems += [
@@ -91,6 +111,69 @@ def tolerated(root: Path, iid: str) -> tuple[list[str], list[str]]:
     if problems:
         return [], problems
     return sorted(files), []
+
+
+# ── changed test configuration (issue #125, B1-config) ───────────────────────
+
+# What can change which tests run or how: the third run refuses any change of these
+# against HEAD, except a file the open subtask declares in `files:` (its own change,
+# which the reviewer then reads). A conftest.py can run code in every test: never.
+CONFIG_PATHS = (
+    "Makefile", "GNUmakefile", "makefile", "pyproject.toml", "setup.cfg", "tox.ini",
+    "pytest.ini", ":(glob)**/conftest.py",
+)  # fmt: skip
+NOT_CONFIG = (":(exclude,glob)**/.venv/**", ":(exclude,glob)**/venv/**",
+              ":(exclude,glob)**/node_modules/**")  # fmt: skip
+
+
+def _git_out(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}  # fmt: skip
+    return subprocess.run(["git", *args], cwd=root, env=env, text=True, capture_output=True,
+                          check=False)  # fmt: skip
+
+
+def changed_config(root: Path) -> list[str] | None:
+    """Test configuration files that differ from HEAD: changed, new, deleted or ignored
+    ones (git status), and tracked ones whose content is not their HEAD blob (index
+    flags such as assume-unchanged hide them from git status). None if git fails."""
+    status = _git_out(root, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all",
+                      "--", *CONFIG_PATHS, *NOT_CONFIG)  # fmt: skip
+    tracked = _git_out(root, "ls-files", "-z", "--", *CONFIG_PATHS)
+    if status.returncode != 0 or tracked.returncode != 0:
+        return None
+    found: set[str] = set()
+    records = iter(status.stdout.split("\0"))
+    for record in records:
+        if len(record) < 4:
+            continue
+        found.add(record[3:])
+        if "R" in record[:2] or "C" in record[:2]:  # the next record is the source path
+            found.add(next(records, ""))
+    for rel in filter(None, tracked.stdout.split("\0")):
+        want = _git_out(root, "rev-parse", "-q", "--verify", f"HEAD:./{rel}")
+        have = _git_out(root, "hash-object", "--", rel)
+        if want.returncode != 0 or have.returncode != 0 or want.stdout != have.stdout:
+            found.add(rel)
+    return sorted(f for f in found if f)
+
+
+def config_ok(root: Path) -> tuple[list[str], list[str]]:
+    """(changed configuration files allowed, refusals)."""
+    changed = changed_config(root)
+    if changed is None:
+        return [], ["git status failed: the test configuration cannot be compared with HEAD"]
+    declared: set[str] = set()
+    for leaf in _harness.leaves():
+        if _open(root, leaf):
+            declared.update(_harness.leaf_files(str(leaf["id"])) or [])
+    problems = []
+    for rel in changed:
+        if Path(rel).name == "conftest.py":
+            problems.append(f"{rel}: a changed conftest.py is never tolerated")
+        elif rel not in declared:
+            problems.append(f"{rel}: changed, and not in the files: of the in-progress subtask")
+    return ([], problems) if problems else (changed, [])
 
 
 # A C Makefile whose test list the gate can override exactly: TESTS assigned once,
@@ -156,6 +239,30 @@ def same_recipes(full: str, reduced: str, files: list[str], every: str, kept: st
     )
 
 
+def _cmd_cascade(target: str) -> int:
+    try:
+        print(",".join(_plan_seal.cascade(Path.cwd(), target)))
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    return 0
+
+
+def _cmd_sealed(target: str) -> int:
+    try:
+        return 0 if _plan_seal.sealed(Path.cwd(), target) else 1
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
+
+def _cmd_config_ok() -> int:
+    allowed, refused = config_ok(Path.cwd())
+    for line in refused or allowed:
+        print(line)
+    return 1 if refused else 0
+
+
 def main(argv: list[str]) -> int:
     if argv[:1] == ["same-recipes"] and len(argv) == 6:
         full, reduced, tfile, every, kept = (Path(a).read_text(encoding="utf-8") for a in argv[1:])
@@ -164,10 +271,18 @@ def main(argv: list[str]) -> int:
     if argv[:1] == ["c-makefile-ok"]:
         path = Path("Makefile")
         return 0 if path.is_file() and c_makefile_ok(path.read_text(encoding="utf-8")) else 1
-    if len(argv) != 1 or not _harness.RE_ISSUE_ID.match(argv[0]):
+    if argv[:1] in (["cascade"], ["sealed"]) and len(argv) == 2:
+        return (_cmd_cascade if argv[0] == "cascade" else _cmd_sealed)(argv[1])
+    if argv == ["config-ok"]:
+        return _cmd_config_ok()
+    if argv == ["leaf"]:
+        iid: str | None = None
+    elif len(argv) == 1 and _harness.RE_ISSUE_ID.match(argv[0]):
+        iid = argv[0]
+    else:
         print(__doc__, file=sys.stderr)
         return 2
-    files, problems = tolerated(Path.cwd(), argv[0])
+    files, problems = tolerated(Path.cwd(), iid)
     for line in problems or files:
         print(line)
     return 3 if problems else 0

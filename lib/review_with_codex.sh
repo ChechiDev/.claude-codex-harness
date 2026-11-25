@@ -150,23 +150,12 @@ run_check_tolerating() {
   local log="$1" target="$2" files="$3" label out origin keep=() t f skip args=()
   # The build and test configuration must be what the last approved close committed
   # (the leader cannot commit outside it): a changed or new Makefile, pyproject.toml,
-  # setup.cfg, tox.ini, pytest.ini or conftest.py (git-ignored ones too) means no
-  # third run.
-  local cfg
-  cfg="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git status --porcelain \
-    --ignored --untracked-files=all -- Makefile GNUmakefile makefile pyproject.toml setup.cfg \
-    tox.ini pytest.ini ':(glob)**/conftest.py' ':(exclude,glob)**/.venv/**' \
-    ':(exclude,glob)**/venv/**' ':(exclude,glob)**/node_modules/**' 2>&1)" || return 99
-  [ -z "$cfg" ] || return 99
-  # Index flags (assume-unchanged, skip-worktree) hide changes from git status:
-  # compare each tracked configuration file's content with its blob in HEAD too.
-  local rel want have
-  while IFS= read -r -d '' rel; do
-    want="$(git rev-parse -q --verify "HEAD:./$rel" 2>/dev/null)" || return 99
-    have="$(git hash-object -- "$rel" 2>/dev/null)" || return 99
-    [ "$want" = "$have" ] || return 99
-  done < <(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git ls-files -z -- Makefile \
-    GNUmakefile makefile pyproject.toml setup.cfg tox.ini pytest.ini ':(glob)**/conftest.py')
+  # setup.cfg, tox.ini, pytest.ini or conftest.py (git-ignored ones too, and tracked
+  # ones hidden by index flags) means no third run. Issue #125 (B1-config): except a
+  # file in the `files:` of the in-progress subtask, never a conftest.py; the prompt
+  # lists it for the reviewer (TOLERATED_CFG).
+  TOLERATED_CFG="$(python3 "$HARNESS_DIR/_expect_red.py" config-ok 2>/dev/null)" ||
+    { TOLERATED_CFG=""; return 99; }
   # GNU make prefers GNUmakefile and makefile over Makefile: the probe and the
   # check must read the same file, so only a lone Makefile gets a third run.
   if [ -e GNUmakefile ] || [ -e makefile ] || [ ! -f Makefile ]; then return 99; fi
@@ -534,6 +523,7 @@ if [ "$MODE_EXEC" = "auto" ]; then python3 "$RESUME_PY" budget "$STEP" "$ID" || 
 CODEX_PHASE="$PHASE"
 [ -f "$ROLE" ] || { echo "role prompt not found: $ROLE" >&2; exit 1; }
 
+REPLAN_SNAP=""
 # Preconditions: never review a step whose prerequisite is not approved yet.
 case "$PHASE" in
   # The roadmap waits for an approved, intact docs/stack.md (issue #115).
@@ -558,7 +548,11 @@ case "$PHASE" in
              exit 1
            fi ;;
   plan)    python3 "$HARNESS_PY" subtask-ready "$ID" || exit 1
-           python3 "$HARNESS_DIR/_guard.py" migrates-ready "$ID" || exit 1 ;;
+           python3 "$HARNESS_DIR/_guard.py" migrates-ready "$ID" || exit 1
+           if [ -f "progress/acceptance_$ID.sha256" ]; then  # a re-plan (issue #125)
+             REPLAN_SNAP="$(python3 "$HARNESS_DIR/_oracle.py" replan-snapshot "$ID")" ||
+               { printf '%s\n' "$REPLAN_SNAP" >&2; exit 1; }
+           fi ;;
   issue-draft)
     [ -f progress/issue_draft.md ] || {
       fail "no progress/issue_draft.md: the leader writes the draft first" >&2; exit 1; } ;;
@@ -681,8 +675,16 @@ fi
 # computes T (_expect_red.py) and runs the check a third time without T. Any
 # ineligible `migrates:` entry, an empty T or a project whose tests cannot be
 # filtered means no third run (fail-closed, the #27 rule applies).
+# Issue #125 (B1): every re-gate (stack, roadmap, phase, task) gets the third run too;
+# its T is the in-progress subtask's own oracle (`_expect_red.py leaf`).
+TOLERATED_CFG=""
 third_run_step() {
-  local iid="$1" target="$2" files rc log
+  local iid="$1" target="$2" files rc log mode="issue mode" why
+  why="an acceptance test of its own in-progress subtask (red by design) or a migrated oracle"
+  if [ "$iid" = "leaf" ]; then
+    mode="$PHASE gate"
+    why="an acceptance test of the in-progress subtask (its own plan and code gates decide it)"
+  fi
   files="$(python3 "$HARNESS_DIR/_expect_red.py" "$iid" 2>&1)"; rc=$?
   if [ "$rc" -eq 3 ]; then
     printf '\n%s\n%s\n%s' \
@@ -698,8 +700,15 @@ third_run_step() {
     printf '\n%s' "No third run: this project's tests cannot be filtered by file."
     return 0
   fi
-  printf '\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
-    "Third run (in-progress re-gate, issue mode): \`$CHECK_CMD\` again with" \
+  if [ -n "$TOLERATED_CFG" ]; then
+    printf '\n%s\n%s\n%s\n%s' \
+      "The changed test configuration below differs from HEAD; it is tolerated only because each" \
+      "file is in the files: of the in-progress subtask (issue #125). Read each diff (git diff HEAD --" \
+      "<file>, or the whole file if untracked) and confirm it changes no test collection or selection:" \
+      "$(printf '%s\n' "$TOLERATED_CFG" | sed 's/^/  - /')"
+  fi
+  printf '\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+    "Third run (in-progress re-gate, $mode): \`$CHECK_CMD\` again with" \
     "HARNESS_ASSUME_APPROVED=$target and HARNESS_EXPECT_RED=$(printf '%s' "$files" | paste -sd, -) (the gate" \
     "excluded these test files of T from the tests; their lint and build still ran in the first two runs):" \
     "$(printf '%s\n' "$files" | sed 's/^/  - /')" \
@@ -707,7 +716,8 @@ third_run_step() {
     "With the counterfactual run red you may approve only if this run is green AND your" \
     "verdict accounts for every test in every file of T, not only the failures in the logs" \
     "(read each file and the subtask's changes; see your role's in-progress re-gate rule);" \
-    "list T, the first run's FAIL lines and that per-file accounting."
+    "list T, the first run's FAIL lines and that per-file accounting." \
+    "Each test of T may fail only as $why; anything else blocks."
 }
 ASSUME_STEP=""
 if [ "$CHECK_RC" -ne 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ]; then
@@ -720,17 +730,37 @@ if [ "$CHECK_RC" -ne 0 ] && [ -z "${HARNESS_CHECK_CMD+set}" ]; then
     issue)   ASSUME="issue:$ID" ;;
   esac
   if [ -n "$ASSUME" ]; then
+    # Coupled re-gates (issue #125, A1): a re-gate (this target sealed before) also
+    # assumes every re-gate pending below it (sealed before, now changed or not
+    # approved). Never one above it, so the re-gates go top down. A first approval,
+    # or a failure to compute it, assumes nothing more and gets no third run (B1).
+    REGATE=""; CASCADE=""
+    if python3 "$HARNESS_DIR/_expect_red.py" sealed "$ASSUME" 2>/dev/null; then
+      REGATE=1
+      CASCADE="$(python3 "$HARNESS_DIR/_expect_red.py" cascade "$ASSUME" 2>/dev/null)" || CASCADE=""
+    fi
+    SCOPE="(only this target's verdict reads approved and only its seal reads matching)"
+    if [ -n "$CASCADE" ]; then
+      SCOPE="(only these targets' verdicts read approved and only their seals read matching:
+$ASSUME, this gate's target, and the pending re-gates below it: $CASCADE.
+Those stay pending: each one still needs its own gate, run after this one)"
+      ASSUME="$ASSUME,$CASCADE"
+    fi
     ASSUME_LOG="$(new_log "$PHASE-assumed")"
     run_check_assuming "$ASSUME_LOG" "$ASSUME"
     ASSUME_RC=$?
     ASSUME_STEP="
 Counterfactual run (re-gate): \`$CHECK_CMD\` again with HARNESS_ASSUME_APPROVED=$ASSUME
-(only this target's verdict reads approved and only its seal reads matching):
+$SCOPE:
 exit code $ASSUME_RC, full output in $ASSUME_LOG.
 With the first run red you may approve only if this run is green; list the first
 run's FAIL lines in your verdict."
-    if [ "$ASSUME_RC" -ne 0 ] && [ "$PHASE" = "issue" ]; then
-      ASSUME_STEP="$ASSUME_STEP$(third_run_step "$ID" "$ASSUME")"
+    if [ "$ASSUME_RC" -ne 0 ]; then
+      if [ "$PHASE" = "issue" ]; then
+        ASSUME_STEP="$ASSUME_STEP$(third_run_step "$ID" "$ASSUME")"
+      elif [ -n "$REGATE" ]; then
+        ASSUME_STEP="$ASSUME_STEP$(third_run_step leaf "$ASSUME")"
+      fi
     fi
   fi
 fi
@@ -750,6 +780,24 @@ roadmap) and \`git log\` of this branch. The harness opens the PR after the comm
   fi
 fi
 
+# Re-plan (issue #125, C1): the plan gate of a subtask whose oracle is already sealed
+# (work in progress, or a defective oracle) may rewrite it. The reviewer gets a copy
+# of the sealed oracle verified against its seal (REPLAN_SNAP, taken before anything
+# runs: no verified copy, no re-plan); an approval re-seals it, which voids the
+# subtask's earlier code approval (_guard.py seal), and appends the oracle's diff to
+# the review history.
+REPLAN_STEP=""
+if [ -n "$REPLAN_SNAP" ]; then
+  REPLAN_STEP="
+
+Re-plan (issue #125): subtask $ID already has a sealed oracle (progress/acceptance_$ID.sha256)
+and may have work in progress. Apply your role's re-plan rules: rewrite the oracle from the
+spec, account for every test you change, add or remove, and never weaken one without a
+criterion change the upstream gates approved. An approval re-seals the oracle and voids any
+earlier code approval of $ID (its code gate runs again).
+Your read-only copy of the sealed oracle: $REPLAN_SNAP/oracle"
+fi
+
 # What Codex reads. The close gates (issue #62) read only their specs, reports and
 # the diff of their close commits: never the whole repo (cost limit).
 CONTEXT="Context you must read: AGENTS.md, docs/architecture.md, docs/conventions.md,
@@ -758,7 +806,13 @@ case "$PHASE" in
   stack)
     CONTEXT="Context you must read: docs/stack.md, AGENTS.md, the existing code and its
 package manifest or lock file if there is one (pyproject.toml, package.json, Cargo.toml…),
-and progress/current.md. No plan exists yet: the stack comes before the discovery." ;;
+and progress/current.md. No plan exists yet: the stack comes before the discovery."
+    if ls docs/plan/phase-*.md >/dev/null 2>&1; then
+      CONTEXT="Context you must read: docs/stack.md, AGENTS.md, the existing code and its
+package manifest or lock file if there is one (pyproject.toml, package.json, Cargo.toml…),
+and progress/current.md. A plan already exists (docs/plan/): this is a re-gate of the stack;
+review the stack itself, the plan is context."
+    fi ;;
   task-close|phase-close)
     GOAL_FILE="$(ls docs/plan/phase-"${ID%%.*}"-*.md docs/plan/phase-0"${ID%%.*}"-*.md 2>/dev/null | head -1)"
     [ "$PHASE" = "task-close" ] || GOAL_FILE="docs/plan/PLAN.md $GOAL_FILE"
@@ -794,7 +848,7 @@ Test suite: this sandbox cannot run it (local sockets are blocked).
 Do NOT run \`make check\`, \`make verify\`, the tests or anything that runs them.
 The harness ran \`$CHECK_CMD\` outside the sandbox just before this session:
 exit code $CHECK_RC, full output in $CHECK_LOG.
-That result is the one AGENTS.md step 1 asks for.$ASSUME_STEP$CLOSE_STEP$POLICY_STEP
+That result is the one AGENTS.md step 1 asks for.$ASSUME_STEP$CLOSE_STEP$POLICY_STEP$REPLAN_STEP
 
 Respect your role's output contract (write the verdict/result to the indicated
 progress/ file and return a single reference line).
@@ -830,6 +884,10 @@ if [ "$MODE_EXEC" = "manual" ]; then
   if [ -n "$SEAL_ON" ]; then
     echo "--- after $SEAL_ON, seal what was approved (human only) ---"
     echo "./harness/review_with_codex.sh seal ${SEAL_ARGS[*]}"
+  fi
+  if [ -n "$REPLAN_SNAP" ]; then
+    echo "--- after the re-plan's seal, record the superseded oracle ---"
+    echo "python3 harness/_oracle.py replan-history $ID $REPLAN_SNAP"
   fi
   if [ "$PHASE" = "doc" ]; then
     echo "--- after Codex writes progress/close_$ID.msg, check and commit ---"
@@ -919,6 +977,15 @@ if [ -n "$SEAL_ON" ] && [ "$TOKEN" = "$SEAL_ON" ]; then
   # with the check result and the oracle/selection fingerprints (WARN only).
   if [ "$PHASE" = "plan" ]; then
     python3 "$HARNESS_DIR/_oracle.py" red-record "$ID" "$CHECK_RC" || true
+    # The superseded oracle must reach the history: a failure fails the step (the
+    # approval and the seal stand; the snapshot stays for the retry).
+    if [ -n "$REPLAN_SNAP" ] &&
+        ! python3 "$HARNESS_DIR/_oracle.py" replan-history "$ID" "$REPLAN_SNAP"; then
+      fail "the superseded oracle of $ID is not in its review history; retry:" \
+        "python3 harness/_oracle.py replan-history $ID $REPLAN_SNAP" >&2
+      attempt_end "$STEP" "$ID" fail "superseded oracle not recorded"
+      exit 1
+    fi
   fi
 fi
 attempt_end "$STEP" "$ID" ok "$TOKEN"

@@ -272,9 +272,11 @@ ASSUME_VAR = "HARNESS_ASSUME_APPROVED"
 
 def assumed(kind: str, ident: str = "") -> bool:
     """True when the gate's counterfactual run assumes this exact target approved
-    (HARNESS_ASSUME_APPROVED=roadmap | phase:NN | issue:ISS-n | stack), issues #27, #115."""
+    (HARNESS_ASSUME_APPROVED=roadmap | phase:NN | task:N.M | issue:ISS-n | stack), issues
+    #27, #115. Issue #125: a comma-separated list, the gate's own target and the pending
+    re-gates below it (_plan_seal.cascade); each entry must match exactly."""
     target = f"{kind}:{ident}" if ident else kind
-    return os.environ.get(ASSUME_VAR, "") == target
+    return target in os.environ.get(ASSUME_VAR, "").split(",")
 
 
 def read_verdict(path: Path) -> str:
