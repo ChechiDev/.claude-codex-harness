@@ -15,6 +15,9 @@ nothing is active: the launcher prints a one-line note (`I5 inactive`).
 | `ruff.toml`, `.ruff.toml`, `mypy.ini`, `.mypy.ini` | whole file, at every location (ruff uses the nearest) |
 | `setup.cfg[mypy]`, `setup.cfg[mypy-*]` | the mypy sections |
 | `ruff-extend:<path>` | the file named by ruff's `extend` |
+| `<dir>/.flake8` | whole file, at every location (#126) |
+| `setup.cfg[flake8]`, `tox.ini[flake8]`, `[flake8:*]` | the flake8 sections; an unparsable `tox.ini` with a `[flake8]` header is sealed whole (`setup.cfg` already is) |
+| `pyproject.toml[tool.flake8]` | the section read by the flake8-pyproject plugin |
 | `config-path:<path>` | the file named by `--config`, `--config-file`, `--rcfile` or `--settings` in a recipe |
 | `make:<file>` | every makefile make reads (`MAKEFILE_LIST`, as I4b resolves it) except the toolkit's `harness/harness.mk`; an unresolvable include is `UNRESOLVED` |
 | `target:<t>` and `target:<t>:prereqs` | recipe and phony prerequisites of `lint`, `type`, `build`, `verify` and the `%.o: %.c` rule; removing `lint` from `verify` changes it |
@@ -67,6 +70,21 @@ from the M0b legacy inventory and from the I4 baseline. The steps:
 2. Codex reviews it.
 3. `baseline-seal` writes the seal.
 
+**Baseline version (#126).** `baseline-create` writes `"version": 2`: its inventory
+covers flake8. A baseline sealed earlier (`version` 1 or absent) has no flake8 keys; it
+is not rewritten. Instead `check`, `contract-propose` and `contract-approve` derive its
+flake8 side from the tracked files of its sealed `from` commit (same pruning as the
+walk), with the same keys. So a project without flake8, or with flake8 config unchanged
+since that commit, gets no new warning; flake8 config relaxed since then warns as
+changed, added or removed. If that commit cannot be read (not a full hash, missing in a
+shallow clone), the derived side is empty and every current flake8 input warns as
+added (fail closed). Symlinks are followed inside the commit as the live walk follows
+them; a link that leaves the project is `UNRESOLVED` (fail closed) when the file is a
+`.flake8` or has flake8 config today, and is skipped otherwise (a shared file without
+flake8 today gets no warning; that is the residual gap). The first approved contract
+reseals the baseline as version 2. The guard looks up `tox.ini` in the derived side
+too.
+
 The guard treats both files and the review as Codex-owned. `baseline-*`,
 `contract-review` and `contract-approve` are sealer verbs, so Claude cannot run them.
 That is the deliberate exception to WARN, the same as I4b.
@@ -74,7 +92,8 @@ That is the deliberate exception to WARN, the same as I4b.
 ## 5. Guard
 
 When the I5 baseline exists, an edit by Claude to `pyproject.toml`, `ruff.toml`,
-`.ruff.toml`, `mypy.ini`, `.mypy.ini`, `setup.cfg`, any makefile, `*.mk` or a file the
+`.ruff.toml`, `mypy.ini`, `.mypy.ini`, `setup.cfg`, `.flake8`, a `tox.ini` with a
+`[flake8]` section (or one the baseline sealed), any makefile, `*.mk` or a file the
 baseline resolved (config path, ruff extend) is allowed with a `[WARN]` (`systemMessage`
 and `additionalContext`). It is merged with I4b's warning into one hook answer.
 

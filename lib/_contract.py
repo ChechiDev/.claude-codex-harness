@@ -5,6 +5,8 @@
 
   - ruff/mypy config: pyproject.toml [tool.ruff]/[tool.mypy], ruff.toml, .ruff.toml,
     mypy.ini, .mypy.ini, setup.cfg [mypy*] (every location), ruff `extend` targets;
+  - flake8 config (#126): .flake8, [flake8*] of setup.cfg / tox.ini, pyproject.toml
+    [tool.flake8] (flake8-pyproject), every location;
   - config-path flags in the recipes (--config, --config-file, --rcfile, --settings);
   - every makefile make reads (includes resolved by make itself);
   - the recipes and prerequisites of lint, type, build, verify and the %.o rule, and
@@ -22,6 +24,10 @@
 
 Without a sealed baseline nothing is active (a note says so). Every finding is a
 [WARN] with its remedy and exit 0 (FAIL is the I5-fail issue).
+
+A version-1 baseline (sealed before #126) has no flake8 inputs: they are derived from
+its sealed `from` commit, so unchanged flake8 config (or none) adds no warning. Any
+contract approval reseals it as version 2.
 """
 
 from __future__ import annotations
@@ -54,6 +60,9 @@ CONFIG_NAMES = frozenset(
     {"pyproject.toml", "ruff.toml", ".ruff.toml", "mypy.ini", ".mypy.ini", "setup.cfg"}
 )
 MAKE_NAMES = frozenset({"Makefile", "GNUmakefile", "makefile"})
+FLAKE8_NAMES = (".flake8", "pyproject.toml", "setup.cfg", "tox.ini")
+VERSION = 2  # 2: the inventory covers flake8 config (#126)
+RE_FLAKE8_SECTION = re.compile(r"^\s*\[flake8(?::[^\]]*)?\]", re.M)
 TARGETS = ("lint", "type", "build", "verify", "%.o")
 TAG = "verification contract"
 FIX = (
@@ -300,6 +309,133 @@ def _variables(inv: Inventory, variables: dict[str, tuple[str, str]], pending: l
         pending.extend(RE_VAR.findall(value.replace("$$", "")))
 
 
+def _flake8_entries(rel: str, data: bytes) -> Inventory:
+    """The flake8 inputs of one config file (`rel`'s basename is in FLAKE8_NAMES)."""
+    name = Path(rel).name
+    if name == ".flake8":
+        return {rel: _oracle._sha_bytes(data)}
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    if name == "pyproject.toml":
+        # Unreadable: the whole file is already sealed by _pyproject.
+        with contextlib.suppress(tomllib.TOMLDecodeError):
+            tool = tomllib.loads(text).get("tool", {}) if text is not None else {}
+            if isinstance(tool, dict) and "flake8" in tool:
+                return {f"{rel}[tool.flake8]": _sha(_oracle._canon(tool["flake8"]))}
+        return {}
+    parser = configparser.RawConfigParser()
+    try:
+        if text is None:
+            raise configparser.Error("not UTF-8")
+        parser.read_string(text, source=rel)
+    except configparser.Error:
+        # setup.cfg is then sealed whole by _setup_cfg; tox.ini only if it has flake8.
+        flake8 = name == "tox.ini" and RE_FLAKE8_SECTION.search(data.decode("utf-8", "replace"))
+        return {rel: _oracle._sha_bytes(data)} if flake8 else {}
+    return {
+        f"{rel}[{sec}]": _sha(_oracle._canon(dict(parser.items(sec))))
+        for sec in parser.sections()
+        if sec == "flake8" or sec.startswith("flake8:")
+    }
+
+
+def _flake8_files(inv: Inventory) -> None:
+    for base, dirs, files in os.walk(ROOT):  # one pass, pruned as _oracle._walk
+        dirs[:] = sorted(d for d in dirs if d not in _oracle.PRUNE)
+        for name in sorted(set(files).intersection(FLAKE8_NAMES)):
+            path = Path(base) / name
+            with contextlib.suppress(OSError):
+                inv.update(_flake8_entries(path.relative_to(ROOT).as_posix(), path.read_bytes()))
+
+
+def _tree_at(commit: str) -> dict[str, tuple[str, str]]:
+    """path -> (mode, blob) of the files tracked at `commit`, below ROOT."""
+    listing = _oracle._git("ls-tree", "-r", "-z", commit) or ""
+    tree: dict[str, tuple[str, str]] = {}
+    for entry in listing.split("\0"):
+        meta, _, rel = entry.partition("\t")
+        fields = meta.split()
+        if rel and len(fields) == 3 and fields[1] == "blob":
+            tree[rel] = (fields[0], fields[2])
+    return tree
+
+
+def _resolve_at(tree: dict[str, tuple[str, str]], rel: str) -> str | None:
+    """`rel` with every symlink in its path resolved inside the commit, as the live read
+    resolves it; None when a link leaves ROOT (unknown then: fail closed)."""
+    for _ in range(40):
+        parts = rel.split("/")
+        for i in range(1, len(parts) + 1):
+            mode, sha = tree.get("/".join(parts[:i]), ("", ""))
+            if mode == "120000":
+                target = _oracle._git("cat-file", "blob", sha) or ""
+                rel = os.path.normpath(
+                    os.path.join(os.path.dirname("/".join(parts[:i])), target, *parts[i:])
+                )
+                if not target or os.path.isabs(target) or rel == ".." or rel.startswith("../"):
+                    return None
+                break
+        else:
+            return rel
+    return None
+
+
+def _blob_at(tree: dict[str, tuple[str, str]], rel: str) -> bytes | None:
+    """The content `rel` reads as at that commit, or None when a link leaves ROOT.
+    Raises FileNotFoundError for a broken link (the live read fails and adds nothing)."""
+    resolved = _resolve_at(tree, rel)
+    if resolved is None:
+        return None
+    if resolved not in tree:
+        raise FileNotFoundError(resolved)
+    blob = _oracle._git("cat-file", "blob", tree[resolved][1])
+    if blob is None:
+        raise FileNotFoundError(resolved)
+    return blob.encode("utf-8", "surrogateescape")
+
+
+def _live_flake8(rel: str) -> bool:
+    try:
+        return bool(_flake8_entries(rel, (ROOT / rel).read_bytes()))
+    except OSError:
+        return False
+
+
+def _flake8_at(commit: str) -> Inventory:
+    """The flake8 inputs as of `commit` (tracked files, same pruning), or {} if unreadable:
+    then the current flake8 inputs read as added (fail closed)."""
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+        return {}
+    tree = _tree_at(commit)
+    inv: Inventory = {}
+    for rel in tree:
+        parts = rel.split("/")
+        if parts[-1] not in FLAKE8_NAMES or _oracle.PRUNE.intersection(parts[:-1]):
+            continue
+        try:
+            data = _blob_at(tree, rel)
+        except FileNotFoundError:
+            continue
+        if data is not None:
+            inv.update(_flake8_entries(rel, data))
+        elif parts[-1] == ".flake8" or _live_flake8(rel):
+            # A shared file (setup.cfg…) without flake8 today stays silent (residual gap).
+            inv[rel] = "UNRESOLVED"
+    return inv
+
+
+def sealed_inputs(base: dict[str, Any]) -> Inventory:
+    """The sealed inputs; a version-1 baseline gets its flake8 side from its commit."""
+    inputs: Inventory = dict(base.get("inputs") or {})
+    version, commit = base.get("version"), base.get("from")
+    if isinstance(version, int) and version >= VERSION or not isinstance(commit, str):
+        return inputs
+    # A sealed v1 key keeps its sealed value over a derived one of the same name.
+    return {**_flake8_at(commit), **inputs}
+
+
 _SEEN_EXTEND: set[str] = set()
 
 
@@ -307,6 +443,7 @@ def inventory() -> Inventory:
     inv: Inventory = {}
     _SEEN_EXTEND.clear()
     _config_files(inv)
+    _flake8_files(inv)
     _make_inputs(inv)
     return inv
 
@@ -314,8 +451,16 @@ def inventory() -> Inventory:
 def config_input(rel: str, known: Inventory | None = None) -> bool:
     """`rel` decides how lint/type/build run (the guard warns on Claude's edit)."""
     name = Path(rel).name
-    if name in CONFIG_NAMES or name in MAKE_NAMES or rel.endswith(".mk"):
+    if name in CONFIG_NAMES or name in MAKE_NAMES or name == ".flake8" or rel.endswith(".mk"):
         return True
+    if name == "tox.ini":
+        with contextlib.suppress(OSError):
+            if RE_FLAKE8_SECTION.search((ROOT / rel).read_text("utf-8", "replace")):
+                return True
+        base = baseline()[0]
+        sealed = {**(known or {}), **(sealed_inputs(base) if base else {})}
+        if any(k == rel or k.startswith(f"{rel}[") for k in sealed):
+            return True
     return any(k.split(":", 1)[-1] == rel for k in (known or {}) if ":" in k)
 
 
@@ -387,14 +532,19 @@ def baseline_create(args: list[str]) -> int:
     tree = _oracle._git("ls-tree", "-r", "--name-only", commit) or ""
     for rel in tree.splitlines():
         name = Path(rel).name
-        watched = name in CONFIG_NAMES or name in MAKE_NAMES or rel.endswith(".mk")
+        watched = (
+            name in CONFIG_NAMES
+            or name in MAKE_NAMES
+            or name == ".flake8"  # a tox.ini is watched only through its [flake8] key
+            or rel.endswith(".mk")
+        )
         if watched and not (ROOT / rel).exists():
             warn(f"baseline-create: {rel} existed at {commit[:12]} and is gone: review it")
     for key, origin in inv.items():
         if key.endswith(":origin") and origin in OVERRIDE_ORIGINS:
             warn(f"baseline-create: {key[:-7]} comes from the {origin}: unset it before sealing")
     data = {
-        "version": 1,
+        "version": VERSION,
         "from": commit,
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "inputs": inv,
@@ -431,7 +581,7 @@ def check(_: list[str]) -> int:
             f"changed outside the contract flow) — fix: git checkout -- {BASELINE} "
             f"{BASELINE_SEAL}, or reseal through contract-approve"
         )
-    sealed: Inventory = base.get("inputs") or {}
+    sealed = sealed_inputs(base)
     now = inventory()
     for key in sorted(now):
         if now[key] == "UNRESOLVED":
@@ -473,7 +623,7 @@ def contract_propose(args: list[str]) -> int:
     base, _ = baseline()
     if base is None:
         return check([])
-    sealed: Inventory = base.get("inputs") or {}
+    sealed = sealed_inputs(base)
     now = inventory()
     changes = _changes(sealed, now)
     if not changes:
@@ -571,7 +721,7 @@ def contract_approve(args: list[str]) -> int:
         frm, to = prop.get("from") or {}, prop.get("to") or {}
         if prop.get("diff") != want or _digest(frm, to, str(prop.get("reason", ""))) != want:
             problems.append("the proposal does not hash to this diff (edited after review?)")
-        if frm != (base.get("inputs") or {}) or to != now:
+        if frm != sealed_inputs(base) or to != now:
             problems.append("the inputs or the baseline changed after the proposal")
         verdict, digest = _oracle._review_of(review.read_text("utf-8") if review.is_file() else "")
         if verdict != "APPROVED" or digest != want:
@@ -585,6 +735,7 @@ def contract_approve(args: list[str]) -> int:
             )
         return 0
     base["inputs"] = now
+    base["version"] = VERSION
     base.setdefault("contracts", []).append(
         {"diff": want, "approved": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     )
