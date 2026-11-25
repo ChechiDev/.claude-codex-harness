@@ -108,6 +108,25 @@ done in `progress/task_flow_legacy_<NN>.json` (sealed in the phase seal: editing
 or deleting it fails `make check`); only the others need a task-close, and the
 phase needs its phase-close (unless it was already finished). Design: the toolkit's `docs/design/task-flow.md`.
 
+### Coupled re-gates (issue #125)
+
+When one decision changes several approved targets at once (docs/stack.md, the
+roadmap, a phase file, a task's specs, an issue), possibly while a subtask is in
+progress, re-gate them **top down**: stack → roadmap → phase NN → task N.M → the
+in-progress subtask's plan gate. Each gate's counterfactual run assumes its own
+target plus the pending re-gates *below* it (sealed before, now changed or
+rejected), never one above, so a lower gate cannot approve while a higher one is
+pending. Every re-gate (not only an issue's) also gets the third run: the
+in-progress subtask's own oracle is left out, and a test configuration file that
+subtask declares in `files:` may differ from HEAD (never a conftest.py; Codex reads
+its diff). Its code gate and close still need that oracle green.
+
+A defective sealed oracle of the in-progress subtask is fixed by its plan gate run
+again (a **re-plan**), last in that order: Codex rewrites the oracle from the spec,
+accounts for every changed test, and the re-seal voids any earlier code approval.
+Never revert, edit or seal a verdict or a seal by hand to get out of it. Mind the
+round cap (`[review] max_rounds`): rejections caused by the coupling count too.
+
 ### When the leader role does NOT apply
 
 - Conceptual questions / exploration (read-only) → answer directly yourself.

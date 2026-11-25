@@ -21,6 +21,11 @@ prove something if the normal check selects and executes them. This module:
   contract-review               Codex reviews the proposal (review_with_codex.sh contract).
   contract-approve <hash>       human OK: reseal the baseline when proposal, verdict,
                                 approval and the current inputs share the hash.
+  replan-snapshot <leaf>        re-plan (issue #125): print a directory with a copy of
+                                the sealed oracle, every file verified against its
+                                manifest (exit 1 if none can be made: fail closed).
+  replan-history <leaf> <dir>   after the re-plan's seal: append the superseded
+                                oracle's diff to the leaf's review history.
 
 Without a sealed baseline none of the checks is active (a note says so). Every
 finding is a [WARN] with its remedy; the exit code never changes (FAIL is the
@@ -31,11 +36,13 @@ from __future__ import annotations
 
 import ast
 import configparser
+import difflib
 import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -926,6 +933,106 @@ def contract_approve(args: list[str]) -> int:
     return 0
 
 
+# ── re-plan (issue #125) ─────────────────────────────────────────────────────
+
+REPLAN_DIR = "harness-replan"  # git-path; harness-owned (.git/harness-*)
+RE_LEAF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
+
+
+def _oracle_manifest(leaf: str) -> Path:
+    return ROOT / "progress" / f"acceptance_{leaf}.sha256"
+
+
+def _manifest_entries(text: str) -> dict[str, str]:
+    entries = {}
+    for line in text.splitlines():
+        digest, _, rel = line.partition("  ")
+        if digest and rel:
+            entries[rel] = digest
+    return entries
+
+
+def _verified(base: Path, entries: dict[str, str]) -> bool:
+    try:
+        return bool(entries) and all(
+            (base / rel).is_file() and _sha_file(base / rel) == digest
+            for rel, digest in entries.items()
+        )
+    except OSError:
+        return False
+
+
+def replan_snapshot(args: list[str]) -> int:
+    """The sealed oracle of <leaf>, verified: built from the working files when they
+    still match the seal, else an earlier round's copy of this same seal (a rejected
+    round may have rewritten the files). Printed: the snapshot directory, holding
+    manifest.sha256 and oracle/<path>. Exit 1 when no verified copy exists."""
+    if len(args) != 1 or not RE_LEAF.match(args[0]):
+        print(__doc__, file=sys.stderr)
+        return 2
+    leaf = args[0]
+    try:
+        text = _oracle_manifest(leaf).read_text(encoding="utf-8")
+    except OSError:
+        say("FAIL", f"re-plan of {leaf}: no readable progress/acceptance_{leaf}.sha256")
+        return 1
+    entries = _manifest_entries(text)
+    snap = _git_path(REPLAN_DIR) / leaf / _sha_bytes(text.encode("utf-8"))[:16]
+    if _verified(snap / "oracle", entries):
+        print(snap)
+        return 0
+    if not _verified(ROOT, entries):
+        say(
+            "FAIL",
+            f"re-plan of {leaf}: its oracle differs from its seal and no verified copy of "
+            "the sealed oracle exists, so the reviewer could not see what it replaces. "
+            "The human restores the sealed tests (git) or decides; the re-plan was not run",
+        )
+        return 1
+    try:
+        shutil.rmtree(snap, ignore_errors=True)
+        for rel in entries:
+            (snap / "oracle" / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / rel, snap / "oracle" / rel)
+        (snap / "manifest.sha256").write_text(text, encoding="utf-8")
+    except OSError as exc:
+        say("FAIL", f"re-plan of {leaf}: could not copy the sealed oracle: {exc}")
+        return 1
+    print(snap)
+    return 0
+
+
+def replan_history(args: list[str]) -> int:
+    """Append the diff old -> new oracle (exact path sets of both manifests) to
+    progress/review_history/<leaf>.md, then drop the leaf's snapshots."""
+    if len(args) != 2 or not RE_LEAF.match(args[0]):
+        print(__doc__, file=sys.stderr)
+        return 2
+    leaf, snap = args[0], Path(args[1])
+    try:
+        old = _manifest_entries((snap / "manifest.sha256").read_text(encoding="utf-8"))
+        new = _manifest_entries(_oracle_manifest(leaf).read_text(encoding="utf-8"))
+        lines: list[str] = []
+        for rel in sorted(old.keys() | new.keys()):
+            before = (snap / "oracle" / rel).read_text(encoding="utf-8") if rel in old else ""
+            after = (ROOT / rel).read_text(encoding="utf-8") if rel in new else ""
+            lines += difflib.unified_diff(
+                before.splitlines(keepends=True), after.splitlines(keepends=True),
+                f"a/{rel}" if rel in old else "/dev/null",
+                f"b/{rel}" if rel in new else "/dev/null",
+            )  # fmt: skip
+        body = "".join(line if line.endswith("\n") else line + "\n" for line in lines)
+        history = ROOT / "progress" / "review_history" / f"{leaf}.md"
+        history.parent.mkdir(parents=True, exist_ok=True)
+        with history.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n## Superseded oracle (re-plan, issue #125)\n\n```diff\n{body}```\n")
+    except OSError as exc:
+        say("FAIL", f"re-plan of {leaf}: could not record the superseded oracle: {exc}")
+        return 1
+    shutil.rmtree(_git_path(REPLAN_DIR) / leaf, ignore_errors=True)
+    return 0
+
+
 COMMANDS = {
     "evidence": evidence,
     "inventory": lambda _: print(json.dumps(inventory(), indent=2, sort_keys=True)) or 0,
@@ -937,6 +1044,8 @@ COMMANDS = {
     "contract-propose": contract_propose,
     "contract-review": contract_review,
     "contract-approve": contract_approve,
+    "replan-snapshot": replan_snapshot,
+    "replan-history": replan_history,
 }
 
 

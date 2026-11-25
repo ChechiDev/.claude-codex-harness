@@ -482,3 +482,102 @@ def _verify_issues(
             else:
                 problems.append(msg + gate.format(iid))
         problems += [m + gate.format(iid) for m in _lowered(root, sealed, current, f"issue {iid}")]
+
+
+# ── coupled re-gates (issue #125) ────────────────────────────────────────────
+
+RE_TARGET = re.compile(r"^(?:stack|roadmap|phase:\d{2}|task:\d+\.\d+|issue:ISS-\d+)$")
+RE_SEAL_NAME = re.compile(r"^plan_(phase|task|issue)_(.+)\.sha256$")
+TOKENS = {"phase": "PHASE_APPROVED", "task": "TASK_APPROVED", "issue": "ISSUE_APPROVED"}
+
+
+def _sealed_pending(root: Path, manifest: Path, review: Path, token: str, current: Entries) -> bool:
+    """Sealed once (approved), and now its verdict is not the approval or its specs
+    no longer match the seal (digests or ratings)."""
+    if not manifest.is_file():
+        return False
+    if _harness.read_verdict(root / review) != token:
+        return True
+    sealed = read(manifest)
+    digests = {k: v for k, v in sealed.items() if not k.startswith(RATING_PREFIX)}
+    return bool(_diff(digests, current, "")) or bool(_lowered(root, sealed, current, ""))
+
+
+def _number_key(ident: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in re.findall(r"\d+", ident))
+
+
+def pending_regates(root: Path) -> list[str]:
+    """Every gate target approved and sealed before that now needs its gate again:
+    stack, roadmap, phase:NN, task:N.M, issue:ISS-n, top down. Read from the files,
+    never through HARNESS_ASSUME_APPROVED."""
+    import _stack
+
+    out = []
+    if (root / _stack.STACK_SEAL).is_file() and not (
+        _harness.read_verdict(root / _stack.STACK_REVIEW) == _stack.APPROVED
+        and _stack.sealed_matches(root)
+    ):
+        out.append("stack")
+    if _sealed_pending(
+        root, roadmap_manifest(root), _harness.ROADMAP_REVIEW, "ROADMAP_APPROVED",
+        roadmap_entries(root),
+    ):  # fmt: skip
+        out.append("roadmap")
+    found: dict[str, list[str]] = {"phase": [], "task": [], "issue": []}
+    for manifest in (root / "progress").glob("plan_*.sha256"):
+        match = RE_SEAL_NAME.match(manifest.name)
+        if match:
+            found[match[1]].append(match[2])
+    review = {"phase": _harness.phase_review, "task": _harness.task_review,
+              "issue": _harness.issue_review}  # fmt: skip
+    entries = {"phase": phase_entries, "task": task_entries, "issue": issue_entries}
+    for kind in ("phase", "task", "issue"):
+        for ident in sorted(found[kind], key=_number_key):
+            current = entries[kind](root, ident)
+            if _sealed_pending(root, manifest_of(root, kind, ident), review[kind](ident),
+                               TOKENS[kind], current):  # fmt: skip
+                out.append(f"{kind}:{ident}")
+    return out
+
+
+def manifest_of(root: Path, kind: str, ident: str) -> Path:
+    return {"phase": phase_manifest, "task": task_manifest, "issue": issue_manifest}[kind](
+        root, ident
+    )
+
+
+def _below(target: str, other: str) -> bool:
+    """`other` sits below `target`: stack > roadmap > phase NN > its tasks; issues hang
+    from the stack and the roadmap."""
+    kind = other.split(":", 1)[0]
+    if target == "stack":
+        return other != "stack"
+    if target == "roadmap":
+        return kind in ("phase", "task", "issue")
+    if target.startswith("phase:") and kind == "task":
+        return _number_key(other)[0] == int(target.split(":", 1)[1])
+    return False
+
+
+def sealed(root: Path, target: str) -> bool:
+    """`target` was approved and sealed before: its gate now is a re-gate. Only a
+    re-gate gets the cascade and the in-progress third run (issue #125)."""
+    if not RE_TARGET.match(target):
+        raise ValueError(f"not a gate target: {target!r}")
+    import _stack
+
+    if target == "stack":
+        return (root / _stack.STACK_SEAL).is_file()
+    if target == "roadmap":
+        return roadmap_manifest(root).is_file()
+    kind, ident = target.split(":", 1)
+    return manifest_of(root, kind, ident).is_file()
+
+
+def cascade(root: Path, target: str) -> list[str]:
+    """The pending re-gates below `target` that its counterfactual run also assumes
+    approved (issue #125). Raises ValueError for a malformed target."""
+    if not RE_TARGET.match(target):
+        raise ValueError(f"not a gate target: {target!r}")
+    return [other for other in pending_regates(root) if _below(target, other)]

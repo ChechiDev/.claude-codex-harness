@@ -2558,11 +2558,8 @@ def seal(leaf: str) -> int:
     problems = _migrate.seal(ROOT, leaf, ROOT / _manifest_rel(leaf), fresh)
     for problem in problems:
         say("FAIL", f"cannot seal {leaf}: {problem}", sys.stderr)
-    if problems:
+    if problems or not _write_acceptance_seal(leaf, files):
         return 1
-    lines = [f"{_sha256(f)}  {f.relative_to(ROOT).as_posix()}\n" for f in files]
-    (ROOT / _manifest_rel(leaf)).write_text("".join(lines), encoding="utf-8")
-    say("OK", f"sealed {len(files)} acceptance file(s) -> {_manifest_rel(leaf)}")
     if ticket is not None:
         _supersede.remove(leaf)
     if baseline:
@@ -2571,6 +2568,34 @@ def seal(leaf: str) -> int:
     if spec and _plan_seal.reseal_spec(ROOT, spec, phase):
         say("OK", f"re-sealed its approved spec {spec}")
     return 0
+
+
+def _write_acceptance_seal(leaf: str, files: list[Path]) -> bool:
+    """Write the oracle manifest. A re-seal is a re-plan (issue #125): its spec or its
+    oracle may have changed, so it voids the code approval first; if that fails,
+    nothing is sealed (fail closed)."""
+    text = "".join(f"{_sha256(f)}  {f.relative_to(ROOT).as_posix()}\n" for f in files)
+    manifest = ROOT / _manifest_rel(leaf)
+    before = manifest.read_text(encoding="utf-8") if manifest.is_file() else None
+    if before is not None and not _void_code_approval(leaf):
+        return False
+    manifest.write_text(text, encoding="utf-8")
+    say("OK", f"sealed {len(files)} acceptance file(s) -> {_manifest_rel(leaf)}")
+    return True
+
+
+def _void_code_approval(leaf: str) -> bool:
+    """A re-plan (issue #125): an earlier code approval no longer covers the subtask,
+    so the close needs a new code gate. False if it could not."""
+    import _gate_run
+
+    if _gate_run.main(["drop", leaf]) != 0:
+        say(
+            "FAIL", f"cannot seal {leaf}: its earlier code approval could not be voided", sys.stderr
+        )
+        return False
+    say("OK", f"{leaf} re-planned: any earlier code approval is void (code gate again)")
+    return True
 
 
 def _leaf_spec(leaf: str) -> tuple[str, str]:
