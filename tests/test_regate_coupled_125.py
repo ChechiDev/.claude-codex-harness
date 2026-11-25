@@ -19,6 +19,7 @@ The fix, approved as A1 + B1 (+config) + C1 + D4:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -635,3 +636,106 @@ def test_a_first_plan_gate_is_no_replan(tmp_path: Path) -> None:
     _commit(project, "no oracle seal yet")
     res = _gate(project, tmp_path, "plan", "1.1.2")
     assert "Re-plan" not in res.stdout + res.stderr
+
+
+# ── C1 without git: no gate-run record can exist, so there is nothing to void ──
+# Gate-run records only live under `git rev-parse --git-path harness-gate-runs`
+# (_gate_run.py): outside a git repository none was ever written. Inside one (or
+# with GIT_DIR set), a failure to void them still refuses the seal (fail closed).
+
+
+def _sealed_leaf_without_git(plan: Plan) -> Plan:
+    _coupled_plan(plan)
+    plan.verdict("plan_review_1.1.1.md", "PLAN_APPROVED")
+    _write_oracle(plan.root, "1.1.1")
+    assert _guard(plan, "seal", "1.1.1").returncode == 0
+    return plan
+
+
+def _reseal(plan: Plan, **env: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["python3", str(TOOLKIT / "lib" / "_guard.py"), "seal", "1.1.1"],
+        cwd=plan.root,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | env,
+    )
+
+
+def test_a_reseal_outside_git_has_no_code_approval_to_void(plan: Plan) -> None:
+    _sealed_leaf_without_git(plan)
+    res = _reseal(plan)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "no git repository" in res.stdout + res.stderr
+    assert "could not be voided" not in res.stdout + res.stderr
+
+
+def test_a_reseal_in_a_broken_git_repo_still_fails_closed(plan: Plan) -> None:
+    _sealed_leaf_without_git(plan)
+    (plan.root / ".git").write_text("gitdir: /nonexistent/harness-broken\n")
+    before = (plan.root / "progress/acceptance_1.1.1.sha256").read_text()
+    _write_oracle(plan.root, "1.1.1", "def test_ac1_works() -> None:\n    assert 2\n")
+    res = _reseal(plan)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "could not be voided" in res.stderr
+    assert (plan.root / "progress/acceptance_1.1.1.sha256").read_text() == before
+
+
+def test_a_reseal_with_a_git_dir_that_fails_still_fails_closed(plan: Plan) -> None:
+    _sealed_leaf_without_git(plan)
+    res = _reseal(plan, GIT_DIR=str(plan.root / "no-such-git-dir"))
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "could not be voided" in res.stderr
+
+
+def test_a_reseal_below_a_git_repo_that_cannot_be_read_fails_closed(tmp_path: Path) -> None:
+    """A .git entry in any parent means a repository may hold the records."""
+    plan = _sealed_leaf_without_git(Plan(tmp_path / "outer" / "proj"))
+    (tmp_path / "outer" / ".git").mkdir()  # not a valid repository
+    res = _reseal(plan)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "could not be voided" in res.stderr
+
+
+def test_a_reseal_inside_a_bare_repo_voids_its_record(tmp_path: Path) -> None:
+    """Git discovers a bare repository without any .git entry: its records count."""
+    outer = tmp_path / "outer"
+    subprocess.run(["git", "init", "-q", "--bare", str(outer)], check=True)
+    plan = _sealed_leaf_without_git(Plan(outer / "proj"))
+    record = outer / "harness-gate-runs" / "code.approved_1.1.1.json"
+    record.parent.mkdir()
+    record.write_text("{}\n")
+    res = _reseal(plan)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not record.exists()
+
+
+@pytest.mark.parametrize("var", ["GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"])
+def test_a_reseal_with_git_discovery_narrowed_fails_closed(tmp_path: Path, var: str) -> None:
+    """Narrowed discovery may hide a repository that holds the records."""
+    outer = tmp_path / "outer"
+    plan = _sealed_leaf_without_git(Plan(outer / "proj"))
+    res = _reseal(plan, **{var: str(outer) if var.startswith("GIT_CEIL") else "0"})
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "could not be voided" in res.stderr
+
+
+def test_a_bare_repo_across_a_filesystem_boundary_still_fails_closed(
+    tmp_path: Path, plan: Plan
+) -> None:
+    """Git stops at a filesystem boundary by default: the probe looks past it, so a
+    repository there is never taken for "no repository" (a fake git stands in)."""
+    _sealed_leaf_without_git(plan)
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "git").write_text(
+        "#!/bin/sh\n"
+        '[ "$GIT_DISCOVERY_ACROSS_FILESYSTEM" = 1 ] && { echo /mnt/bare; exit 0; }\n'
+        "echo 'fatal: not a git repository (or any parent up to mount point /m)' >&2\n"
+        "exit 128\n"
+    )
+    (fake / "git").chmod(0o755)
+    res = _reseal(plan, PATH=f"{fake}:{os.environ['PATH']}")
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "could not be voided" in res.stderr

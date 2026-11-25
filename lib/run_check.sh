@@ -242,6 +242,15 @@ oracle_evidence() {
 }
 
 before=""
+# The fingerprint hashes the toolkit's bytecode too, and Python writes a missing .pyc
+# on first import: one compiled during the check (a cold cache, the first run after a
+# toolkit update) would void the record, or a later reader would no longer match it.
+# Compile the toolkit up front so the cache is complete; best effort (read-only: then
+# no import writes either). It covers this python3 at its default optimisation: the
+# one the harness scripts run with; another interpreter or -O may still add a .pyc.
+if [ "$RECORD" = 1 ]; then
+  "${ENVCMD[@]}" python3 -E -s -m compileall -q -l "$HARNESS_DIR" >/dev/null 2>&1 || true
+fi
 [ "$RECORD" = 0 ] || before="$(fingerprint)" || before=""
 if [ -n "$LOG" ]; then run >>"$LOG" 2>&1; else run; fi
 rc=$?

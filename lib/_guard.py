@@ -2589,6 +2589,9 @@ def _void_code_approval(leaf: str) -> bool:
     so the close needs a new code gate. False if it could not."""
     import _gate_run
 
+    if _outside_any_git_repo():
+        say("OK", f"{leaf} re-planned: no git repository, so no code approval record to void")
+        return True
     if _gate_run.main(["drop", leaf]) != 0:
         say(
             "FAIL", f"cannot seal {leaf}: its earlier code approval could not be voided", sys.stderr
@@ -2596,6 +2599,47 @@ def _void_code_approval(leaf: str) -> bool:
         return False
     say("OK", f"{leaf} re-planned: any earlier code approval is void (code gate again)")
     return True
+
+
+_GIT_DISCOVERY_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+)
+
+
+def _outside_any_git_repo() -> bool:
+    """True only when there is conclusively no git repository here, so no code approval
+    record can exist: they live only under `git rev-parse --git-path` (_gate_run.py).
+    That needs all three: no variable that steers or narrows git's discovery, no .git
+    entry in the working directory or any parent, and git's own discovery (which also
+    finds a bare repository; here across filesystems too) failing with "not a git
+    repository". Anything else (a broken .git, a bad GIT_DIR, dubious ownership, no
+    git at all) may hide records."""
+    if any(var in os.environ for var in _GIT_DISCOVERY_VARS):
+        return False
+    here = Path.cwd().resolve()
+    if any(os.path.lexists(d / ".git") for d in (here, *here.parents)):
+        return False
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            capture_output=True,
+            text=True,
+            check=False,
+            # past filesystem boundaries too: a repository there may hold the records
+            env={
+                **os.environ,
+                "LC_ALL": "C",
+                "LANGUAGE": "C",
+                "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1",
+            },
+        )
+    except OSError:
+        return False
+    return res.returncode == 128 and "not a git repository" in res.stderr
 
 
 def _leaf_spec(leaf: str) -> tuple[str, str]:
