@@ -366,6 +366,8 @@ writes the message.
 Network is needed only if uv must download dependencies during a gate. Run
 `uv sync --all-groups` before the gates instead of setting `[codex] network = true`.
 
+Claude's own Bash can run in Claude Code's native sandbox: opt-in per project with `{"sandbox": {"enabled": true}}` in `.claude/settings.local.json` (off by default; WARN phase; `make env-check` reports it once on): [design/I3c-sandbox.md](design/I3c-sandbox.md#switching-it-on-in-a-project).
+
 ## Codex model and effort per role
 
 Each Codex role prompt starts with a YAML header that `review_with_codex.sh`
