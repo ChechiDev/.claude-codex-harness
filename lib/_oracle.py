@@ -50,7 +50,7 @@ import time
 import tomllib
 import uuid
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -937,29 +937,122 @@ def contract_approve(args: list[str]) -> int:
 
 REPLAN_DIR = "harness-replan"  # git-path; harness-owned (.git/harness-*)
 RE_LEAF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
+RE_SNAPSHOT = re.compile(r"^[0-9a-f]{16}$")
+RE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+ORACLE_DIR = PurePosixPath("tests/acceptance")
 
 
 def _oracle_manifest(leaf: str) -> Path:
     return ROOT / "progress" / f"acceptance_{leaf}.sha256"
 
 
-def _manifest_entries(text: str) -> dict[str, str]:
-    entries = {}
+def _is_oracle_rel(leaf: str, rel: str) -> bool:
+    """One of the leaf's oracle files as the seal names them: tests/acceptance/test_<leaf>.*
+    (exact stem, normalised, relative; issue #130)."""
+    path = PurePosixPath(rel)
+    return (
+        str(path) == rel
+        and "\\" not in rel
+        and path.parent == ORACLE_DIR
+        and path.stem == f"test_{leaf}"
+        and path.name.startswith(f"test_{leaf}.")
+    )
+
+
+def _manifest_entries(text: str, leaf: str) -> dict[str, str] | None:
+    """The manifest's path -> digest, or None unless every line is `<sha256>  <oracle
+    file of leaf>` once (fail closed: a path outside the oracle is never read)."""
+    entries: dict[str, str] = {}
     for line in text.splitlines():
-        digest, _, rel = line.partition("  ")
-        if digest and rel:
-            entries[rel] = digest
-    return entries
+        digest, sep, rel = line.partition("  ")
+        if not sep or not RE_DIGEST.match(digest) or rel in entries:
+            return None
+        if not _is_oracle_rel(leaf, rel):
+            return None
+        entries[rel] = digest
+    return entries or None
 
 
-def _verified(base: Path, entries: dict[str, str]) -> bool:
+def _regular(base: Path, rel: str) -> Path | None:
+    """base/rel when no component below base is a link and it is a regular file."""
+    path = base
+    for part in PurePosixPath(rel).parts:
+        path = path / part
+        if path.is_symlink():
+            return None
+    return path if path.is_file() else None
+
+
+def _verified(base: Path, entries: dict[str, str], exact: bool = False) -> bool:
+    """Every entry is a regular file under base with its digest; with exact, base holds
+    nothing else (no other file, no link)."""
     try:
-        return bool(entries) and all(
-            (base / rel).is_file() and _sha_file(base / rel) == digest
-            for rel, digest in entries.items()
-        )
+        if base.is_symlink() or not base.is_dir():
+            return False
+        for rel, digest in entries.items():
+            path = _regular(base, rel)
+            if path is None or _sha_file(path) != digest:
+                return False
+        if not exact:
+            return True
+        found: set[str] = set()
+        for top, dirs, files in os.walk(base):
+            for name in (*dirs, *files):
+                full = Path(top) / name
+                if full.is_symlink():
+                    return False
+                if name in files:
+                    found.add(full.relative_to(base).as_posix())
+        return found == set(entries)
     except OSError:
         return False
+
+
+# Variables that move or narrow git's discovery: the re-plan commands ignore them, so
+# the snapshot location is the project's own git dir, as the guard sees it (#130).
+GIT_DISCOVERY_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+)
+
+
+def _project_git_only() -> None:
+    for var in GIT_DISCOVERY_VARS:
+        os.environ.pop(var, None)
+
+
+def _read(path: Path) -> str | None:
+    try:
+        return None if path.is_symlink() else path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _guard_owned(path: Path) -> bool:
+    """The guard keeps Claude from writing `path` (resolved), in this worktree."""
+    try:
+        import _guard
+
+        return _guard.protected_kind(Path(os.path.realpath(path))) == "codex-owned"
+    except Exception:  # noqa: BLE001 - any doubt about the guard refuses (fail closed)
+        return False
+
+
+def _sealed_oracle(leaf: str) -> tuple[str, dict[str, str], Path] | str:
+    """The leaf's seal text, its entries and the snapshot dir named after it, or why not."""
+    text = _read(_oracle_manifest(leaf))
+    if text is None:
+        return f"no readable progress/acceptance_{leaf}.sha256"
+    entries = _manifest_entries(text, leaf)
+    if entries is None:
+        return f"progress/acceptance_{leaf}.sha256 names files outside its oracle"
+    snap = _git_path(REPLAN_DIR) / leaf / _sha_bytes(text.encode("utf-8"))[:16]
+    if not _guard_owned(snap):
+        return f"{snap} is not protected by the guard, so no copy can be trusted there"
+    return text, entries, snap
 
 
 def replan_snapshot(args: list[str]) -> int:
@@ -970,66 +1063,121 @@ def replan_snapshot(args: list[str]) -> int:
     if len(args) != 1 or not RE_LEAF.match(args[0]):
         print(__doc__, file=sys.stderr)
         return 2
+    _project_git_only()
     leaf = args[0]
-    try:
-        text = _oracle_manifest(leaf).read_text(encoding="utf-8")
-    except OSError:
-        say("FAIL", f"re-plan of {leaf}: no readable progress/acceptance_{leaf}.sha256")
+    sealed = _sealed_oracle(leaf)
+    if isinstance(sealed, str):
+        say("FAIL", f"re-plan of {leaf}: {sealed}; the re-plan was not run")
         return 1
-    entries = _manifest_entries(text)
-    snap = _git_path(REPLAN_DIR) / leaf / _sha_bytes(text.encode("utf-8"))[:16]
-    if _verified(snap / "oracle", entries):
-        print(snap)
-        return 0
-    if not _verified(ROOT, entries):
-        say(
-            "FAIL",
-            f"re-plan of {leaf}: its oracle differs from its seal and no verified copy of "
-            "the sealed oracle exists, so the reviewer could not see what it replaces. "
-            "The human restores the sealed tests (git) or decides; the re-plan was not run",
-        )
-        return 1
-    try:
-        shutil.rmtree(snap, ignore_errors=True)
-        for rel in entries:
-            (snap / "oracle" / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / rel, snap / "oracle" / rel)
-        (snap / "manifest.sha256").write_text(text, encoding="utf-8")
-    except OSError as exc:
-        say("FAIL", f"re-plan of {leaf}: could not copy the sealed oracle: {exc}")
-        return 1
+    text, entries, snap = sealed
+    if not _verified(snap / "oracle", entries, exact=True):
+        if not _verified(ROOT, entries):
+            say(
+                "FAIL",
+                f"re-plan of {leaf}: its oracle differs from its seal and no verified copy of "
+                "the sealed oracle exists, so the reviewer could not see what it replaces. "
+                "The human restores the sealed tests (git) or decides; the re-plan was not run",
+            )
+            return 1
+        try:
+            shutil.rmtree(snap, ignore_errors=True)
+            for rel in entries:
+                (snap / "oracle" / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / rel, snap / "oracle" / rel)
+            (snap / "manifest.sha256").write_text(text, encoding="utf-8")
+        except OSError as exc:
+            say("FAIL", f"re-plan of {leaf}: could not copy the sealed oracle: {exc}")
+            return 1
     print(snap)
     return 0
 
 
+def _snapshot_of(leaf: str, raw: str) -> tuple[Path, dict[str, str]] | str:
+    """The harness's own re-plan snapshot of <leaf> that <raw> names (and its entries),
+    or why not (issue #130). Location: git-path harness-replan/<leaf>/<16 hex>, no link
+    on the way. Ownership: the guard keeps Claude from writing it, in every worktree.
+    Content: named after its manifest's hash, and exactly the manifest's oracle files,
+    each a regular file with its digest."""
+    base = _git_path(REPLAN_DIR)
+    real = Path(os.path.realpath(raw))
+    folder = base / leaf / real.name
+    if not RE_SNAPSHOT.match(real.name) or real != Path(os.path.realpath(folder)):
+        return f"{raw} is not a re-plan snapshot of {leaf} made by the harness"
+    if any(p.is_symlink() for p in (base, base / leaf, folder)) or not _guard_owned(real):
+        return f"{raw} is not harness-owned (a link on its path, or Claude could write it)"
+    text = _read(folder / "manifest.sha256")
+    named = text is not None and _sha_bytes(text.encode("utf-8"))[:16] == real.name
+    entries = _manifest_entries(text, leaf) if text is not None and named else None
+    if entries is None or not _verified(folder / "oracle", entries, exact=True):
+        return (
+            f"{raw} does not match the manifest it is named after, or that manifest names "
+            f"files outside the oracle of {leaf}"
+        )
+    return folder, entries
+
+
+def _replan_inputs(leaf: str, raw: str) -> tuple[Path, dict[str, str], dict[str, str]] | str:
+    """(snapshot, old entries, new entries) for the history, or why it is refused."""
+    if _harness.read_verdict(ROOT / f"progress/plan_review_{leaf}.md") != "PLAN_APPROVED":
+        return f"{leaf} is not PLAN_APPROVED"
+    found = _snapshot_of(leaf, raw)
+    if isinstance(found, str):
+        return found
+    snap, old = found
+    text = _read(_oracle_manifest(leaf))
+    new = _manifest_entries(text, leaf) if text is not None else None
+    if new is None:
+        return f"progress/acceptance_{leaf}.sha256 is unreadable or names files outside its oracle"
+    if not _verified(ROOT, new):
+        return f"the oracle of {leaf} differs from its seal"
+    return snap, old, new
+
+
+def _oracle_diff(snap: Path, old: dict[str, str], new: dict[str, str]) -> str:
+    lines: list[str] = []
+    for rel in sorted(old.keys() | new.keys()):
+        before = (snap / "oracle" / rel).read_text(encoding="utf-8") if rel in old else ""
+        after = (ROOT / rel).read_text(encoding="utf-8") if rel in new else ""
+        lines += difflib.unified_diff(
+            before.splitlines(keepends=True), after.splitlines(keepends=True),
+            f"a/{rel}" if rel in old else "/dev/null",
+            f"b/{rel}" if rel in new else "/dev/null",
+        )  # fmt: skip
+    return "".join(line if line.endswith("\n") else line + "\n" for line in lines)
+
+
 def replan_history(args: list[str]) -> int:
     """Append the diff old -> new oracle (exact path sets of both manifests) to
-    progress/review_history/<leaf>.md, then drop the leaf's snapshots."""
+    progress/review_history/<leaf>.md, then drop the snapshot used. Only the harness's
+    verified snapshot of <leaf> is read, and only once the new oracle is approved and
+    matches its seal; a refusal writes nothing and drops nothing (issue #130)."""
     if len(args) != 2 or not RE_LEAF.match(args[0]):
         print(__doc__, file=sys.stderr)
         return 2
-    leaf, snap = args[0], Path(args[1])
-    try:
-        old = _manifest_entries((snap / "manifest.sha256").read_text(encoding="utf-8"))
-        new = _manifest_entries(_oracle_manifest(leaf).read_text(encoding="utf-8"))
-        lines: list[str] = []
-        for rel in sorted(old.keys() | new.keys()):
-            before = (snap / "oracle" / rel).read_text(encoding="utf-8") if rel in old else ""
-            after = (ROOT / rel).read_text(encoding="utf-8") if rel in new else ""
-            lines += difflib.unified_diff(
-                before.splitlines(keepends=True), after.splitlines(keepends=True),
-                f"a/{rel}" if rel in old else "/dev/null",
-                f"b/{rel}" if rel in new else "/dev/null",
-            )  # fmt: skip
-        body = "".join(line if line.endswith("\n") else line + "\n" for line in lines)
-        history = ROOT / "progress" / "review_history" / f"{leaf}.md"
-        history.parent.mkdir(parents=True, exist_ok=True)
-        with history.open("a", encoding="utf-8") as fh:
-            fh.write(f"\n## Superseded oracle (re-plan, issue #125)\n\n```diff\n{body}```\n")
-    except OSError as exc:
-        say("FAIL", f"re-plan of {leaf}: could not record the superseded oracle: {exc}")
+    _project_git_only()
+    leaf = args[0]
+    inputs = _replan_inputs(leaf, args[1])
+    if isinstance(inputs, str):
+        say(
+            "FAIL",
+            f"replan-history {leaf}: refused, nothing written or removed: {inputs}. Pass the "
+            "snapshot the plan gate printed; if none is left, the human decides",
+        )
         return 1
-    shutil.rmtree(_git_path(REPLAN_DIR) / leaf, ignore_errors=True)
+    snap, old, new = inputs
+    if old == new:
+        say("OK", f"re-plan of {leaf}: the snapshot is its current oracle, nothing superseded")
+    else:
+        try:
+            body = _oracle_diff(snap, old, new)
+            history = ROOT / "progress" / "review_history" / f"{leaf}.md"
+            history.parent.mkdir(parents=True, exist_ok=True)
+            with history.open("a", encoding="utf-8") as fh:
+                fh.write(f"\n## Superseded oracle (re-plan, issue #125)\n\n```diff\n{body}```\n")
+        except (OSError, UnicodeDecodeError) as exc:
+            say("FAIL", f"re-plan of {leaf}: could not record the superseded oracle: {exc}")
+            return 1
+    shutil.rmtree(snap, ignore_errors=True)
     return 0
 
 
