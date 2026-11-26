@@ -407,6 +407,19 @@ def _leaf_next(sid: str) -> str:
     return _close_next(sid)
 
 
+def _doc_repair_next(sid: str, reason: str) -> str | None:
+    """Issue #133: a close red because of its reference doc is repaired by `doc`; a
+    repair that went out of scope, or ran out, waits for the human."""
+    if any(key in reason for key in ("outside the reference doc", "the repairs ran out")):
+        return (
+            f"needs human: the close of {sid} failed ({reason}): the human checks its "
+            "reference doc and the tree"
+        )
+    if "the reference doc fails the doc gate" in reason:
+        return _budget("close", sid) or f"close: {GATE} doc {sid} (last attempt: {reason})"
+    return None
+
+
 def _pending_close(leaves: list[Item], active: str) -> str | None:
     """Evidence of an interrupted close: the spec says done (the documenter's edit),
     no close commit, and the ledger says the close failed."""
@@ -431,9 +444,13 @@ def _pending_close(leaves: list[Item], active: str) -> str | None:
                 f"needs human: the close of {sid} stopped before its commit ({reason}): its spec "
                 "says done but no close commit and no message exist"
             )
-        return _budget("close", sid) or (
-            f"retry the close of {sid} ({msg} is waiting, last attempt: {reason}): "
-            f"{GATE} close {sid}"
+        return (
+            _doc_repair_next(sid, reason)
+            or _budget("close", sid)
+            or (
+                f"retry the close of {sid} ({msg} is waiting, last attempt: {reason}): "
+                f"{GATE} close {sid}"
+            )
         )
     return None
 

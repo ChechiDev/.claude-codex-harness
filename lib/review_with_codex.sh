@@ -285,14 +285,199 @@ close_msg_recover() {
   mkdir -p progress && mv -f "$bak" "$msg" || return 1
   warn "the close of $1 was interrupted: its message is back in $msg" >&2
 }
+
+# Doc repair (issue #133): when the leaf's reference doc fails the doc gate, the
+# documenter repairs it in a bounded number of attempts. A repair may change only
+# that doc: the tree (HEAD + every tracked and untracked, non-ignored file) is
+# snapshotted in the git dir before it, where no Codex sandbox or Claude tool can
+# write, and the close refuses (fail closed) while anything else differs. The
+# snapshot lives until the close commits; only the human removes it otherwise.
+R_DOC="the reference doc fails the doc gate"
+R_OUT="the repairs ran out: the reference doc still fails the doc gate"
+R_SCOPE="the repair changed files outside the reference doc"
+DOC_REPAIRS=2   # repairs per run; the attempt budget ([review] max_attempts) bounds the streak
+doc_repair_snap() { git rev-parse --git-path "harness-doc-repair-$1.json" 2>/dev/null; }
+# $1 = id. The one doc a repair may change: the doc gate's own pick, else the spec's name.
+repair_doc_path() {
+  local doc
+  for doc in docs/reference/"$1"-*.md docs/reference/"$1".md; do
+    [ -f "$doc" ] && { printf '%s\n' "$doc"; return 0; }
+  done
+  printf 'docs/reference/%s\n' "$(basename "$(python3 "$HARNESS_PY" spec "$1" 2>/dev/null)")"
+}
+# $1 = id, $2 = begin (record, or verify an existing snapshot) | check (verify if any).
+# The snapshot holds the one allowed doc, HEAD, the index and the tree's files.
+doc_repair_tree() {
+  python3 -I -c '
+import hashlib, json, os, re, subprocess, sys
+sid, mode, snap, doc = sys.argv[1:5]
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True, check=True).stdout
+def state():
+    head = git("rev-parse", "HEAD").decode().strip()
+    files = {}
+    for raw in sorted(set(filter(None, git("ls-files", "-z", "-co", "--exclude-standard").split(b"\0")))):
+        p = os.fsdecode(raw)
+        if os.path.islink(p):
+            files[p] = "link:" + os.readlink(p)
+        elif os.path.isfile(p):
+            with open(p, "rb") as f:
+                files[p] = hashlib.sha256(f.read()).hexdigest()
+        else:
+            files[p] = None
+    index = {}
+    for row in filter(None, git("ls-files", "-s", "-z").split(b"\0")):
+        meta, _, path = row.partition(b"\t")
+        index[os.fsdecode(path)] = meta.decode()
+    return {"head": head, "files": files, "index": index}
+try:
+    if not snap:
+        raise OSError("no git dir")
+    if not os.path.exists(snap):
+        if mode == "check":
+            sys.exit(0)
+        tmp = snap + ".tmp"
+        if not re.fullmatch(r"docs/reference/" + re.escape(sid) + r"(-[^/]*)?\.md", doc):
+            raise ValueError(f"unexpected doc path {doc!r}")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({**state(), "doc": doc}, f)
+        os.replace(tmp, snap)
+        sys.exit(0)
+    with open(snap, encoding="utf-8") as f:
+        old = json.load(f)
+    new = state()
+    allowed = old["doc"]
+    bad = [] if old["head"] == new["head"] else ["HEAD (a commit was made)"]
+    for p in sorted(set(old["files"]) | set(new["files"])):
+        if old["files"].get(p) != new["files"].get(p) and p != allowed:
+            bad.append(p)
+    for p in sorted(set(old["index"]) | set(new["index"])):
+        if old["index"].get(p) != new["index"].get(p):
+            bad.append(f"{p} (git index)")
+except Exception as exc:
+    print(f"[FAIL] cannot verify the doc repair of {sid} ({exc}): fail closed", file=sys.stderr)
+    sys.exit(1)
+for p in bad:
+    print(f"[FAIL] changed since the repair started: {p}", file=sys.stderr)
+sys.exit(1 if bad else 0)
+'  "$1" "$2" "$(doc_repair_snap "$1")" "$(repair_doc_path "$1")"
+}
+# $1 = id. Exit 0 when the leaf is done in the tree; a helper error fails closed.
+leaf_done() {
+  local ids
+  ids="$(python3 "$HARNESS_PY" done-ids)" || { fail "cannot read the done leaves" >&2; exit 1; }
+  printf '%s\n' "$ids" | grep -Fxq -- "$1"
+}
+# Repair mode of `doc` on a pending close (message waiting, spec done): $1 = id.
+doc_repair_ready() {
+  local id="$1" subjects
+  subjects="$(git log --format=%s HEAD 2>/dev/null)" ||
+    { fail "cannot read the git log: no repair of $id" >&2; return 1; }
+  if printf '%s\n' "$subjects" | grep -Fq -- "[$id]"; then
+    fail "$id already has a close commit: no repair. progress/close_$id.msg is stale;" \
+      "the human removes it" >&2
+    return 1
+  fi
+  if ! python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import _harness
+from pathlib import Path
+sys.exit(_harness.read_verdict(Path(sys.argv[2])) != "APPROVED")' "$HARNESS_DIR" \
+      "progress/review_$id.md"; then
+    fail "$id has no APPROVED code review (progress/review_$id.md): no repair" >&2
+    return 1
+  fi
+  code_gate_fresh "$id" || return 1
+  if DOC_FAILS="$(bash "$HARNESS_DIR/doc_gate.sh" --leaf "$id" 2>&1)"; then
+    fail "progress/close_$id.msg is waiting and the reference doc passes the doc gate: run" \
+      "./harness/review_with_codex.sh close $id" >&2
+    return 1
+  fi
+  doc_repair_tree "$id" begin
+}
+# $1 = id, $2 = the doc gate's failures.
+repair_prompt() {
+  local id="$1" doc
+  doc="$(repair_doc_path "$id")"
+  cat <<EOF
+Act strictly according to your role defined in: $ROLE
+Phase: doc (repair)
+Feature: id=$id name=$FEATURE_NAME
+Project root: $PROJECT_DIR
+
+Repair mode (issue #133): the close of $id already ran (its spec says done and its commit
+message waits in progress/close_$id.msg), but its reference doc fails the doc gate:
+$2
+
+Do only this: edit $doc so it has the frontmatter keys and the five section anchors of
+your role's step 1, writing every missing section from the spec, the code, the tests and
+progress/review_history/. Change NO other file: not the spec, PLAN.md, feature_list.json,
+progress/ (the waiting commit message included), the code, the tests or any seal. Skip
+close steps 2 to 6 and write no commit message. The harness verifies that only
+$doc changed and refuses the close otherwise; then it runs the check
+and commits with the waiting message.
+Do NOT run \`make check\`, the tests or anything that runs them.
+Do not add agent attribution. Final line: repaired -> $doc
+EOF
+}
+# After the documenter (auto mode): repair the leaf's doc while it fails the gate.
+doc_repair_loop() {
+  local id="$1" n=0 fails rc
+  [ -z "$REPAIR" ] || n=1
+  while :; do
+    if [ "$n" -gt 0 ] && ! doc_repair_tree "$id" check; then
+      attempt_end close "$id" fail "$R_SCOPE"
+      fail "$R_SCOPE of $id: nothing committed. needs human: the human checks the paths" \
+        "above and removes $(doc_repair_snap "$id") to go on" >&2
+      return 1
+    fi
+    fails="$(bash "$HARNESS_DIR/doc_gate.sh" --leaf "$id" 2>&1)" && return 0
+    [ -e "progress/close_$id.msg" ] || return 0   # the close reports the missing message
+    printf '%s\n' "$fails" >&2
+    if [ "$n" -ge "$DOC_REPAIRS" ]; then
+      attempt_end close "$id" fail "$R_OUT"
+      fail "needs human: $R_OUT after $n repairs of $id: nothing committed; the human" \
+        "completes the doc, then: ./harness/review_with_codex.sh close $id" >&2
+      return 1
+    fi
+    attempt_end close "$id" fail "$R_DOC"
+    attempt_begin close "$id" || return 1
+    if ! doc_repair_tree "$id" begin; then
+      attempt_end close "$id" fail "could not snapshot the tree for the repair"
+      return 1
+    fi
+    n=$((n + 1))
+    warn "repairing the reference doc of $id (repair $n of $DOC_REPAIRS)" >&2
+    codex exec "${CODEX_ARGS[@]}" <<<"$(repair_prompt "$id" "$fails")"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+      if ! doc_repair_tree "$id" check; then
+        attempt_end close "$id" fail "$R_SCOPE"
+        fail "$R_SCOPE of $id (documenter exited $rc): needs human" >&2
+        return 1
+      fi
+      attempt_end close "$id" fail "documenter exited $rc (repair)"
+      return 1
+    fi
+  done
+}
 # Commit a close: the documenter's message, only with the check green.
 close_commit() {
   local id="$1" msg="progress/close_$1.msg" log text bak
   close_msg_recover "$id" || true
+  if ! doc_repair_tree "$id" check; then
+    CLOSE_WHY="$R_SCOPE"
+    fail "$R_SCOPE of $id: nothing committed. The human checks the paths above and" \
+      "removes $(doc_repair_snap "$id") to go on" >&2
+    return 1
+  fi
   CLOSE_WHY="no valid commit message ($msg)"
   python3 "$HARNESS_DIR/_guard.py" commit-message "$msg" "$id" || return 1
   CLOSE_WHY="the code approval is stale or missing"
   code_gate_fresh "$id" || return 1
+  if ! bash "$HARNESS_DIR/doc_gate.sh" --leaf "$id" >&2; then
+    CLOSE_WHY="$R_DOC"
+    fail "$R_DOC for $id: nothing committed. Repair it:" \
+      "./harness/review_with_codex.sh doc $id" >&2
+    return 1
+  fi
   log="$(new_log close)"
   if ! run_check_recorded "$log"; then
     CLOSE_WHY="check red after the close"
@@ -348,6 +533,7 @@ close_commit() {
     return 1
   fi
   rm -f "$bak"; trap - INT TERM HUP
+  rm -f -- "$(doc_repair_snap "$id")"
   ok "closed -> $id ; commit $(git rev-parse --short HEAD)"
 }
 # The close as one recorded attempt of the `close` step: $1 = id.
@@ -523,7 +709,7 @@ if [ "$MODE_EXEC" = "auto" ]; then python3 "$RESUME_PY" budget "$STEP" "$ID" || 
 CODEX_PHASE="$PHASE"
 [ -f "$ROLE" ] || { echo "role prompt not found: $ROLE" >&2; exit 1; }
 
-REPLAN_SNAP=""
+REPLAN_SNAP=""; REPAIR=""; DOC_FAILS=""
 # Preconditions: never review a step whose prerequisite is not approved yet.
 case "$PHASE" in
   # The roadmap waits for an approved, intact docs/stack.md (issue #115).
@@ -536,12 +722,17 @@ case "$PHASE" in
   phase-close) python3 "$HARNESS_PY" phase-close-ready "$ID" || exit 1 ;;
   issue)   python3 "$HARNESS_PY" issue-ready "$ID" || exit 1 ;;
   doc)     close_msg_recover "$ID" || true
-           python3 "$HARNESS_PY" close-ready "$ID" || exit 1
+           # Repair mode (issue #133): a pending close, red because of its doc.
+           if [ -e "progress/close_$ID.msg" ] && leaf_done "$ID"; then
+             doc_repair_ready "$ID" || exit 1
+             REPAIR=1
+           fi
+           [ -n "$REPAIR" ] || python3 "$HARNESS_PY" close-ready "$ID" || exit 1
            code_gate_fresh "$ID" || exit 1
            # A waiting message (a failed or interrupted close) is for the approval that
            # still holds: `close` reuses it; doc never regenerates it (I7). Only the
            # human removes it to get a new one (Claude cannot write progress/close_*).
-           if [ -e "progress/close_$ID.msg" ]; then
+           if [ -z "$REPAIR" ] && [ -e "progress/close_$ID.msg" ]; then
              fail "progress/close_$ID.msg is waiting from an earlier close: run" \
                "./harness/review_with_codex.sh close $ID (the doc gate would regenerate" \
                "it; to get a new one, the human removes it first)" >&2
@@ -657,6 +848,10 @@ if { [ "$PHASE" = "task-close" ] || [ "$PHASE" = "phase-close" ]; } && green_rec
     "$GREEN_RECORD" "$(cat "$GREEN_RECORD")" "$CHECK_CMD" >"$CHECK_LOG"
   ok "reused the green record: $CHECK_CMD already passed on this exact state"
   CHECK_RC=0
+elif [ -n "$REPAIR" ]; then
+  # A repair reads the doc gate's failures; the full check runs again at the close.
+  printf '%s\n' "$DOC_FAILS" >"$CHECK_LOG"
+  CHECK_RC=1
 else
   run_check_recorded "$CHECK_LOG"
   CHECK_RC=$?
@@ -855,6 +1050,7 @@ progress/ file and return a single reference line).
 Do not edit production code. Do not add agent attribution.
 EOF
 )"
+[ -z "$REPAIR" ] || PROMPT="$(repair_prompt "$ID" "$DOC_FAILS")"
 
 # --- Model, effort and sandbox for the codex CLI (verified with codex exec --help).
 # Effort is not a dedicated flag: it is passed as a config override.
@@ -890,7 +1086,11 @@ if [ "$MODE_EXEC" = "manual" ]; then
     echo "python3 harness/_oracle.py replan-history $ID $REPLAN_SNAP"
   fi
   if [ "$PHASE" = "doc" ]; then
-    echo "--- after Codex writes progress/close_$ID.msg, check and commit ---"
+    if [ -n "$REPAIR" ]; then
+      echo "--- after Codex repairs the reference doc (only it may change), check and commit ---"
+    else
+      echo "--- after Codex writes progress/close_$ID.msg, check and commit ---"
+    fi
     echo "./harness/review_with_codex.sh close $ID"
     if [ -n "${LAST_TASK:-}" ]; then
       echo "--- this close finishes task $LAST_TASK: the close opens its PR (or retry) ---"
@@ -938,9 +1138,15 @@ RC=$?
 
 if [ "$PHASE" = "doc" ]; then
   if [ $RC -ne 0 ]; then
+    if [ -n "$REPAIR" ] && ! doc_repair_tree "$ID" check; then
+      attempt_end close "$ID" fail "$R_SCOPE"
+      fail "$R_SCOPE of $ID (documenter exited $RC): needs human" >&2
+      exit 1
+    fi
     attempt_end close "$ID" fail "documenter exited $RC"
     exit $RC
   fi
+  doc_repair_loop "$ID" || exit 1
   close_attempt "$ID" || exit 1
   open_pr_if_due "$ID"
   exit 0
