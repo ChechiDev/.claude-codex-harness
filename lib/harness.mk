@@ -73,3 +73,15 @@ issue-start:
 
 issue-new:
 	harness/issue.sh new
+
+# Doctor check of Claude Code's native Bash sandbox (I3c, WARN phase: it never
+# fails). A prerequisite-only rule: env-check's recipe stays the project
+# Makefile's, this only runs the check before it. The target is named through a
+# variable so install.sh --migrate (_upgrade._blocks, which reads the rules
+# here as harness-owned recipes) never takes env-check for a harness target.
+.PHONY: sandbox-check
+HARNESS_ENV_CHECK := env-check
+$(HARNESS_ENV_CHECK): sandbox-check
+
+sandbox-check:
+	@python3 -B harness/_sandbox_check.py || true

@@ -1,5 +1,5 @@
 {
-  "$schema_comment": "Harness hooks. Run by the harness, not the agent: they cannot be bypassed. Paths use harness/ (symlink to the toolkit's lib/).",
+  "$schema_comment": "Harness hooks. Run by the harness, not the agent: they cannot be bypassed. Paths use harness/ (symlink to the toolkit's lib/). sandbox (I3c, WARN phase, docs/design/I3c-sandbox.md): opt-in per project, off here; a project switches it on with sandbox.enabled true in .claude/settings.local.json, and then Claude's Bash runs in Claude Code's native sandbox under the rest of this block: denyWrite is enforced by the kernel, so expansions, Python, make recipes and scripts cannot write the harness-owned paths. The harness writers (gates, close, issues lane) are excludedCommands: they write progress/ and commit.",
   "hooks": {
     "PreToolUse": [
       {
@@ -54,7 +54,7 @@
     ]
   },
   "permissions": {
-    "$comment": "allow: the harness targets and the Python toolchain run without a prompt; anything else (make -f, uv run <program>, …) asks. deny: what the Bash guard always blocks for Claude, with no escape valve (I8).",
+    "$comment": "allow: the harness targets and the Python toolchain run without a prompt; anything else (make -f, uv run <program>, …) asks. deny: what the Bash guard always blocks for Claude, with no escape valve (I8), and the Edit(...) rules for the paths Claude never writes with a file tool (I3c: Edit rules cover Edit, Write, MultiEdit and NotebookEdit; Write(...) rules are ignored by Claude Code).",
     "allow": [
       "Bash(make check)",
       "Bash(make verify)",
@@ -82,7 +82,79 @@
       "Bash(./harness/review_with_codex.sh seal:*)",
       "Bash(./harness/legacy_inventory.sh create:*)",
       "Bash(./harness/legacy_inventory.sh review:*)",
-      "Bash(./harness/legacy_inventory.sh seal:*)"
+      "Bash(./harness/legacy_inventory.sh seal:*)",
+      "Edit(/harness/**)",
+      "Edit(/.claude/**)",
+      "Edit(/tests/acceptance/**)",
+      "Edit(/harness.toml)",
+      "Edit(/.harness/**)",
+      "Edit(/.git/harness-*)",
+      "Edit(/.git/harness-*/**)",
+      "Edit(/progress/review_*.md)",
+      "Edit(/progress/*_review_*.md)",
+      "Edit(/progress/*_review.md)",
+      "Edit(/progress/task_close_*.md)",
+      "Edit(/progress/phase_close_*.md)",
+      "Edit(/progress/close_*.msg)",
+      "Edit(/progress/*.sha256)",
+      "Edit(/progress/pr_*.md)",
+      "Edit(/progress/review_history/**)",
+      "Edit(/progress/*_baseline.json)",
+      "Edit(/progress/legacy_inventory.json)",
+      "Edit(/progress/task_flow_legacy_*.json)",
+      "Edit(/progress/issue_migrations_*.json)",
+      "Edit(/progress/oracle_migrations/**)"
     ]
+  },
+  "sandbox": {
+    "enabled": false,
+    "failIfUnavailable": false,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": [
+      "./harness/review_with_codex.sh *",
+      "harness/review_with_codex.sh *",
+      "./harness/issue.sh *",
+      "harness/issue.sh *",
+      "make issue *",
+      "make issue-start *",
+      "make issue-new",
+      "make plan",
+      "python3 harness/_contract.py contract-propose",
+      "python3 harness/_contract.py contract-propose *",
+      "python3 harness/_oracle.py contract-propose",
+      "python3 harness/_oracle.py contract-propose *",
+      "python3 harness/_oracle.py replan-history *",
+      "tail *",
+      "head *"
+    ],
+    "filesystem": {
+      "denyWrite": [
+        "./progress",
+        "./harness",
+        "./.claude",
+        "./tests/acceptance",
+        "./harness.toml",
+        "./.harness"
+      ],
+      "allowWrite": [
+        "~/.cache/uv",
+        "~/.codex"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "chatgpt.com",
+        "ab.chatgpt.com",
+        "api.openai.com",
+        "auth.openai.com"
+      ]
+    }
   }
 }
