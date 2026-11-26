@@ -93,6 +93,12 @@ jobs:
             for _ in 1 2 3 4 5; do p="$(command -v "$t")" || break; sudo rm -f -- "$p"; hash -r; done
             if command -v "$t"; then echo "::error::$t is still on PATH"; exit 1; fi
           done
+      # the Bash sandbox e2e (I3c) runs the doctor for real: it needs bwrap, which the
+      # runner image ships, and socat, which it does not
+      - name: install socat (Bash sandbox doctor)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends socat
       - name: e2e shard
         run: >-
           uv run python tests/tools/pytest_timed.py -o addopts= -q -m e2e -n 2

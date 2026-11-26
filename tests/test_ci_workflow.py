@@ -166,6 +166,15 @@ def test_e2e_shards_hide_the_optional_c_linters_before_the_tests() -> None:
     assert "command -v" in step and "exit 1" in step
 
 
+def test_e2e_shards_install_socat_before_the_tests() -> None:
+    # the Bash sandbox doctor (I3c) needs bwrap and socat: the runner image ships
+    # bwrap, not socat, and the doctor e2e runs for real (no skip)
+    shard = _shard_job()
+    assert re.search(r"sudo apt-get install [^\n]*\bsocat\b", shard)
+    assert "sudo apt-get update" in shard
+    assert shard.index("sudo apt-get install") < shard.index("--splits")
+
+
 def test_e2e_shards_upload_their_records_even_on_failure() -> None:
     shard = _shard_job()
     upload = shard[shard.index("actions/upload-artifact") :]
