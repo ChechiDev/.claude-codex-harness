@@ -88,6 +88,9 @@ RE_CODEX_OWNED = re.compile(
     r"|progress/review_history/[^/]+\.md|progress/pr_[^/]+\.md"
     r"|progress/issue_migrations_[^/]+\.json|progress/oracle_migrations/[^/]+\.json"
     r"|progress/[^/]+\.sha256|progress/close_[^/]+\.msg|\.git/harness-[^/]+(/.*)?"
+    # The project's .git entry itself (a file in a linked worktree): it says where the
+    # git dir, and so every .git/harness-* record, lives (issue #130).
+    r"|\.git"
     # Migration record and backups (M0a): written only by the human-run migrator.
     r"|\.harness(/.*)?)$"
 )
@@ -98,8 +101,14 @@ RE_CODEX_OWNED = re.compile(
 HARNESS_ENTRIES = (*_upgrade.LINKS, ".claude/settings.local.json")
 HARNESS_GLOBAL = ("skills", "CLAUDE.md")  # machine-level links under $CLAUDE_HOME
 TOOLKIT = _upgrade.TOOLKIT  # the checkout that supplies the running guard
-# The supersede tickets (issue #30) share the mechanism: codex-owned in every worktree.
-VERDICT_SLOTS = ("harness-verdict-slot", "harness-verdict-partial", "harness-supersede-ticket")
+# Codex-owned git-path dirs, outside the root in a linked worktree: the verdict slots,
+# the supersede tickets and the re-plan snapshots (issue #130).
+VERDICT_SLOTS = (
+    "harness-verdict-slot",
+    "harness-verdict-partial",
+    "harness-supersede-ticket",
+    "harness-replan",
+)
 
 MSG_HARNESS = (
     "BLOCKED: '{target}' is harness-owned (toolkit links, hook settings or the toolkit files "
@@ -366,6 +375,8 @@ def classify(rel: str) -> str | None:
 def protected_kind(path: Path, destructive: bool = False) -> str | None:
     """Why `path` is protected, or None. Destructive ops also protect ancestors."""
     rel = project_rel(path)
+    if destructive and any(slot.is_relative_to(path) for slot in verdict_slots()):
+        return "ancestor of a harness record dir"  # e.g. a linked worktree's git dir
     if rel is None:
         if destructive and ROOT.is_relative_to(path):
             return "ancestor"
@@ -911,6 +922,7 @@ PROTECTED_TEMPLATES = (
     "progress/*.sha256",
     "progress/close_*.msg",
     ".git/harness-*/**",
+    ".git",
     ".harness/**",
     "**/tests/acceptance/**",
 )
