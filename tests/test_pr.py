@@ -334,6 +334,13 @@ def _fake_tools(project: Project, tmp: Path, *, with_gh: bool = True) -> dict[st
     codex.write_text(
         '#!/usr/bin/env bash\ncat > "$FAKE_LOG.prompt"\n'
         'sed -i \'s/"in_progress"/"done"/g\' feature_list.json\n'
+        # A complete reference doc (issue #133: the close checks it with the doc gate).
+        "mkdir -p docs/reference\n"
+        f"printf -- '---\\nid: {LEAF_ID}\\ndate: d\\nalias: a\\ntags: t\\n---\\n' "
+        f"> docs/reference/{LEAF_ID}-user-entity.md\n"
+        "for a in concept planning execution problems files; do "
+        f"printf '<!-- section: %s -->\\n' \"$a\" "
+        f">> docs/reference/{LEAF_ID}-user-entity.md; done\n"
         f"printf 'feat(domain): add user entity [{LEAF_ID}]\\n' > progress/close_{LEAF_ID}.msg\n"
         "printf '## Overview\\nUser entity.\\n' > progress/pr_1.1.md\n"
     )

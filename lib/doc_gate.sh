@@ -9,7 +9,20 @@
 #   <!-- section: problems -->   problems found and how they were solved
 #   <!-- section: files -->      files created/modified
 # Used by check.sh and (via make check) the Stop hook. exit 0 = ok; 1 = missing, or a helper failed.
+#   doc_gate.sh                 every 'done' leaf
+#   doc_gate.sh --leaf <id>     only that leaf, by the same rule (issue #133: the close
+#                               step checks its own leaf before it commits); exit 2 = usage
 set -uo pipefail
+
+ONLY=""
+if [ "${1:-}" = "--leaf" ]; then
+  ONLY="${2:-}"
+  if ! [[ "$ONLY" =~ ^([0-9]+\.[0-9]+\.[0-9]+|ISS-[0-9]+\.[0-9]+)$ ]] || [ "$#" -ne 2 ]; then
+    echo "usage: doc_gate.sh [--leaf <N.M.K|ISS-n.k>]" >&2; exit 2
+  fi
+elif [ "$#" -ne 0 ]; then
+  echo "usage: doc_gate.sh [--leaf <N.M.K|ISS-n.k>]" >&2; exit 2
+fi
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
@@ -27,6 +40,7 @@ rc=0
 
 while read -r ID; do
   [ -z "$ID" ] && continue
+  [ -z "$ONLY" ] || [ "$ID" = "$ONLY" ] || continue
   # Match docs/reference/<ID>-*.md (and tolerate a bare <ID>.md); first in name order.
   DOC=""
   for candidate in docs/reference/"${ID}"-*.md docs/reference/"${ID}".md; do
@@ -58,5 +72,8 @@ while read -r ID; do
   done
 done <<< "$IDS"
 
-[ $rc -eq 0 ] && ok "reference docs complete (every 'done' documented)"
+if [ $rc -eq 0 ]; then
+  if [ -n "$ONLY" ]; then ok "reference doc of $ONLY complete (or not required: not done)"
+  else ok "reference docs complete (every 'done' documented)"; fi
+fi
 exit $rc
