@@ -80,10 +80,35 @@ code or tests.
    close entry to `progress/history.md`. Its `**Commit:**` line is the commit
    subject, never a hash or "pending": the entry is part of the close commit,
    which cannot contain its own hash (`git log --grep '[N.M.K]'` finds it).
-5. **Do not run `make check`, the tests or `git commit`**: your sandbox blocks
+5. **Changelog fragment** (releases, the toolkit's `docs/design/releases.md`): run
+   `python3 harness/_changelog.py due <N.M.K>`. Exit 1 → nothing to write. Exit 0 →
+   this close finishes its task `N.M` (or issue `ISS-<n>`) in a project whose
+   changelog is activated: write `changelog.d/<N.M>.md` (or `changelog.d/ISS-<n>.md`),
+   which goes into this close commit and the PR. It prints the declaration of the
+   specs (`- changelog:` / `- incompatible:`): **contrast it with what was
+   delivered** (the specs, `progress/impl_*.md`, the reference notes, the diff) and
+   write what was delivered, not what was planned; say in the PR narrative's
+   `## Decisions` where they differ. A task approved before the activation has no
+   declaration: write it from what was delivered. Format (exactly):
+
+   ```markdown
+   - id: <N.M | ISS-n>
+   - incompatible: no                (or: yes: <what breaks for users>)
+
+   ### Added
+   - One user-facing line per change, in the users' words, no file names.
+   ### Fixed
+   - …
+   ```
+
+   Sections: `Added`, `Changed`, `Fixed`, `Removed`, `Security` (only those that
+   apply, each once). Nothing user-visible → `- none: <why>` and no section. Never
+   write `CHANGELOG.md`: the release consolidates the fragments. `make check` refuses
+   the close of the last subtask without a valid fragment.
+6. **Do not run `make check`, the tests or `git commit`**: your sandbox blocks
    local sockets and `.git`. The prompt gives you the exit code and log of the
    `make check` the harness ran before your session.
-6. **Write the commit message** to `progress/close_<N.M.K>.msg` and stop. Use the
+7. **Write the commit message** to `progress/close_<N.M.K>.msg` and stop. Use the
    `commit` standard: `<prefix><type>(<scope>): <what> [N.M.K]` + 2-4 line body
    (why) + footer `Plan: docs/plan/phase-NN-<slug>/<N.M.K>-<slug>.md`, where
    `<prefix>` is exactly what `python3 harness/_harness.py commit-prefix <N.M.K>`
@@ -93,6 +118,13 @@ code or tests.
    commits everything with that message (code + `tests/acceptance/` +
    `docs/reference/` + `docs/plan/` + `feature_list.json` + `progress/`). It
    refuses a subject that does not end in `[N.M.K]` or any agent attribution.
+
+**Repair mode** (`Phase: doc (repair)`): the close already ran but its reference doc
+fails the doc gate, or (activated project) it still owes its changelog fragment. The
+prompt lists the failures and the only files you may edit: the doc (step 1's
+frontmatter and sections) and/or `changelog.d/<N.M | ISS-n>.md` (step 5). Change
+nothing else, not even the waiting commit message; the harness verifies it and refuses
+the close otherwise.
 
 ## Task PR narrative (only when the prompt says this close finishes a task)
 

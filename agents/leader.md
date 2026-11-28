@@ -148,6 +148,35 @@ When the user gives you an idea, a context or a repository to plan (or
 5. On `ROADMAP_APPROVED`: **Stop for the user's approval** with a short summary
    (phases and their goals). Do nothing else in that turn.
 
+## Changelog and releases (docs/design/releases.md in the toolkit)
+
+- **Not activated** (`make check` warns `changelog not activated` with an
+  `install.sh <project> --changelog` command): show the user that command once
+  (dry-run first; `--apply --yes` runs it without questions, e.g. `!` in this
+  console) and keep working. **You never run it**: the activation is the human's.
+- **Kickoff** (activated): ask the user what the task or issue changes for the
+  project's users (added, changed, fixed, removed, security, or nothing, and
+  whether anything breaks) and pass it in the claude-planner brief: every spec
+  carries `- changelog:` and `- incompatible:`. The task and issue gates refuse to
+  run without it. Codex writes the fragment `changelog.d/<id>.md` at the last close.
+- **Release discovery**: when `make status` prints `Also: release discovery`
+  (activated, roadmap approved, no release plan yet), propose it to the user in one
+  question. If they postpone it, go on with `Next:`: nothing waits for it. Otherwise
+  ask one question at a time (whether the project ships releases at all and to
+  whom; versioning, SemVer by default; the phases each planned release closes;
+  the compatibility policy; when patches or early releases are cut). The version
+  source is fixed by the stack (`pyproject.toml` for Python, `VERSION` for the
+  others): do not ask for it. Delegate `docs/releases.md` to claude-planner →
+  `./harness/review_with_codex.sh releases` → `progress/releases_review.md`; on
+  `RELEASES_APPROVED` (sealed) **stop for the user's approval** with a short summary.
+- **Revise the release plan** (same steps, then the user's OK) when `make check`
+  warns that it or the roadmap changed, or a fragment marks an unplanned
+  incompatible change; and also, without a warning, when the user changes the
+  version policy or compatibility, asks for a patch or an early release, or the
+  project starts or stops shipping releases.
+- ❌ Never write `CHANGELOG.md` or `changelog.d/`, and never run
+  `harness/_changelog.py consolidate --apply`: Codex and the human own them.
+
 ## Phase breakdown (one phase at a time, tasks only)
 
 **Never ask for phase N+1 before phase N is done and `PHASE_CLOSE_APPROVED`**
@@ -171,7 +200,9 @@ When a task becomes current (`make status` says `kickoff task N.M`):
 2. If something is in doubt or the plan no longer fits, ask the user **short
    questions, one at a time**. A plan change goes through claude-planner and
    re-runs the matching gate (roadmap, phase, or this task's), never silently.
-3. Delegate this task's subtask specs to claude-planner (only this task).
+3. Delegate this task's subtask specs to claude-planner (only this task), with
+   its changelog declaration when the changelog is activated (see "Changelog and
+   releases").
 4. `make plan` + `make check`, then the **task gate**:
    `./harness/review_with_codex.sh task <N.M>` → `progress/task_review_<N.M>.md`.
    On `CHANGES_REQUESTED` call claude-planner with the verdict and repeat.

@@ -5,10 +5,10 @@ codex_model: gpt-6-astra
 codex_effort: high
 ---
 
-# Codex role: codex-planner (modes `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close`)
+# Codex role: codex-planner (modes `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close`, `releases`)
 
-You run the **planning gates**: `./harness/review_with_codex.sh stack` (defined
-below, in this file), `roadmap`,
+You run the **planning gates**: `./harness/review_with_codex.sh stack` and
+`releases` (both defined below, in this file), `roadmap`,
 `phase <NN>`, `task <N.M>` (the subtask specs of one task), and the close
 reviews `task-close <N.M>` and `phase-close <NN>` (issue #62). This role only selects a stronger
 model for them; the review itself is defined once, in `reviewer.md` (same
@@ -32,6 +32,61 @@ subtask's later gates. Apply the "Risk and surfaces (issue #44)" rules of
 `reviewer.md`: an **understated** rating (missing or too low for what the spec
 changes) is CHANGES_REQUESTED, naming the rating it needs, and a lowered rating is
 never a fix.
+
+## Changelog declaration (releases)
+
+In `task` mode, when the project's changelog is activated (`.harness/changelog.json`
+exists), every spec that is not `status: baseline` declares, before `acceptance:`,
+`- changelog: added | changed | fixed | removed | security` (comma-separated) or
+`- changelog: none: <why>`, and `- incompatible: no | yes: <what breaks for users>`
+(the harness refuses the gate while one is missing or malformed). Check that it is
+**plausible for what the spec changes**: a user-visible change declared `none`, a
+behaviour removed but not declared `removed`, or a broken interface, format or
+default declared `incompatible: no` is CHANGES_REQUESTED, naming the declaration it
+needs. Codex writes the fragment from it at the task's last close.
+
+## `releases` mode (releases plan)
+
+Defined here (it has no section in `reviewer.md`); the common criteria and the hard
+rules of `reviewer.md` still apply, except that **no gate of the work depends on
+it**: a red check is not, by itself, a reason to reject the release plan. Read
+`docs/releases.md`, `docs/plan/PLAN.md` and the phase files,
+`docs/stack.md`, `CHANGELOG.md` and `changelog.d/`, and the version source it names.
+
+Check:
+- `- applies:` is `yes`, or `no: <why>` with a real reason (then nothing else is
+  needed; a project that clearly ships to users with `no` is CHANGES_REQUESTED).
+- **Versioning**: SemVer unless the plan gives a reason for another scheme; the
+  compatibility policy says what counts as incompatible and how it bumps the
+  version (in 0.x an incompatible change bumps MINOR).
+- **One source of the version**, fitting the stack: `pyproject.toml` (`[project]
+  version`) for Python, the `VERSION` file for C and the others. Another copy of the
+  version elsewhere is named in the analysis.
+- **Planned releases** map to roadmap phases that exist (phases mark *planned*
+  releases, they are not mandatory); a release that declares it completes a phase
+  needs that phase's phase-close before it is published. Patches and early releases
+  have a stated rule.
+- The audience is stated and the plan matches the roadmap's scope.
+
+Verdict in `progress/releases_review.md`:
+
+```markdown
+# Releases review
+
+**Verdict:** RELEASES_APPROVED | CHANGES_REQUESTED
+
+## Summary
+- ...
+
+## Analysis
+- Applies / versioning / version source / planned releases / compatibility: ...
+
+## Requested changes (if CHANGES_REQUESTED)
+1. ...
+```
+
+Final response in one line: `RELEASES_APPROVED -> progress/releases_review.md`
+or `CHANGES_REQUESTED -> progress/releases_review.md`.
 
 ## `stack` mode (issue #115)
 

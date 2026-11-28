@@ -75,6 +75,8 @@ When `harness.toml` `[git]` uses `{ticket}` (for example
 - surfaces: none
 - files:
   - src/<pkg>/domain/email.py          # crea: Email value object
+- changelog: added
+- incompatible: no
 - acceptance:
   - AC1 | rejects an address without '@' | tests/acceptance/test_1.1.1.py::test_ac1_no_at
   - AC2 | lowercases the domain | tests/acceptance/test_1.1.1.py::test_ac2_lower_domain
@@ -101,6 +103,10 @@ Immutable value object that validates and normalizes an email address…
   production file. Unit tests (`tests/unit/`) are not declared. `make check`
   (validate) warns on any other count; done, baseline and unchanged legacy leaves are exempt.
 - `acceptance:` observable criteria, one test each; Codex writes those tests.
+- `changelog:` ∈ `added | changed | fixed | removed | security` (comma-separated)
+  or `none: <why>`, and `incompatible:` ∈ `no | yes: <what breaks for users>`: what
+  the subtask changes for the project's users (`CHANGELOG.md`). Required (the task
+  and issue gates check it) once the changelog is activated; `baseline` specs skip it.
 - `risk:` (optional) ∈ `low | medium | high` and `surfaces:` (optional) the
   `harness.toml` `[review.surfaces.<name>]` names it touches (built in:
   `security`, `data`, `migrations`), or `none`. They raise the Codex effort and

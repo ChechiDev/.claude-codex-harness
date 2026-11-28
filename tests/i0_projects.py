@@ -155,7 +155,38 @@ def _build_template(tmp: Path, kind: str, toolkit: Path) -> Installed:
         _relax_coverage(root)
         _sh(repo, env, "git", "commit", "-q", "--amend", "--no-edit", "-a")
         _sh(repo, env, "git", "branch", "-f", "main", "HEAD")
+    _set_changelog(root, repo, env, on=False)
     return Installed(kind=kind, root=root, repo=repo, env=env, install_output=res.stdout)
+
+
+CHANGELOG_RECORD = ".harness/changelog.json"
+
+
+def _set_changelog(root: Path, repo: Path, env: dict[str, str], on: bool) -> None:
+    """A new install has its changelog activated (docs/design/releases.md). The I0
+    fixtures keep the projects as they were before it (record dropped, the commit
+    amended, main moved with it) unless a test asks for it (install_project(changelog=
+    True)): their fake Codex writes no fragment unless the close asks for one."""
+    record = root / CHANGELOG_RECORD
+    if on:
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text('{"version": 1, "since": null, "finished": []}\n')
+    elif record.exists():
+        record.unlink()
+    else:
+        return
+    _sh(repo, env, "git", "add", "-A", "--", str(record))
+    _sh(repo, env, "git", "commit", "-q", "--amend", "--no-edit")
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    if branch != "main":
+        _sh(repo, env, "git", "branch", "-f", "main", "HEAD")
 
 
 # One installed template per (kind) for the real toolkit, built once per process (each
@@ -171,15 +202,21 @@ def _template(kind: str) -> Installed:
     return _TEMPLATES[kind]
 
 
-def install_project(tmp: Path, kind: str, toolkit: Path = TOOLKIT) -> Installed:
+def install_project(
+    tmp: Path, kind: str, toolkit: Path = TOOLKIT, *, changelog: bool = False
+) -> Installed:
     """Install the harness into a throwaway project of the given kind (from `toolkit`,
     the real worktree by default, or a throwaway copy of it).
 
     For the real toolkit the install runs once per process; every call gets its own copy
     of that template (own git repo, HOME and venv), so tests stay isolated. A custom
-    `toolkit` always gets a real install."""
+    `toolkit` always gets a real install. `changelog=True` keeps the changelog of a new
+    install activated (the default drops it, see _set_changelog)."""
     if toolkit != TOOLKIT:
-        return _build_template(tmp, kind, toolkit)
+        built = _build_template(tmp, kind, toolkit)
+        if changelog:
+            _set_changelog(built.root, built.repo, built.env, on=True)
+        return built
     tpl = _template(kind)
     env = isolated_env(tmp)
     repo = tmp / f"{kind}-proj"
@@ -191,4 +228,6 @@ def install_project(tmp: Path, kind: str, toolkit: Path = TOOLKIT) -> Installed:
     root = repo / tpl.root.relative_to(tpl.repo)
     if (tpl.root / "pyproject.toml").exists():
         _sh(root, env, "uv", "sync", "--all-groups", "--quiet", "--offline")
+    if changelog:
+        _set_changelog(root, repo, env, on=True)
     return Installed(kind=kind, root=root, repo=repo, env=env, install_output=tpl.install_output)

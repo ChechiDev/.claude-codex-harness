@@ -205,6 +205,7 @@ def test_gate_tokens_cover_every_review_gate() -> None:
         "task-close": "TASK_CLOSE_APPROVED",
         "phase-close": "PHASE_CLOSE_APPROVED",
         "stack": "STACK_APPROVED",
+        "releases": "RELEASES_APPROVED",
     }
 
 

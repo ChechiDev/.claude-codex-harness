@@ -380,6 +380,20 @@ def _add_exclude(root: Path) -> None:
 
 def check_level(root: Path) -> int:
     """Report the project's migration level; never fails (WARN only)."""
+    return _check_level(root)
+
+
+def _check_changelog(root: Path) -> None:
+    """The changelog (docs/design/releases.md): one WARN until the human activates it."""
+    import _changelog  # lazy: only the level check needs it
+
+    if _changelog.activated(root):
+        say("OK", "changelog activated (CHANGELOG.md, changelog.d/)")
+    else:
+        say("WARN", _changelog.not_activated_warning(root))
+
+
+def _check_level(root: Path) -> int:
     hint = f"bash {TOOLKIT}/install.sh {root} --migrate (dry-run first)"
     try:
         record = _read_record(root)
@@ -768,7 +782,8 @@ def main(argv: list[str]) -> int:
     try:
         if len(args) == 2 and args[0] == "migrate":
             return migrate(Path(args[1]).resolve(), apply, yes)
-        if len(args) == 2 and args[0] == "level":
+        if len(args) == 2 and args[0] == "level":  # make check, section 8
+            _check_changelog(Path(args[1]).resolve())
             return check_level(Path(args[1]).resolve())
         if len(args) == 3 and args[0] == "register" and args[2] in _templates.SETS:
             return register(Path(args[1]).resolve(), args[2])

@@ -61,6 +61,7 @@ class Case:
     oracle: str
     code: dict[str, str]
     undeclared: str
+    changelog: bool = False  # the changelog activated (docs/design/releases.md)
 
 
 CASES = {
@@ -69,6 +70,10 @@ CASES = {
     "c": Case("c", f"tests/acceptance/test_{SID}.c", C_ORACLE, C_CODE, "src/other.c"),
     "nested": Case("nested", f"tests/acceptance/test_{SID}.py", PY_ORACLE, PY_CODE,
                    "src/demo/other.py"),
+    # A new install as it ships: the changelog activated, so the spec declares what it
+    # changes and the last close writes changelog.d/1.1.md into its commit and the PR.
+    "python-changelog": Case("python", f"tests/acceptance/test_{SID}.py", PY_ORACLE,
+                             PY_CODE, "src/demo/other.py", changelog=True),
 }  # fmt: skip
 
 
@@ -87,8 +92,18 @@ def _ok(res: object, what: str) -> None:
 def _plan(project: Installed, case: Case, status: str = "pending") -> None:
     _write(project, "docs/plan/PLAN.md", PLAN_MD)
     _write(project, "docs/plan/phase-01-greetings.md", PHASE_MD)
-    _write(project, SPEC, spec(list(case.code), case.oracle_path, status))
+    _write(project, SPEC, spec(list(case.code), case.oracle_path, status, case.changelog))
     _ok(project.make("plan"), "make plan")
+
+
+def _assert_fragment(project: Installed, case: Case, committed: list[str]) -> None:
+    """Activated: the fragment rides in the last close (and so in the PR); else none."""
+    if not case.changelog:
+        assert not [f for f in committed if f.startswith("changelog.d/")], committed
+        return
+    assert "changelog.d/1.1.md" in committed, committed
+    fragment = (project.root / "changelog.d/1.1.md").read_text()
+    assert "- id: 1.1" in fragment and "### Added" in fragment
 
 
 def _write_payload(project: Installed, rel: str) -> str:
@@ -98,7 +113,7 @@ def _write_payload(project: Installed, rel: str) -> str:
 @pytest.mark.parametrize("kind", list(CASES))
 def test_task_cycle_end_to_end(tmp_path: Path, kind: str) -> None:
     case = CASES[kind]
-    project = install_project(tmp_path, kind)
+    project = install_project(tmp_path, case.kind, changelog=case.changelog)
     env = fake_tools(project, tmp_path, case.oracle_path, case.oracle, SPEC)
     git(project, "push", "-q", "origin", "main")
 
@@ -143,6 +158,7 @@ def test_task_cycle_end_to_end(tmp_path: Path, kind: str) -> None:
     assert "- status: done" in (project.root / SPEC).read_text()
     committed = git(project, "show", "--name-only", "--format=", "HEAD").split()
     assert not [f for f in committed if f.endswith((".o", ".bin", ".pyc"))], committed
+    _assert_fragment(project, case, committed)
 
     # 5. The close finished the task: branch pushed, PR opened against main.
     remote = tmp_path / "origin.git"

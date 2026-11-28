@@ -565,6 +565,10 @@ NOT_IN_CLAUDES_SANDBOX: dict[str, str] = {
     # Claude reaches its CLI through make check (`_stack.py check`, reads only); the seal
     # (progress/stack.sha256) is `_guard.py seal stack`, run by the excluded stack gate.
     "_stack.py": "check/ready only read; the seal runs inside the excluded stack gate",
+    # The same for the release plan (docs/design/releases.md): `_releases.py check|ready`
+    # only read; the seal (progress/releases.sha256) runs inside the excluded releases
+    # gate (`_guard.py seal releases`), and the guard denies `_releases.py seal` to Claude.
+    "_releases.py": "check/ready only read; the seal runs inside the excluded releases gate",
     "_colors.sh": "sourced status helpers; prints only",
     "_status_export.py": "writes only stdout or --out",
     "_supersede.py": "run by the gates (excluded); writes .git/harness-*",

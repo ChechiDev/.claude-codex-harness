@@ -20,10 +20,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import _changelog
 import _config
 import _gate_run
 import _harness
 import _pr
+import _releases
 import _resume
 import _stack
 from _status import Kind, paint
@@ -118,9 +120,38 @@ def _stack_lines() -> list[str]:
     return [f"Stack      {paint(state, kind, OUT)}"]
 
 
+def _release_lines() -> list[str]:
+    """`Changelog` and `Releases` (docs/design/releases.md), activated projects only:
+    a project that is not keeps its output as is (its one WARN is in `make check`)."""
+    root = Path(".").resolve()
+    if not _changelog.activated(root):
+        return []
+    pending = len(_changelog.fragment_paths(root))
+    lines = [f"Changelog  {paint('activated', 'OK', OUT)} · {pending} fragment(s) to consolidate"]
+    state = _releases.label(root)
+    if state is not None:
+        kind: Kind = "OK" if state == _releases.APPROVED else "WARN"
+        lines.append(f"Releases   {paint(state, kind, OUT)}")
+    return lines
+
+
+def _also_lines() -> list[str]:
+    """Asked, never blocking: it never takes the `Next:` line."""
+    if not _releases.discovery_due(Path(".").resolve()):
+        return []
+    return [
+        paint(
+            "Also: release discovery (propose it to the user; it blocks nothing): "
+            f"claude-planner writes {_releases.DOC}, then {GATE} releases",
+            "SKIP",
+            OUT,
+        )
+    ]
+
+
 def _tree(data: Item) -> list[str]:
     roadmap = f"Roadmap    {_gate_state(_harness.ROADMAP_REVIEW, 'ROADMAP_APPROVED')}"
-    lines = [*_stack_lines(), roadmap, ""]
+    lines = [*_stack_lines(), *_release_lines(), roadmap, ""]
     for phase in data["phases"]:
         lines.append(_phase_line(data, phase))
         for task in (t for t in data["features"] if t["phase"] == phase["id"]):
@@ -407,15 +438,22 @@ def _leaf_next(sid: str) -> str:
     return _close_next(sid)
 
 
+DOC_REPAIRABLE = (
+    "the reference doc fails the doc gate",
+    "the changelog fragment of the close is missing or invalid",  # rel1rev #4
+)
+
+
 def _doc_repair_next(sid: str, reason: str) -> str | None:
-    """Issue #133: a close red because of its reference doc is repaired by `doc`; a
-    repair that went out of scope, or ran out, waits for the human."""
+    """Issue #133: a close red because of its reference doc (or, activated, its owed
+    changelog fragment) is repaired by `doc`; a repair that went out of scope, or ran
+    out, waits for the human."""
     if any(key in reason for key in ("outside the reference doc", "the repairs ran out")):
         return (
             f"needs human: the close of {sid} failed ({reason}): the human checks its "
-            "reference doc and the tree"
+            "reference doc, its changelog fragment and the tree"
         )
-    if "the reference doc fails the doc gate" in reason:
+    if any(key in reason for key in DOC_REPAIRABLE):
         return _budget("close", sid) or f"close: {GATE} doc {sid} (last attempt: {reason})"
     return None
 
@@ -677,13 +715,13 @@ def main() -> int:
     if data["phases"]:
         lines = [*_tree(data), "─" * 60, _summary(data)]
     else:
-        lines = [*_stack_lines(), "No phases planned yet."]
+        lines = [*_stack_lines(), *_release_lines(), "No phases planned yet."]
     # Only a project that uses the issues lane (docs/plan/issues/, shipped with new
     # projects and added by --migrate) asks GitHub: the others stay offline as before.
     lane = (_harness.FEATURES_FILE.parent / "docs/plan/issues").is_dir()
     queue = github_queue() if lane else None
     lines += _issues_tree(data) + (_queue_lines(data, queue) if lane else [])
-    lines += ["", paint(f"Next: {next_step(data, queue)}", "SKIP", OUT)]
+    lines += ["", *_also_lines(), paint(f"Next: {next_step(data, queue)}", "SKIP", OUT)]
     print("\n".join(lines))
     return 0
 

@@ -76,6 +76,8 @@ When `harness.toml` `[git]` uses `{ticket}` (for example
 - files:
   - include/<name>/address.h           # crea: public API
   - src/core/address.c                 # crea: implementation
+- changelog: added
+- incompatible: no
 - acceptance:
   - AC1 | returns ERR_NO_AT for an address without '@' | tests/acceptance/test_1.1.1.c
   - AC2 | splits "a@b.c" into "a" and "b.c" | tests/acceptance/test_1.1.1.c
@@ -93,6 +95,10 @@ Pure function that splits an address at its single '@'…
   that changes no production file.
   Unit tests (`tests/unit/`) are not declared.
 - `acceptance:` observable criteria, one test each; Codex writes those tests.
+- `changelog:` ∈ `added | changed | fixed | removed | security` (comma-separated)
+  or `none: <why>`, and `incompatible:` ∈ `no | yes: <what breaks for users>`: what
+  the subtask changes for the project's users (`CHANGELOG.md`). Required (the task
+  and issue gates check it) once the changelog is activated; `baseline` specs skip it.
 - `risk:` (optional) ∈ `low | medium | high` and `surfaces:` (optional) the
   `harness.toml` `[review.surfaces.<name>]` names it touches (built in:
   `security`, `data`, `migrations`), or `none`. They raise the Codex effort and

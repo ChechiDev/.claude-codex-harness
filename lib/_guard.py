@@ -11,6 +11,7 @@ Commands:
                     re-seal its spec in the phase seal
   seal roadmap      record progress/plan_roadmap.sha256 (needs ROADMAP_APPROVED)
   seal stack        record progress/stack.sha256 (needs STACK_APPROVED, issue #115)
+  seal releases     record progress/releases.sha256 (needs RELEASES_APPROVED; releases)
   seal task <N.M>   record progress/plan_task_N.M.sha256 (needs TASK_APPROVED)
   seal phase <NN>   record progress/plan_phase_<NN>.sha256 (needs PHASE_APPROVED)
   seal issue <ISS-n>  record progress/plan_issue_<ISS-n>.sha256 (needs ISSUE_APPROVED)
@@ -48,11 +49,13 @@ from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
+import _changelog
 import _config
 import _harness
 import _migrate
 import _plan_seal
 import _pywrites
+import _releases
 import _seal_required
 import _shell
 import _stack
@@ -71,6 +74,13 @@ ConfigError = _config.ConfigError
 DEFAULT_SRC_DIRS = ("src", "include")
 # Roots besides the source dirs whose deletion destroys protected state.
 STATE_ROOTS = ("tests/acceptance", "progress", ".harness")
+# The changelog (docs/design/releases.md) is protected only in an activated project
+# (review rel1rev #2): before that, a started project keeps its own CHANGELOG.md and
+# changelog.d/ (towncrier, …) as they were. See changelog_protected().
+CHANGELOG_ROOTS = ("changelog.d",)
+RE_CHANGELOG = re.compile(r"^(CHANGELOG\.md|changelog\.d(/.*)?)$")
+RE_MENTIONS_CHANGELOG = r"CHANGELOG\.md|changelog\.d\b"
+CHANGELOG_TEMPLATES = ("CHANGELOG.md", "changelog.d", "changelog.d/**")
 SKIP_DIRS = {"node_modules", "site-packages"}
 # Gate verdicts (roadmap, phase, plan, code), their history, the task PR
 # narrative and every seal under progress/.
@@ -80,7 +90,7 @@ RE_CODEX_OWNED = re.compile(
     # Legacy record of a phase broken down whole (issue #62), sealed in its phase seal.
     r"|progress/task_flow_legacy_[^/]+\.json"
     r"|progress/(roadmap_review|issue_draft_review|legacy_inventory_review"
-    r"|oracle_contract_review|config_contract_review|stack_review)\.md"
+    r"|oracle_contract_review|config_contract_review|stack_review|releases_review)\.md"
     # Sealed I4 baseline (issue #65): written only by the human-run _oracle.py.
     r"|progress/(oracle|contract)_baseline\.json"
     # Sealed legacy inventory (M0b): written only by the human-run legacy_inventory.sh.
@@ -157,9 +167,10 @@ MSG_SHELL_OPAQUE = (
     "touching protected paths). Use the Edit/Write tools so the plan scope is enforced."
 )
 MSG_SEAL = (
-    "BLOCKED: sealing (acceptance tests, the approved roadmap, a phase, the legacy inventory "
-    "or the attempt ledger) is done by the Codex "
-    "gate itself (or by the human in manual mode), never by Claude."
+    "BLOCKED: sealing (acceptance tests, the approved roadmap, a phase, the release plan, "
+    "the legacy inventory or the attempt ledger) is done by the Codex gate itself (or by the "
+    "human in manual mode), never by Claude. The changelog activation (install.sh "
+    "--changelog) and `_changelog.py consolidate --apply` are the human's too."
 )
 MSG_ATTRIBUTION = (
     "BLOCKED: the commit/PR contains agent attribution (Co-Authored-By / 'Generated with' / "
@@ -278,7 +289,8 @@ MSG_ASSUME = (
 
 
 MSG_PLANNER_SCOPE = (
-    "BLOCKED: the claude-planner subagent may write only docs/plan/**, docs/stack.md and "
+    "BLOCKED: the claude-planner subagent may write only docs/plan/**, docs/stack.md, "
+    "docs/releases.md and "
     "CLAUDE.md (target: {target}). Return the request to the leader instead."
 )
 
@@ -286,7 +298,7 @@ MSG_PLANNER_SCOPE = (
 # project-relative prefixes / exact files; every other path is blocked for it.
 # Claude Code sets `agent_type` in the hook payload for calls made by a subagent.
 AGENT_WRITE_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "claude-planner": (("docs/plan/",), ("CLAUDE.md", "docs/stack.md")),
+    "claude-planner": (("docs/plan/",), ("CLAUDE.md", "docs/stack.md", "docs/releases.md")),
 }
 
 
@@ -305,15 +317,32 @@ def src_dirs() -> tuple[str, ...] | None:
     return config().src_dirs
 
 
+@cache
+def changelog_protected() -> bool:
+    """CHANGELOG.md and changelog.d/ are Codex's and the human's: the project is
+    activated (here or on its base branch). Fail-closed: a record that exists in any
+    form but cannot be read counts as activated."""
+    if os.path.lexists(ROOT / _changelog.RECORD):
+        return True
+    try:
+        return _changelog.activated(ROOT)
+    except Exception:  # noqa: BLE001 - fail-closed on any surprise reading the record
+        return True
+
+
 def _protected_roots() -> tuple[str, ...]:
     """Roots whose deletion (or deletion of an ancestor) destroys protected state."""
-    return (*(src_dirs() or DEFAULT_SRC_DIRS), *STATE_ROOTS)
+    changelog = CHANGELOG_ROOTS if changelog_protected() else ()
+    return (*(src_dirs() or DEFAULT_SRC_DIRS), *STATE_ROOTS, *changelog)
 
 
 def _mentions_protected(command: str) -> bool:
     dirs = "|".join(re.escape(d) + "/" for d in src_dirs() or DEFAULT_SRC_DIRS)
+    state = RE_MENTIONS_STATE
+    if changelog_protected():
+        state = f"{RE_MENTIONS_CHANGELOG}|{state}"
     # `<>`: a perl mode glued to the path, open(F, ">progress/x")
-    return re.search(rf"(^|[\s'\"(=/<>`])({dirs}|{RE_MENTIONS_STATE})", command) is not None
+    return re.search(rf"(^|[\s'\"(=/<>`])({dirs}|{state})", command) is not None
 
 
 def _mentions_harness(command: str) -> bool:
@@ -356,7 +385,7 @@ def _segment_index(parts: tuple[str, ...], needle: tuple[str, ...]) -> int:
 
 def classify(rel: str) -> str | None:
     """'acceptance' | 'codex-owned' | 'src' | None for a project-relative path."""
-    if RE_CODEX_OWNED.match(rel):
+    if RE_CODEX_OWNED.match(rel) or (RE_CHANGELOG.match(rel) and changelog_protected()):
         return "codex-owned"
     if rel == CONFIG_FILE:
         return "config"
@@ -692,7 +721,8 @@ UV_RUN_FLAGS = frozenset(
 )  # fmt: skip
 OPAQUE_FLAGS = frozenset({"-S", "--split-string"})  # env: the value is the command line
 SEALER_NAMES = (
-    r"(_legacy|_guard|_verdict|_oracle|_contract|_gate_run|legacy_inventory|review_with_codex)\b"
+    r"(_legacy|_guard|_verdict|_oracle|_contract|_gate_run|legacy_inventory|review_with_codex"
+    r"|_changelog|_releases|install\.sh)\b"
 )
 RE_SEALER_NAME = re.compile(r"(^|[\s/'\"=])" + SEALER_NAMES)
 RE_SEALER_ANYWHERE = re.compile(SEALER_NAMES)
@@ -873,7 +903,8 @@ SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|deno|php)$")
 RE_INPLACE_FLAG = re.compile(r"^(-[a-zA-Z]*i.*|--in-place.*)$")
 RE_MENTIONS_STATE = (
-    r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|stack_review|acceptance_|plan_"
+    r"tests/acceptance|progress/(plan_review|review|phase_review|roadmap_review|stack_review|releases_review"
+    r"|acceptance_|plan_"
     r"|pr_|legacy_inventory|issue_review|issue_draft_review|verdict_|review_history/"
     r"|task_review|task_close|phase_close|task_flow_legacy"
     r"|issue_migrations_|oracle_migrations/|close_|[^/\s'\"]*\.sha256)|\.harness\b"
@@ -908,6 +939,7 @@ PROTECTED_TEMPLATES = (
     "progress/task_flow_legacy_*.json",
     "progress/roadmap_review.md",
     "progress/stack_review.md",
+    "progress/releases_review.md",
     "progress/issue_draft_review.md",
     "progress/legacy_inventory_review.md",
     "progress/legacy_inventory.json",
@@ -953,7 +985,34 @@ SEALERS: dict[str, frozenset[str]] = {
     # Attempt ledger (issue #46): an attempt is begun/ended only by the harness step, so
     # Claude cannot reset the budget. `budget` and the read-only next action stay open.
     "_resume.py": frozenset({"begin", "end"}),
+    # Releases (docs/design/releases.md): the human-run activation and install record,
+    # the release plan's seal, and `consolidate --apply` (SEAL_WITH_FLAG); the
+    # consolidation dry-run, `due` and the release plan's ready/check stay open.
+    "_changelog.py": frozenset({"activate", "install"}),
+    "_releases.py": frozenset({"seal"}),
+    "install.sh": frozenset(),  # only `--changelog` (SEAL_WITH_FLAG)
 }
+# A subcommand that seals only with a flag, anywhere after it ("" = no subcommand).
+SEAL_WITH_FLAG: dict[str, tuple[str, str]] = {
+    "_changelog.py": ("consolidate", "--apply"),
+    "install.sh": ("", "--changelog"),
+}
+
+
+# Scripts whose sealing subcommand counts anywhere in the call, not only first (review
+# rel1rev #1): their main() is strict, but the guard stays fail-closed on the order.
+SEAL_ANYWHERE = frozenset({"_changelog.py"})
+
+
+def _seals(script: str, tail: list[str]) -> bool:
+    """`script tail…` is a sealing call of a SEALERS script."""
+    sub, flag = SEAL_WITH_FLAG.get(script, ("\0", ""))
+    anywhere = script in SEAL_ANYWHERE
+    if flag and flag in tail and (not sub or (sub in tail if anywhere else tail[:1] == [sub])):
+        return True
+    if anywhere:
+        return any(arg in SEALERS[script] for arg in tail)
+    return bool(tail) and tail[0] in SEALERS[script]
 
 
 PY_NOVALUE_FLAGS = frozenset("bBdEhiIOPqsSuvVx?R")
@@ -1018,17 +1077,17 @@ def _is_seal(name: str, args: list[str]) -> bool:
     review_with_codex.sh or _guard.py, and `create|review|seal` of the legacy
     inventory (legacy_inventory.sh / _legacy.py; `verify` stays allowed)."""
     if name in SEALERS:
-        return bool(args) and args[0] in SEALERS[name]
+        return _seals(name, args)
     if name.startswith("python") and INTERPRETERS.match(name):
         module, tail, unsure = _python_module(args)  # python -IBm_legacy seal
         if unsure and RE_SEALER_ANYWHERE.search(" ".join(args)):  # also -m_legacy
             return True  # fail-closed: an unknown python flag may hide the module form
         script = f"{module.rpartition('.')[2]}.py" if module is not None else ""
         if script in SEALERS:  # also a dotted name: python -m lib._verdict
-            return bool(tail) and tail[0] in SEALERS[script]
+            return _seals(script, tail)
     if name in SHELLS or INTERPRETERS.match(name):
         return any(
-            i + 1 < len(args) and args[i + 1] in SEALERS[os.path.basename(a)]
+            _seals(os.path.basename(a), args[i + 1 :])
             for i, a in enumerate(args)
             if os.path.basename(a) in SEALERS
         )
@@ -1183,7 +1242,8 @@ def _protected_templates() -> tuple[str, ...]:
         if dirs is not None
         else tuple(f"**/{d}/**" for d in DEFAULT_SRC_DIRS)
     )
-    return (*PROTECTED_TEMPLATES, CONFIG_FILE, *sources)
+    changelog = CHANGELOG_TEMPLATES if changelog_protected() else ()
+    return (*PROTECTED_TEMPLATES, *changelog, CONFIG_FILE, *sources)
 
 
 def _harness_templates() -> tuple[str, ...]:
@@ -2757,6 +2817,8 @@ def seal_command(args: list[str]) -> int:
         return seal_roadmap() if args == ["roadmap"] else seal_draft()
     if args == ["stack"]:  # issue #115
         return _stack.seal(ROOT)
+    if args == ["releases"]:  # the release plan (docs/design/releases.md)
+        return _releases.seal(ROOT)
     owned = {"phase": seal_phase, "issue": seal_issue, "task": seal_task}
     if len(args) == 2 and args[0] in owned:
         return owned[args[0]](args[1])
@@ -2764,7 +2826,7 @@ def seal_command(args: list[str]) -> int:
         return seal(args[0])
     print(
         "usage: _guard.py seal <N.M.K|ISS-n.k> | roadmap | phase <NN> | task <N.M> | issue <ISS-n>"
-        " | draft | stack",
+        " | draft | stack | releases",
         file=sys.stderr,
     )
     return 2

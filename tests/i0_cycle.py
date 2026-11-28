@@ -40,11 +40,13 @@ STACK_MD = (
 )
 
 
-def spec(files: list[str], test: str, status: str = "pending") -> str:
+def spec(files: list[str], test: str, status: str = "pending", changelog: bool = False) -> str:
     listed = "".join(f"  - {f}\n" for f in files)
+    # The kickoff's declaration, once the changelog is activated (docs/design/releases.md).
+    declared = "- changelog: added\n- incompatible: no\n" if changelog else ""
     return (
         f"# {SID} Greet\n- status: {status}\n- layer: domain\n- depends: none\n"
-        f"- files:\n{listed}"
+        f"- files:\n{listed}{declared}"
         f"- acceptance:\n  - AC1 | greets by name | {test}::test_ac1_greets\n"
     )
 
@@ -82,6 +84,13 @@ tags: [i0]
 <!-- section: files -->
 DOC
            python3 harness/sync_plan.py >/dev/null
+           # The fragment of the last close, only when the harness says one is due
+           # (an activated changelog; documenter.md step 5).
+           if python3 harness/_changelog.py due "$id" >/dev/null 2>&1; then
+             frag="${id%.*}"
+             printf -- '- id: %s\n- incompatible: no\n\n### Added\n- Greets by name.\n' \
+               "$frag" > "changelog.d/$frag.md"
+           fi
            msg='feat(domain): greet by name [%s]\n\nAdds greet().\n'
            printf "$msg" "$id" > "progress/close_$id.msg"
            owner="${I0_PR_OWNER:-task}"
