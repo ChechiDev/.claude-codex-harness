@@ -85,8 +85,8 @@ frontmatter `model:` if you have them).
 | leader (main session) | Opus 5.5 / high |
 | claude-planner (`.claude/agents/claude-planner.md`) | Opus 5.5 / xhigh |
 | implementer (`.claude/agents/implementer.md`) | sonnet / medium |
-| codex-planner (`codex-planner.md`: `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates) | gpt-6-astra / high |
-| reviewer (`codex/reviewer.md`: `plan`, `code`, `issue`, `issue-draft` gates) | gpt-6-sol / high |
+| codex-planner (`codex-planner.md`: `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates) | gpt-6.2-sol / high |
+| reviewer (`codex/reviewer.md`: `plan`, `code`, `issue`, `issue-draft` gates) | gpt-6.2-sol / high |
 | documenter (`codex/documenter.md`: `doc` close) | gpt-6-luna / low |
 
 ### Parallel sessions

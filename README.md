@@ -39,8 +39,8 @@ task-by-task breakdown and the close gates: [task flow](docs/design/task-flow.md
 | `leader` (`agents/leader.md`) | Claude, `opus` | talks to you, runs every gate, never writes the plan or code |
 | `claude-planner` (`agents/claude-planner.md`) | Claude, `opus` | writes `PLAN.md`, phases, task kickoffs and subtask specs |
 | `implementer` (`agents/implementer.md`) | Claude, `sonnet` | TDD on one subtask until `make verify` is green |
-| `codex-planner` (`codex/codex-planner.md`) | Codex, `gpt-6-astra` / `high` | roadmap, phase, task, task-close and phase-close gates |
-| `reviewer` (`codex/reviewer.md`) | Codex, `gpt-6-sol` / `high` | plan, code, issue and issue-draft gates |
+| `codex-planner` (`codex/codex-planner.md`) | Codex, `gpt-6.2-sol` / `high` | roadmap, phase, task, task-close and phase-close gates |
+| `reviewer` (`codex/reviewer.md`) | Codex, `gpt-6.2-sol` / `high` | plan, code, issue and issue-draft gates |
 | `documenter` (`codex/documenter.md`) | Codex, `gpt-6-luna` / `low` | the doc step of the close |
 
 The Codex model and effort come from each role file's header:

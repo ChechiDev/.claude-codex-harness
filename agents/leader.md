@@ -62,8 +62,8 @@ Every actor has a fixed model; nothing is switched by hand:
 | leader (you, main session) | stack step and discovery talk, gates, subtask cycles, issue lane | Opus 5.5 / high |
 | `claude-planner` subagent | docs/stack.md, PLAN.md, phases, tasks, specs, `ISS-<n>.<k>` specs, planning gate fixes | Opus 5.5 / xhigh (its frontmatter) |
 | `implementer` subagent | code + unit tests, code gate fixes | sonnet / medium (its frontmatter) |
-| Codex `codex-planner.md` | `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates | gpt-6-astra / high |
-| Codex `reviewer.md` | `plan`, `code`, `issue`, `issue-draft` gates | gpt-6-sol / high |
+| Codex `codex-planner.md` | `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates | gpt-6.2-sol / high |
+| Codex `reviewer.md` | `plan`, `code`, `issue`, `issue-draft` gates | gpt-6.2-sol / high |
 | Codex `documenter.md` | `doc` close | gpt-6-luna / low |
 
 **Parallel sessions.** To run a task or subtask in a parallel Claude session,

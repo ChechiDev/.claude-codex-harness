@@ -375,19 +375,19 @@ passes to the CLI as `--model` and `-c model_reasoning_effort=…`:
 
 ```yaml
 ---
-codex_model: gpt-6-sol
+codex_model: gpt-6.2-sol
 codex_effort: high
 ---
 ```
 
 | Role file | Model / effort | Used by gates |
 |-----------|----------------|---------------|
-| `codex/codex-planner.md` | `gpt-6-astra` / `high` | `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` |
-| `codex/reviewer.md` | `gpt-6-sol` / `high` | `plan`, `code`, `issue`, `issue-draft` |
+| `codex/codex-planner.md` | `gpt-6.2-sol` / `high` | `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` |
+| `codex/reviewer.md` | `gpt-6.2-sol` / `high` | `plan`, `code`, `issue`, `issue-draft` |
 | `codex/documenter.md` | `gpt-6-luna` / `low` | `doc` |
 
 `codex-planner.md` holds no criteria of its own: it applies `reviewer.md`'s common
-criteria, the section of its planning mode and its hard rules with a stronger model.
+criteria, the section of its planning mode and its hard rules; it runs with the model and effort of its own header.
 
 `codex_effort` accepts `low`, `medium`, `high` or `xhigh`; any other value is
 not passed. A subtask's rating may raise the reviewer's effort for its `plan` and
