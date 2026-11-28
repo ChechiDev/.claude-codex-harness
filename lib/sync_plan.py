@@ -38,6 +38,9 @@ Subtask spec (docs/plan/phase-01-users/1.1.1-email-value-object.md):
   - surfaces: security, data           (optional: [review.surfaces.<name>] names, or none)
   - files:
     - src/app/domain/email.py          # crea: Email VO (comment optional)
+  - changelog: added                  (changelog activated: added | changed | fixed |
+                                        removed | security, or none: <why>)
+  - incompatible: no                   (changelog activated: no | yes: <what breaks>)
   - acceptance:
     - AC1 | <observable criterion> | tests/acceptance/test_1.1.1.py::test_ac1_<slug>
 

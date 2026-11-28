@@ -4,6 +4,7 @@
 #   install.sh <project-path> [--force] [--python <package-name>] [--src-dirs a,b]
 #   install.sh <project-path> --migrate [--apply] [--yes]   (existing project, see below)
 #   install.sh <project-path> --rollback <migration> [--apply] [--yes]
+#   install.sh <project-path> --changelog [--apply] [--yes]  (activate the changelog)
 #
 # --python delegates to lib/scaffold_python.sh (minimal Python layer) so the
 # project runs `make check` green without manual pyproject editing. install.sh
@@ -20,6 +21,15 @@
 #   CLAUDE.md AGENTS.md Makefile CHECKPOINTS.md docs/ progress/
 #
 # GENERATED (never copied): feature_list.json is produced from docs/plan/.
+#
+# CHANGELOG (docs/design/releases.md): a new install (the harness never installed
+# there) also gets CHANGELOG.md, changelog.d/README.md, docs/releases.md and the
+# activation record .harness/changelog.json. They belong to the project: never
+# overwritten, not even with --force, and not managed in MANIFEST.toml. A started
+# project activates it with --changelog: dry-run (the plan) unless --apply; with
+# --apply it confirms, works in a temporary worktree of the base branch (branch,
+# files, commit, PR) and merges only with every check green; --yes asks nothing.
+# Relaunchable. Human-only (lib/_changelog.py activate).
 #
 # SHARED through the harness/ symlink: the harness Make targets (lib/harness.mk,
 # included by the copied Makefile) and the workflow rules (lib/WORKFLOW.md,
@@ -42,6 +52,7 @@ TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${1:-}"; shift || true
 FORCE=0
 MIGRATE=0
+CHANGELOG=0
 ROLLBACK=""
 APPLY=()          # --apply / --yes, passed to lib/_upgrade.py
 TPL_LANG="python"   # template set (python | c). Not LANG: that is the exported locale.
@@ -52,6 +63,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --force)  FORCE=1 ;;
     --migrate) MIGRATE=1 ;;
+    --changelog) CHANGELOG=1 ;;
     --rollback) shift; ROLLBACK="${1:-}"
       [ -n "$ROLLBACK" ] || { echo "error: --rollback needs a migration id" >&2; exit 2; } ;;
     --apply|--yes) APPLY+=("$1") ;;
@@ -85,11 +97,14 @@ if [ "$TOOLKIT" = "$DEST" ]; then
 fi
 
 # --- Migration / rollback of an existing project: no link, copy or commit step runs ---
-if [ "$MIGRATE" -eq 1 ] && [ -n "$ROLLBACK" ]; then
-  echo "error: --migrate and --rollback are exclusive" >&2; exit 2
+if [ $((MIGRATE + CHANGELOG)) -gt 1 ] || { [ -n "$ROLLBACK" ] && [ $((MIGRATE + CHANGELOG)) -gt 0 ]; }; then
+  echo "error: --migrate, --rollback and --changelog are exclusive" >&2; exit 2
 fi
-if [ "${#APPLY[@]}" -gt 0 ] && [ "$MIGRATE" -eq 0 ] && [ -z "$ROLLBACK" ]; then
-  echo "error: --apply/--yes only go with --migrate or --rollback" >&2; exit 2
+if [ "${#APPLY[@]}" -gt 0 ] && [ "$MIGRATE" -eq 0 ] && [ "$CHANGELOG" -eq 0 ] && [ -z "$ROLLBACK" ]; then
+  echo "error: --apply/--yes only go with --migrate, --rollback or --changelog" >&2; exit 2
+fi
+if [ "$CHANGELOG" -eq 1 ]; then
+  exec python3 "$TOOLKIT/lib/_changelog.py" activate "$DEST" "${APPLY[@]}"
 fi
 if [ "$MIGRATE" -eq 1 ]; then
   exec python3 "$TOOLKIT/lib/_upgrade.py" migrate "$DEST" "${APPLY[@]}"
@@ -119,6 +134,16 @@ copy() {  # copy <path-in-template-set> <path-in-dest>
 
 echo "Installing harness ($TPL_LANG) into $DEST"
 
+# A new install (the harness was never installed here) starts with the changelog
+# activated; an existing one is activated only by the human (--changelog).
+# Harness-owned evidence only: its record, its generated plan, its link, or its
+# docs/plan/PLAN.md + progress/current.md pair (a project's own docs/plan/ is not).
+FRESH=1
+for f in .harness/templates.json feature_list.json harness; do
+  { [ -e "$DEST/$f" ] || [ -L "$DEST/$f" ]; } && FRESH=0
+done
+[ -e "$DEST/docs/plan/PLAN.md" ] && [ -e "$DEST/progress/current.md" ] && FRESH=0
+
 # --- Symlinks (generic) ---
 link agents        .claude/agents
 link codex         .claude/codex
@@ -147,6 +172,11 @@ fi
 # Versions of the harness-managed copied files (lib/_templates.py, M0a).
 python3 "$TOOLKIT/lib/_upgrade.py" register "$DEST" "$TPLSUB"
 COPIED+=(".harness/templates.json")
+# The changelog (project-owned, never overwritten): new installs only.
+if [ "$FRESH" -eq 1 ]; then
+  read -r -a CHANGELOG_FILES <<<"$(python3 "$TOOLKIT/lib/_changelog.py" install "$DEST" "$TPLSUB")"
+  COPIED+=("${CHANGELOG_FILES[@]}")
+fi
 [ ${#COPIED[@]} -gt 0 ] && row "$GREEN" "[copy]" "${COPIED[*]}"
 [ ${#KEPT[@]} -gt 0 ] && row "$ORANGE" "[SKIP]" "${KEPT[*]} (exist; --force to overwrite)"
 

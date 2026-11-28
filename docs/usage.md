@@ -228,6 +228,20 @@ git status --short                # clean
 make status                       # the subtask is [DONE]
 ```
 
+If the reference doc fails the doc gate (missing frontmatter keys or section
+anchors), the harness commits nothing and repairs it: in auto mode it runs the
+documenter again in *repair mode*, where only that doc may change (up to 2 repairs
+per run, each one attempt of the `close` step). A close left pending that way shows
+in `make status` as `close: ./harness/review_with_codex.sh doc 1.1.1 (last attempt:
+…)`: `doc` repairs the doc and the close reuses the waiting
+`progress/close_1.1.1.msg` (manual mode prints the repair prompt, then `close
+1.1.1`). A tree snapshot (`.git/harness-doc-repair-1.1.1.json`) is checked after
+each repair and before the commit: if anything else changed, the close stops with
+`needs human`; check the paths it lists and remove the snapshot to go on. In an
+activated project (§11) the same repair covers a last close that forgot its
+`changelog.d/<N.M | ISS-n>.md` (or wrote an invalid one): only that fragment, plus
+the doc if it also fails, may change.
+
 The first close commit also carries every plan file that was never committed
 (`docs/plan/`, verdicts, seals), since Claude cannot commit them earlier.
 
@@ -315,6 +329,8 @@ Recoverable states it names (besides the usual gate steps):
 | `PLAN_APPROVED`, no acceptance seal, gate stopped before sealing | `finish the seal ...` (plan gate again); manual mode: the human seals |
 | `APPROVED`, but the bound approval no longer covers the tree | `the code approval of <id> ...: code gate again` |
 | `progress/close_<id>.msg` waiting and the ledger says the close failed, or the code approval still covers the tree (`doc` would refuse); a stale approval with code-gate attempts in the ledger, or a used-up close budget, comes first | `retry the close of <id> (...): ... close <id>` |
+| close pending, its reference doc fails the doc gate (issue #133) or its changelog fragment is missing (activated) | `close: ... doc <id> (last attempt: ...)` (repair mode) |
+| a doc repair changed files outside the doc, or the repairs ran out | `needs human: the close of <id> failed ...` |
 | last PR attempt failed | `retry the PR of <N.M>: ... pr <N.M>` |
 | more than one leaf `in_progress` | `needs human: ...` |
 | a step used its attempt budget | `needs human (N failed attempts) ...` |
@@ -405,6 +421,48 @@ are **human-only**: run them from your own shell, never ask Claude to run them.
 - **Migration level.** `make check` reports it; below the level the toolkit
   requires it is a WARN (never a FAIL in this version) with the command to run.
 - Claude cannot write `.harness/` (guards).
+
+## 11. Changelog and releases
+
+Design: [`docs/design/releases.md`](design/releases.md). This version covers the
+changelog and the release plan; bumping the version and publishing a release come
+later.
+
+- **New projects** get `CHANGELOG.md`, `changelog.d/`, a `docs/releases.md`
+  template and the record `.harness/changelog.json` (the changelog is
+  *activated*). They belong to the project: no install overwrites them, not even
+  `--force`.
+- **Projects installed before** keep working as they are; `make check` only warns
+  with the command that activates it (human-only, from your own shell or with `!`
+  in the Claude console):
+
+  ```bash
+  ~/.claude-codex-harness/install.sh <project> --changelog                 # dry-run: the plan
+  ~/.claude-codex-harness/install.sh <project> --changelog --apply         # asks before applying and before merging
+  ~/.claude-codex-harness/install.sh <project> --changelog --apply --yes   # no questions
+  ```
+
+  It works in a temporary worktree of `main` (your checkout is never touched):
+  branch `chore/harness-changelog`, the files (an existing `CHANGELOG.md` is kept:
+  it prints the lines to add), one commit with no agent attribution, a PR, and the
+  merge only once every check is green, pinned to the commit it pushed. A repo
+  with no CI checks is never merged: it prints the `gh pr merge` for you. Relaunch
+  it after a red check or an interruption: it reuses the branch, the commit and the PR. Tasks and issues
+  finished before it need no fragment; those in flight get one at their last close.
+- **Per task or issue**: the specs declare `- changelog:` and `- incompatible:` at
+  the kickoff (the task and issue gates require them; the phase gate for a phase
+  broken down whole; never a spec already done or approved before the activation); Codex writes
+  `changelog.d/<N.M | ISS-n>.md` at the last close, inside the PR. `make check`
+  refuses that close without a valid fragment.
+- **Consolidation** (the release, human or Codex; never Claude):
+  `python3 harness/_changelog.py consolidate` shows the new `## [Unreleased]`
+  section; `--apply` writes it and empties `changelog.d/`. Running it twice changes
+  nothing.
+- **Release plan**: after the roadmap, `make status` proposes the release discovery
+  (`Also:`), which blocks nothing. `docs/releases.md` goes through
+  `./harness/review_with_codex.sh releases` (`RELEASES_APPROVED`, sealed) and your
+  OK. A later change, a roadmap change or an unplanned incompatible change only
+  warns in `make check`.
 
 ## Checking that Codex really ran
 
@@ -628,4 +686,7 @@ instead, yourself, from a shell outside Claude:
 | `<N.M.K> is already closed (status: done)` on `doc` | the close already ran (even if it looked interrupted) | do not close again; if only the PR is missing, `./harness/review_with_codex.sh pr <N.M>` |
 | `<N.M.K> has no APPROVED code review` on `doc` | the close needs the code gate first | run `./harness/review_with_codex.sh code <N.M.K>` |
 | `… is red after the close of <N.M.K>: nothing committed` | `make check` failed after Codex closed | fix it (log path in the message), then `./harness/review_with_codex.sh close <N.M.K>` |
+| `the reference doc fails the doc gate` on `close` | the doc of the close lacks frontmatter keys or section anchors | `./harness/review_with_codex.sh doc <N.M.K>` (repair mode: only that doc changes) |
+| `the changelog fragment of the close is missing or invalid` on `close` | an activated project's last close of a task or issue has no valid `changelog.d/<N.M \| ISS-n>.md` | `./harness/review_with_codex.sh doc <N.M.K>` (repair mode: only that fragment changes) |
+| `the repair changed files outside the reference doc` | a doc repair touched another file | needs human: check the paths listed, restore them, remove `.git/harness-doc-repair-<N.M.K>.json` |
 | `[git] no git identity … root commit skipped` at install | `user.name`/`user.email` unset | set them and run `install.sh` again |

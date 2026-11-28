@@ -115,7 +115,7 @@ Expected output, one line per step:
 ```
 Installing harness (python) into /path/to/project
 [symlink] .claude/agents .claude/codex .claude/skills .claude/settings.json harness
-[copy]    CLAUDE.md AGENTS.md Makefile CHECKPOINTS.md docs progress
+[copy]    CLAUDE.md AGENTS.md Makefile CHECKPOINTS.md docs progress CHANGELOG.md changelog.d/README.md docs/releases.md .harness/changelog.json
 [python]  pyproject.toml src/my_pkg/__init__.py src/my_pkg/py.typed README.md tests/unit/
 [gen]     feature_list.json .gitignore
 [uv]      uv sync --all-groups
@@ -141,6 +141,11 @@ In an existing repo the installer only adds files: it never overwrites one
 without `--force`, never runs `git init` or commits, and keeps the
 machine-local symlinks out of git via `.git/info/exclude`. Commit the rest
 yourself. Details: [installing into an existing repo](docs/configuration.md#installing-into-an-existing-repo).
+
+**Changelog of a project installed before it** (human-only; Claude never runs
+it): `install.sh <project> --changelog` prints the plan, `--apply` does it (a
+branch, the files, one commit and a PR, merged only with its checks green) and
+`--apply --yes` asks nothing. Details: [usage, step 11](docs/usage.md#11-changelog-and-releases).
 
 ### 3. Check the result
 

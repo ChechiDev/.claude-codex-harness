@@ -64,6 +64,7 @@ STEPS = (
     "phase-close",
     "issue",
     "issue-draft",
+    "releases",
     "plan",
     "code",
     "close",
@@ -652,6 +653,15 @@ def next_action() -> Action:
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 
+def _release_warnings() -> list[str]:
+    """The release plan's review triggers (WARN only; activated changelog only)."""
+    import _changelog
+    import _releases
+
+    root = Path.cwd()
+    return _releases.warnings(root) if _changelog.activated(root) else []
+
+
 def _cmd_next(as_json: bool) -> int:
     import _harness
 
@@ -659,7 +669,7 @@ def _cmd_next(as_json: bool) -> int:
         say("FAIL", "no feature_list.json (run: make plan)", sys.stderr)
         return 1
     action = next_action()
-    warnings = [w for w in (plan_source_warning(),) if w]
+    warnings = [w for w in (plan_source_warning(),) if w] + _release_warnings()
     for warning in warnings:
         say("WARN", warning, sys.stderr)
     if as_json:

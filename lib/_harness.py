@@ -81,7 +81,7 @@ STARTED = {"in_progress", "done"}
 RE_VERDICT = re.compile(
     r"^\*\*Verdict:\*\*[ \t]*"
     r"(ROADMAP_APPROVED|PHASE_APPROVED|ISSUE_APPROVED|DRAFT_APPROVED|PLAN_APPROVED"
-    r"|TASK_APPROVED|TASK_CLOSE_APPROVED|PHASE_CLOSE_APPROVED|STACK_APPROVED|APPROVED"
+    r"|TASK_APPROVED|TASK_CLOSE_APPROVED|PHASE_CLOSE_APPROVED|STACK_APPROVED|RELEASES_APPROVED|APPROVED"
     r"|CHANGES_REQUESTED)[ \t]*$",
     re.MULTILINE,
 )
@@ -414,7 +414,15 @@ def task_ready_problems(tid: str) -> list[str]:
     if index > 0 and not task_closed(ordered[index - 1], pid):
         before = ordered[index - 1]
         problems.append(f"task {before} is not TASK_CLOSE_APPROVED ({task_close(before)})")
-    return problems
+    return problems + _declaration_problems(_task_leaves(tid))
+
+
+def _declaration_problems(units: list[Item]) -> list[str]:
+    """The kickoff's changelog declaration (releases, docs/design/releases.md §3): only
+    an activated project's task and issue gates ask for it."""
+    import _changelog  # lazy: keeps the plan rules importable on their own
+
+    return _changelog.missing_declarations(Path.cwd(), units)
 
 
 def task_close_ready_problems(tid: str) -> list[str]:
@@ -668,7 +676,21 @@ def phase_ready_problems(pid: str) -> list[str]:
         problems.append(f"the roadmap is not ROADMAP_APPROVED ({ROADMAP_REVIEW})")
     if not phase.get("tasks"):
         problems.append(f"phase {pid} has no tasks yet: break it down first")
-    return problems + [p for p in _progression_problems() if p.startswith(f"phase {pid} ")]
+    progression = [p for p in _progression_problems() if p.startswith(f"phase {pid} ")]
+    return problems + progression + _whole_phase_declarations(pid)
+
+
+def _whole_phase_declarations(pid: str) -> list[str]:
+    """A phase broken down whole has no task gate: its phase gate asks for the kickoff's
+    changelog declaration instead (releases, review rel1rev #5)."""
+    leaves_ = _phase_leaves(pid)
+    if not leaves_:
+        return []
+    if phase_flow(pid) == TASK_FLOW:
+        tids = [str(t["id"]) for t in _tasks() if t.get("phase") == pid]
+        if phase_seal(pid).is_file() or any(task_review(t).exists() for t in tids):
+            return []  # the task flow: each task gate asks for its own specs
+    return _declaration_problems(leaves_)
 
 
 def issue_ready_problems(iid: str) -> list[str]:
@@ -677,7 +699,7 @@ def issue_ready_problems(iid: str) -> list[str]:
         return [f"issue {iid} does not exist in docs/plan/issues/"]
     if not issue.get("subtasks"):
         return [f"issue {iid} has no subtasks yet: break it down first"]
-    return []
+    return _declaration_problems([leaf for leaf in leaves() if leaf["issue"] == iid])
 
 
 def subtask_ready_problems(fid: str) -> list[str]:
@@ -841,10 +863,14 @@ def validate() -> int:
         if leaf["status"] not in VALID
     ]
     problems += plan_problems() + config_problems()
+    import _changelog  # lazy, as _review_risk
     import _review_risk  # lazy: _review_risk imports this module
 
     problems += _review_risk.problems(units, Path.cwd())
-    for warning in files_limit_warnings(units) + _review_risk.warnings(units, Path.cwd()):
+    changelog, changelog_warnings = _changelog.check(Path.cwd(), plan_data(), units)
+    problems += changelog
+    warnings = files_limit_warnings(units) + _review_risk.warnings(units, Path.cwd())
+    for warning in warnings + changelog_warnings:
         say("WARN", warning)
     if not problems:
         say("OK", f"feature_list.json valid ({len(units)} work units)")

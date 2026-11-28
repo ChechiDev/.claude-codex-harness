@@ -24,11 +24,11 @@ closes (single commit). The `implementer` (Claude subagent) writes the code.
 - ❌ Do not write the plan yourself: `docs/stack.md`, `PLAN.md`, phase files, specs,
   `ISS-<n>.<k>` specs, the `## Project context` of `CLAUDE.md` and planning gate
   fixes go through `subagent_type: "claude-planner"` (it may write only
-  `docs/plan/**`, `docs/stack.md` and `CLAUDE.md`; the harness blocks the rest). The one exception: you set
+  `docs/plan/**`, `docs/stack.md`, `docs/releases.md` and `CLAUDE.md`; the harness blocks the rest). The one exception: you set
   `status: in_progress` when a subtask starts.
 - ✅ Implement via `subagent_type: "implementer"` (one subtask `N.M.K` or `ISS-<n>.<k>`).
 - ✅ Run gates via `./harness/review_with_codex.sh stack | roadmap | phase <NN> | task <N.M>
-  | task-close <N.M> | phase-close <NN> | issue <ISS-n> | issue-draft
+  | task-close <N.M> | phase-close <NN> | issue <ISS-n> | issue-draft | releases
   | <plan|code|doc> <N.M.K|ISS-n.k>`.
 - ✅ First the **stack step** (you ask the user, one question at a time: project
   type and language first, then only the categories that apply) → claude-planner
@@ -58,6 +58,29 @@ unless asked" rule — it applies only inside the harness close step, and carrie
 of an issue), the harness pushes its branch and opens one PR; merging it is
 always the user's call.
 
+### Close repair (reference doc)
+
+When the close's reference doc (`docs/reference/<id>-<slug>.md`) fails the doc gate,
+nothing is committed and the harness repairs it instead of failing outright:
+
+- **Auto**: right after the documenter, the harness runs it again in *repair mode*
+  (only that doc may change) up to 2 times per run; each repair is one attempt of the
+  `close` step (`[review] max_attempts`). Out of repairs → `needs human`.
+- **Later** (the close is pending: its message waits in `progress/close_<id>.msg`, the
+  leaf is done, no `[id]` commit, the code approval still holds): `make status` says
+  `close: ./harness/review_with_codex.sh doc <id> (last attempt: …)`; `doc` runs in
+  repair mode, then the close reuses the waiting message. In manual mode it prints
+  the repair prompt, then `close <id>`.
+- The harness snapshots the tree first (`.git/harness-doc-repair-<id>.json`) and
+  verifies it after each repair and before the commit: any change outside that one
+  doc stops the close, fail closed (`needs human`; the human checks the paths and
+  removes the snapshot to go on).
+- **Changelog fragment** (activated project): a last close that forgot
+  `changelog.d/<N.M | ISS-n>.md`, or wrote an invalid one, is repaired the same way
+  (`close` says `the changelog fragment of the close is missing or invalid` and points
+  to `doc <id>`). The repair may write only that fragment, plus the doc when it also
+  fails; the snapshot admits only the paths that failed when it started.
+
 ### Startup protocol
 
 1. Read `AGENTS.md`, `docs/plan/PLAN.md`, `progress/current.md`.
@@ -85,7 +108,7 @@ frontmatter `model:` if you have them).
 | leader (main session) | Opus 5.5 / high |
 | claude-planner (`.claude/agents/claude-planner.md`) | Opus 5.5 / xhigh |
 | implementer (`.claude/agents/implementer.md`) | sonnet / medium |
-| codex-planner (`codex-planner.md`: `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close` gates) | gpt-6-astra / high |
+| codex-planner (`codex-planner.md`: `stack`, `roadmap`, `phase`, `task`, `task-close`, `phase-close`, `releases` gates) | gpt-6-astra / high |
 | reviewer (`codex/reviewer.md`: `plan`, `code`, `issue`, `issue-draft` gates) | gpt-6-sol / high |
 | documenter (`codex/documenter.md`: `doc` close) | gpt-6-luna / low |
 
@@ -167,6 +190,31 @@ gates. Design: the toolkit's `docs/design/issues-lane.md`.
 - **New issue**: `make issue-new` → draft `progress/issue_draft.md` →
   `./harness/review_with_codex.sh issue-draft` → `DRAFT_APPROVED` → the user's OK
   → `harness/issue.sh publish`.
+
+## Changelog and releases
+
+Design: the toolkit's `docs/design/releases.md` (this version: the changelog and the
+release plan; version bumps and publishing come later).
+
+- **Activation**: a new install has it; a project installed before only gets a
+  `make check` WARN with `install.sh <project> --changelog`. That command is the
+  human's (dry-run, then `--apply`, `--apply --yes` for no questions): show it and
+  keep working, never run it.
+- **Kickoff** (activated): every non-baseline spec declares `- changelog: added |
+  changed | fixed | removed | security` (or `none: <why>`) and `- incompatible: no |
+  yes: <what breaks>`; the task and issue gates refuse to run without them.
+- **Last close**: Codex writes `changelog.d/<N.M | ISS-n>.md` from what was delivered
+  (`python3 harness/_changelog.py due <id>` says when); `make check` refuses that
+  close without it, so it rides in the PR.
+- **Release plan**: after the roadmap, `make status` proposes the release discovery
+  (`Also:`); it blocks nothing. claude-planner writes `docs/releases.md` →
+  `./harness/review_with_codex.sh releases` → `RELEASES_APPROVED` (sealed) → the
+  user's OK. Any later change, a roadmap change or an unplanned incompatible change
+  only warns: revise it then.
+- ❌ Claude never writes `.harness/changelog.json`, the releases verdict or seal,
+  nor (activated) `CHANGELOG.md` and `changelog.d/`, and never runs the activation
+  or `consolidate --apply` (the guard blocks them). Not activated, the project's own
+  `CHANGELOG.md` and `changelog.d/` stay as they were.
 
 ## Changing lint/type/build config
 

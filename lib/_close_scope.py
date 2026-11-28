@@ -17,6 +17,8 @@ Allowed for subtask X (N.M.K or ISS-n.k), owner O (task N.M or issue ISS-n):
   progress     review_X.md, plan_review_X.md, impl_X.md, close_X.msg,
                review_history/X.md, current.md, history.md, pr_O.md
   concept docs docs/architecture.md, docs/conventions.md (documenter.md step 1)
+  changelog    changelog.d/O.md, the owner's fragment (written at its last close;
+               docs/design/releases.md §3)
   chain        the harness bookkeeping of the chain stack -> roadmap -> phase NN | issue ISS-n
                -> leaf, by exact name (issue #40): the gate verdicts (roadmap_review,
                phase_review_NN | issue_review_ISS-n) and their review_history
@@ -166,6 +168,7 @@ def _patterns(sid: str, owner: str, kind: str, migrates: Iterable[str]) -> re.Pa
         rf"progress/close_{esc}\.msg",
         rf"progress/review_history/{esc}\.md",
         rf"progress/pr_{own}\.md",
+        rf"changelog\.d/{own}\.md",
         *_oracle_patterns(sid),
     ]
     if kind == "issue":

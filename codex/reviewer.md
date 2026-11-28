@@ -291,6 +291,10 @@ Check:
   oracles are regression tests. For non-baseline subtasks, an empty `files:` is
   permitted only for a confirmed test-only claim; otherwise the 1-3 `files:` limit
   applies.
+- **Changelog declaration** (when `.harness/changelog.json` exists): every spec
+  declares `- changelog:` and `- incompatible:`; check it is plausible for what the
+  spec changes, as the "Changelog declaration (releases)" rules of `codex-planner.md`
+  say for `task` mode. The issue's label type does not replace it.
 
 Verdict in `progress/issue_review_ISS-<n>.md`:
 
