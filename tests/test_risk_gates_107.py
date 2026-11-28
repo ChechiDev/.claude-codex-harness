@@ -309,6 +309,20 @@ def test_the_task_gate_gets_the_effort_and_checklists(project: Project) -> None:
 
 
 @pytest.mark.e2e
+@pytest.mark.parametrize(("rating", "effort"), [("", "high"), (HIGH, "xhigh")])
+def test_the_manual_task_gate_prints_the_sol_model(
+    project: Project, rating: str, effort: str
+) -> None:
+    _rate_leaf(project, rating)
+    project.write("progress/task_review_1.1.md", "# Task\n\n**Verdict:** CHANGES_REQUESTED\n")
+    res = _manual(project, "task", "1.1")
+    assert res.returncode == 0, res.stdout + res.stderr
+    command = next(ln for ln in res.stdout.splitlines() if ln.startswith("codex exec "))
+    assert "--model gpt-6.2-sol " in command
+    assert f"model_reasoning_effort={effort} " in command + " "
+
+
+@pytest.mark.e2e
 def test_the_issue_gate_gets_the_effort_and_checklists(project: Project) -> None:
     res = _manual(_with_issue(project, HIGH), "issue", "ISS-14")
     assert res.returncode == 0, res.stdout + res.stderr

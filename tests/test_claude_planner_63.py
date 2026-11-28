@@ -85,7 +85,7 @@ def test_leader_runs_every_gate() -> None:
 def test_codex_planner_renamed() -> None:
     assert not (CODEX / "planner.md").exists()
     text = (CODEX / "codex-planner.md").read_text()
-    assert "codex_model: gpt-6-astra" in text
+    assert "codex_model: gpt-6.2-sol" in text
     assert "codex_effort: high" in text
     assert "Codex role: codex-planner" in text
 
@@ -122,8 +122,8 @@ def test_workflow_lists_six_actors_without_model_switch() -> None:
         ("leader", "Opus 5.5 / high"),
         ("claude-planner", "Opus 5.5 / xhigh"),
         ("implementer", "sonnet / medium"),
-        ("codex-planner", "gpt-6-astra / high"),
-        ("reviewer", "gpt-6-sol / high"),
+        ("codex-planner", "gpt-6.2-sol / high"),
+        ("reviewer", "gpt-6.2-sol / high"),
         ("documenter", "gpt-6-luna / low"),
     ):
         row = next((ln for ln in text.splitlines() if ln.startswith("|") and actor in ln

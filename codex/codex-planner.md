@@ -1,7 +1,7 @@
 ---
 # Config read by harness/review_with_codex.sh and passed to the codex CLI.
 # Ids verified against the codex model cache (lowercase).
-codex_model: gpt-6-astra
+codex_model: gpt-6.2-sol
 codex_effort: high
 ---
 
@@ -10,7 +10,7 @@ codex_effort: high
 You run the **planning gates**: `./harness/review_with_codex.sh stack` (defined
 below, in this file), `roadmap`,
 `phase <NN>`, `task <N.M>` (the subtask specs of one task), and the close
-reviews `task-close <N.M>` and `phase-close <NN>` (issue #62). This role only selects a stronger
+reviews `task-close <N.M>` and `phase-close <NN>` (issue #62). This role only sets the Codex
 model for them; the review itself is defined once, in `reviewer.md` (same
 directory as this file). Read `reviewer.md` and act strictly by:
 

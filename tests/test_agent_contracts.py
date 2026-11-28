@@ -319,8 +319,8 @@ def _codex_config(path: Path) -> dict[str, str]:
     return out
 
 
-def test_planner_uses_astra_high_and_delegates_to_reviewer() -> None:
-    assert _codex_config(PLANNER) == {"codex_model": "gpt-6-astra", "codex_effort": "high"}
+def test_planner_uses_sol_high_and_delegates_to_reviewer() -> None:
+    assert _codex_config(PLANNER) == {"codex_model": "gpt-6.2-sol", "codex_effort": "high"}
     text = PLANNER.read_text()
     assert "Codex role: codex-planner" in text
     assert "reviewer.md" in text
@@ -328,7 +328,7 @@ def test_planner_uses_astra_high_and_delegates_to_reviewer() -> None:
 
 @pytest.mark.parametrize(
     ("role", "model", "effort"),
-    [("reviewer.md", "gpt-6-sol", "high"), ("documenter.md", "gpt-6-luna", "low")],
+    [("reviewer.md", "gpt-6.2-sol", "high"), ("documenter.md", "gpt-6-luna", "low")],
 )
 def test_codex_role_models(role: str, model: str, effort: str) -> None:
     assert _codex_config(CODEX / role) == {"codex_model": model, "codex_effort": effort}
