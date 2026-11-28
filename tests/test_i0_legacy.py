@@ -8,6 +8,7 @@ fail-open behaviour on that same state; each issue flips its own pins explicitly
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,12 @@ from test_m0b_inventory import Repo, _fake_codex, _sealed
 pytestmark = pytest.mark.e2e  # real install.sh / make check (#68)
 
 STATUS = "feature_list.json"
+# The one WARN a healthy legacy project may show: the changelog is opt-in and the human
+# activates it (docs/design/releases.md §1). Any other WARN, or this one twice, fails.
+NOT_ACTIVATED = re.compile(
+    r"\s*\[WARN\]\s+changelog not activated: the human runs bash \S+/install\.sh (\S+)"
+    r" --changelog \(dry-run; then --apply\)\. Claude never runs it"
+)
 
 
 @pytest.fixture(scope="module")
@@ -36,6 +43,15 @@ def _check(project: Installed) -> tuple[int, str]:
     return res.returncode, res.stdout + res.stderr
 
 
+def _unexpected_warnings(root: Path, out: str) -> list[str]:
+    """The [WARN]/[FAIL] lines of `out`, without at most one changelog activation WARN."""
+    lines = [ln for ln in out.splitlines() if "[WARN]" in ln or "[FAIL]" in ln]
+    for i, ln in enumerate(lines):
+        if (m := NOT_ACTIVATED.fullmatch(ln)) and m[1] == str(root.resolve()):
+            return lines[:i] + lines[i + 1 :]
+    return lines
+
+
 def _leaves(project: Installed) -> dict[str, str]:
     data = json.loads((project.root / STATUS).read_text())
     return {str(s["id"]): str(s["status"]) for f in data["features"] for s in f["subtasks"]}
@@ -49,7 +65,31 @@ def test_legacy_project_is_green_without_warnings(project: Installed, tmp_path: 
     _sealed(Repo(project.root, project.repo, _fake_codex(tmp_path, project.env)))
     code, out = _check(project)
     assert code == 0, out
-    assert "[WARN]" not in out and "[FAIL]" not in out, out
+    assert _unexpected_warnings(project.root, out) == [], out
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "[WARN]  migration level 0 < required 1: run it",
+        "[FAIL]  something broke",
+        "[WARN]  changelog not activated: the human runs bash /t/install.sh {root} --changelog"
+        " (dry-run; then --apply). Claude never runs it",  # a second one
+        "[WARN]  changelog not activated: the human runs bash /t/install.sh /other --changelog"
+        " (dry-run; then --apply). Claude never runs it",  # another project
+        "[WARN]  changelog not activated: the human runs bash /t/install.sh {root} --changelog"
+        " (dry-run; then --apply). Claude never runs it; and more",
+    ],
+)
+def test_only_the_changelog_activation_warning_is_tolerated(tmp_path: Path, extra: str) -> None:
+    root = str(tmp_path.resolve())
+    activation = (
+        f"       [WARN]  changelog not activated: the human runs bash /t/install.sh {root}"
+        " --changelog (dry-run; then --apply). Claude never runs it"
+    )
+    assert _unexpected_warnings(tmp_path, f"[OK]    a\n{activation}\n[OK]    b\n") == []
+    out = f"{activation}\n       {extra.format(root=root)}\n"
+    assert _unexpected_warnings(tmp_path, out) == [f"       {extra.format(root=root)}"]
 
 
 def test_legacy_state_has_a_done_leaf_and_a_baseline(project: Installed) -> None:
